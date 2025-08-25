@@ -19,13 +19,13 @@ struct complex_type
 template<>
 struct complex_type<float>
 {
-    typedef cufftComplex type;
+    using type = cufftComplex ;
 };
 
 template<>
 struct complex_type<double>
 {
-    typedef cufftDoubleComplex type;
+    using type = cufftDoubleComplex;
 };
 
 template<typename T>
@@ -67,7 +67,6 @@ struct fft_c2c<double>
 {
     static const cufftType type = CUFFT_Z2Z;
 }
-
 
 }
 
