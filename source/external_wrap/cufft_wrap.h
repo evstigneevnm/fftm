@@ -81,7 +81,9 @@ public:
     using complex = typename detail::complex_type<T>::type;
     
 
-    cufft_wrap():plan_created(false)
+    cufft_wrap():
+    plan_created(false),
+    work_size(0)
     {
         CUFFT_SAFE_CALL(cufftCreate(&handle));
         CUFFT_SAFE_CALL( cufftSetAutoAllocation(handle, 0) );
@@ -90,7 +92,7 @@ public:
     {
         cufftDestroy(handle); 
     }
-    void plan1D_create( long long int &n, long long int &inembed, long long int istride, long long int idist, long long int &onembed, long long int ostride, long long int odist, direction type, long long int batch)
+    void plan1D_create( long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, direction type, long long int batch)
     {
         if(!plan_created)
         {
@@ -109,7 +111,11 @@ public:
         // batch[In] – Batch size for this transform.
         // *workSize[In] – Pointer to the size(s), in bytes, of the work areas. For example for two GPUs worksize must be declared to have two elements.
         // *workSize[Out] – Pointer to the size(s) of the work areas.
-            CUFFT_SAFE_CALL( cufftMakePlanMany64(handle, 1, n, inembed, istride, idist, onembed, ostride, odist, get_fft_dir(type), batch, &work_size) );
+            CUFFT_SAFE_CALL(cufftMakePlanMany64(
+                handle, 1, &n, 
+                &inembed, istride, idist, 
+                &onembed, ostride, odist, 
+                get_fft_dir(type), batch, &work_size) );
             
             plan_created = true;
         }
@@ -119,6 +125,11 @@ public:
         }
     }
     
+    std::size_t get_work_size()
+    {
+        return work_size;
+    }
+
 private:
     cufftHandle handle;
     bool plan_created;
@@ -138,7 +149,7 @@ private:
                 return detail::fft_c2c<T>::type;
                 break;
         }
-        
+        return detail::fft_c2c<T>::type;
     }
 
 

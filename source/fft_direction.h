@@ -1,5 +1,5 @@
-#ifndef __EXTERNAL_WRAP_FFT_DIRECTION_H__
-#define __EXTERNAL_WRAP_FFT_DIRECTION_H__
+#ifndef __FFTM_FFT_DIRECTION_H__
+#define __FFTM_FFT_DIRECTION_H__
 
 
 namespace fftm
