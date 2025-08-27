@@ -2,21 +2,21 @@
 #include <utility>
 #include "external_wrap/cufft_wrap.h"
 
-namespace fft
+namespace fftm
 {
 
-template <class T, class BaseFFT>
+template <class BaseFFT>
 class fftm
 {
 public:
-    fftm(std::shared_ptr<BaseFFT> base_fft):
+    fftm(std::shared_ptr<BaseFFT> &base_fft):
     base_fft_(base_fft)
     {}
     ~fftm()
     {}
     
 private:
-    
+    std::shared_ptr<BaseFFT> base_fft_;
 
 
 };
