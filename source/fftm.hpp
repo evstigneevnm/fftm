@@ -47,6 +47,25 @@ public:
         base_fft_->add_plan_1D("test_C2C",n, inembed, istride, idist, onembed, ostride, odist, direction::C2C, batch );
         base_fft_->activate();
 
+        try
+        {
+            base_fft_->add_plan_1D("test_R2C",n, inembed, istride, idist, onembed, ostride, odist, direction::R2C, batch );
+        }
+        catch(const std::logic_error& e)
+        {
+            std::cout << "test logic 1: " << e.what() << std::endl;
+        }
+        try
+        {
+            base_fft_->activate();
+        }
+        catch(const std::logic_error& e)
+        {
+            std::cout << "test logic 2: " << e.what() << std::endl;
+        }
+        auto wsize = base_fft_->get_work_size();
+        std::cout << "work_size: " << wsize*1.0e-9 << "GB." << std::endl;
+
     }
     
 private:

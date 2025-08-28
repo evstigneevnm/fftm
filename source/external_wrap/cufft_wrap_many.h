@@ -1,6 +1,7 @@
 #ifndef __FFTM_CUFFT_WRAP_MANY_H__
 #define __FFTM_CUFFT_WRAP_MANY_H__
 
+#include <utility>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -25,6 +26,7 @@ public:
 
     cufft_wrap_many():
     work_area_(nullptr),
+    work_area_size_(0),
     activated_(false)
     {}
     ~cufft_wrap_many()
@@ -35,6 +37,9 @@ public:
         }
     }
         
+
+
+
     void add_plan_1D(const std::string& name, long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, direction type, long long int batch)
     {
         if(activated_)
@@ -42,8 +47,10 @@ public:
             throw std::logic_error("cufft_wrap_many::add_plan_1D: cannot add new plans after the wrap was activated.");
         }
         container_.emplace(name, wrap_t{});
-        container_[name].plan1D_create(n, inembed, istride, idist, onembed, ostride, odist, type, batch);
+        container_.at(name).plan1D_create(n, inembed, istride, idist, onembed, ostride, odist, type, batch);
+
     }
+
 
     void activate() 
     {
@@ -57,19 +64,30 @@ public:
             work_sizes.push_back( el.second.get_work_size() );
         }
         auto max_work_size = std::max_element(work_sizes.cbegin(), work_sizes.cend());
+        work_area_size_ = *max_work_size;
         
-        CUDA_SAFE_CALL( cudaMalloc((void**)&work_area_, (*max_work_size)*sizeof(T) ) );
+        CUDA_SAFE_CALL( cudaMalloc((void**)&work_area_, work_area_size_ ) );
+
+        for(auto &el: container_)
+        {
+            el.second.set_work_area(work_area_);
+        }
 
         activated_ = true;
 
     }
 
+    std::size_t get_work_size() const
+    {
+        return work_area_size_;
+    }
 
 
 private:
     T* work_area_;
     bool activated_;
     std::map<std::string, wrap_t> container_;
+    std::size_t work_area_size_; //in bytes!!!
 
 };
 

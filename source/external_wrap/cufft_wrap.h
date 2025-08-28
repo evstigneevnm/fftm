@@ -82,16 +82,27 @@ public:
     
 
     cufft_wrap():
+    handle_(0),
     plan_created(false),
     work_size(0)
     {
-        CUFFT_SAFE_CALL(cufftCreate(&handle));
-        CUFFT_SAFE_CALL( cufftSetAutoAllocation(handle, 0) );
+        CUFFT_SAFE_CALL(cufftCreate(&handle_));
+        CUFFT_SAFE_CALL( cufftSetAutoAllocation(handle_, 0) );
     }
     ~cufft_wrap()
     {
-        cufftDestroy(handle); 
+        cufftDestroy(handle_); 
     }
+
+    //move constructor for exmplace construction
+    cufft_wrap(cufft_wrap&& other):
+    handle_(std::exchange(other.handle_, 0)),
+    plan_created(std::exchange(other.plan_created, false)),
+    work_size(std::exchange(other.work_size, 0))
+    {}
+
+
+
     void plan1D_create( long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, direction type, long long int batch)
     {
         if(!plan_created)
@@ -112,7 +123,7 @@ public:
         // *workSize[In] – Pointer to the size(s), in bytes, of the work areas. For example for two GPUs worksize must be declared to have two elements.
         // *workSize[Out] – Pointer to the size(s) of the work areas.
             CUFFT_SAFE_CALL(cufftMakePlanMany64(
-                handle, 1, &n, 
+                handle_, 1, &n, 
                 &inembed, istride, idist, 
                 &onembed, ostride, odist, 
                 get_fft_direction(type), batch, &work_size) );
@@ -127,7 +138,7 @@ public:
     
     void set_work_area(T* work_area)
     {
-        CUFFT_SAFE_CALL( cufftSetWorkArea(handle, work_area) );
+        CUFFT_SAFE_CALL( cufftSetWorkArea(handle_, work_area) );
     }
 
     std::size_t get_work_size() const
@@ -136,7 +147,7 @@ public:
     }
 
 private:
-    cufftHandle handle;
+    cufftHandle handle_;
     bool plan_created;
     std::size_t work_size;
 

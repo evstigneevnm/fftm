@@ -5,4 +5,4 @@ lib=$(cuda_dir)/lib64
 
 
 deb:
-	nvcc -I$(source) -I$(contrib) test_init.cu -L$(lib) -lcufft -o test_init.bin
+	nvcc -g -G -std=c++14 -I$(source) -I$(contrib) test_init.cu -L$(lib) -lcufft -o test_init.bin
