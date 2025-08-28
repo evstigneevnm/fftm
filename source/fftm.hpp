@@ -1,7 +1,8 @@
-#include <memory>
 #ifndef __FFTM_FFTM_HPP__
 #define __FFTM_FFTM_HPP__
 
+#include <iostream>
+#include <memory>
 #include <utility>
 
 namespace fftm
@@ -41,7 +42,11 @@ public:
         long long int odist = 1; 
         long long int batch = 175104;
 
-        base_fft_->plan1D_create(n, inembed, istride, idist, onembed, ostride, odist, direction::R2C, batch );
+        base_fft_->add_plan_1D("test_R2C",n, inembed, istride, idist, onembed, ostride, odist, direction::R2C, batch );
+        base_fft_->add_plan_1D("test_C2R",n, inembed, istride, idist, onembed, ostride, odist, direction::C2R, batch );
+        base_fft_->add_plan_1D("test_C2C",n, inembed, istride, idist, onembed, ostride, odist, direction::C2C, batch );
+        base_fft_->activate();
+
     }
     
 private:

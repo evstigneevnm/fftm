@@ -1,7 +1,7 @@
 #ifndef __FFTM_CUFFT_WRAP_H__
 #define __FFTM_CUFFT_WRAP_H__
 
-
+#include <stdexcept>
 #include <cufft.h>
 #include <cuda.h>
 #include <scfd/utils/cuda_safe_call.h>
@@ -115,7 +115,7 @@ public:
                 handle, 1, &n, 
                 &inembed, istride, idist, 
                 &onembed, ostride, odist, 
-                get_fft_dir(type), batch, &work_size) );
+                get_fft_direction(type), batch, &work_size) );
             
             plan_created = true;
         }
@@ -125,7 +125,12 @@ public:
         }
     }
     
-    std::size_t get_work_size()
+    void set_work_area(T* work_area)
+    {
+        CUFFT_SAFE_CALL( cufftSetWorkArea(handle, work_area) );
+    }
+
+    std::size_t get_work_size() const
     {
         return work_size;
     }
@@ -135,7 +140,7 @@ private:
     bool plan_created;
     std::size_t work_size;
 
-    cufftType get_fft_dir(direction dir)
+    cufftType get_fft_direction(direction dir)
     {
         switch(dir)
         {
