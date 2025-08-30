@@ -94,7 +94,7 @@ public:
         cufftDestroy(handle_); 
     }
 
-    //move constructor for exmplace construction
+    //move constructor for emplace construction
     cufft_wrap(cufft_wrap&& other):
     handle_(std::exchange(other.handle_, 0)),
     plan_created(std::exchange(other.plan_created, false)),
@@ -136,7 +136,7 @@ public:
         }
     }
     
-    void set_work_area(T* work_area)
+    void set_work_area(void* work_area)
     {
         CUFFT_SAFE_CALL( cufftSetWorkArea(handle_, work_area) );
     }

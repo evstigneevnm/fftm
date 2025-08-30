@@ -66,7 +66,7 @@ public:
         auto max_work_size = std::max_element(work_sizes.cbegin(), work_sizes.cend());
         work_area_size_ = *max_work_size;
         
-        CUDA_SAFE_CALL( cudaMalloc((void**)&work_area_, work_area_size_ ) );
+        CUDA_SAFE_CALL( cudaMalloc( &work_area_, work_area_size_ ) );
 
         for(auto &el: container_)
         {
@@ -84,7 +84,7 @@ public:
 
 
 private:
-    T* work_area_;
+    void* work_area_;
     bool activated_;
     std::map<std::string, wrap_t> container_;
     std::size_t work_area_size_; //in bytes!!!
