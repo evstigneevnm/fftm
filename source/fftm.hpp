@@ -4,24 +4,30 @@
 #include <iostream>
 #include <memory>
 #include <utility>
+#include <scfd/utils/log_mpi.h>
 
 namespace fftm
 {
 
-template <class BaseFFT>
+template <class BaseFFT, class MPIComm, class Log = scfd::utils::log_mpi>
 class fftm
 {
 public:
-    fftm(std::shared_ptr<BaseFFT> &base_fft):
-    base_fft_(base_fft)
+    fftm(std::shared_ptr<BaseFFT> &base_fft, const MPIComm& mpi, const Log& log = scfd::utils::log_mpi() ):
+    base_fft_(base_fft),
+    mpi_(mpi),
+    log_(log)
     {}
     ~fftm()
     {}
 
+    
+
+
     void init_test()
     {
         
-//         pidx:1, pidx_i:0, pidx_j:1, batch[0]:175104, batch[1]:87552, batch[2]:87552
+// pidx:1, pidx_i:0, pidx_j:1, batch[0]:175104, batch[1]:87552, batch[2]:87552
 // pidx:1, pidx_i:0, pidx_j:1, n[0]:1024, n[1]:1024, n[2]:1024
 // pidx:1, pidx_i:0, pidx_j:1, inembed[0]:1, inembed[1]:1, inembed[2]:1
 // pidx:1, pidx_i:0, pidx_j:1, onembed[0]:87552, onembed[1]:87552, onembed[2]:175104
@@ -70,6 +76,8 @@ public:
     
 private:
     std::shared_ptr<BaseFFT> base_fft_;
+    Log log_;
+    MPIComm mpi_;
 
 
 };
