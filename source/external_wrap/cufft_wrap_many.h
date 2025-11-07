@@ -15,13 +15,13 @@
 namespace fftm{
 namespace wrap{
 
-
 template<class T>
 class cufft_wrap_many
 {
 private:
     using wrap_t = cufft_wrap<T>;
 public:
+    using real = T;
     using complex = typename wrap_t::complex;
 
     cufft_wrap_many():
