@@ -2,10 +2,13 @@
 #define __FFTM_CUFFT_WRAP_H__
 
 #include <stdexcept>
+#include <type_traits>
 #include <cufft.h>
 #include <cuda.h>
+#include <scfd/utils/todo.h>
 #include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/cufft_safe_call.h>
+
 #include "fft_direction.h"
 
 namespace fftm{
@@ -39,26 +42,32 @@ struct fft_r2c{};
 template<typename T>
 struct fft_c2c{};
 
+
 template<>
 struct fft_c2r<float>
 {
     static const cufftType type = CUFFT_C2R;
+    decltype(cufftExecC2R)* exec_c2r = cufftExecC2R;
 };
 
 template<>
 struct fft_c2r<double>
 {
     static const cufftType type = CUFFT_Z2D;
+    decltype(cufftExecZ2D)* exec_c2r = cufftExecZ2D;
 };
 template<>
 struct fft_r2c<float>
 {
     static const cufftType type = CUFFT_R2C;
+    decltype(cufftExecR2C)* exec_r2c = cufftExecR2C;
+
 };
 template<>
 struct fft_r2c<double>
 {
     static const cufftType type = CUFFT_D2Z;
+    decltype(cufftExecD2Z)* exec_r2c = cufftExecD2Z;
 };
 template<>
 struct fft_c2c<float>
@@ -69,7 +78,56 @@ template<>
 struct fft_c2c<double>
 {
     static const cufftType type = CUFFT_Z2Z;
+    decltype(cufftExecZ2Z)* exec_c2c = cufftExecZ2Z;
 };
+
+
+template<typename T, fftm::direction D>
+struct fft
+{};
+
+template<>
+struct fft<float, fftm::direction::R2C>
+{
+    decltype(cufftExecC2C)* exec_c2c = cufftExecC2C;
+};
+
+// template<>
+// struct fft<float, fftm::direction::R2C>
+// {
+//     static const decltype(fft_r2c*) call = fft_r2c<float>::exec_r2c;
+// };
+
+// template<>
+// struct fft<double, fftm::direction::R2C>
+// {
+//     static const decltype(fft_r2c*) call = fft_r2c<double>::exec_r2c;
+// };
+
+// template<>
+// struct fft<float, fftm::direction::C2C>
+// {
+//     static const decltype(fft_r2c*) call = fft_r2c<float>::exec_c2c;
+// };
+
+// template<>
+// struct fft<double, fftm::direction::C2C>
+// {
+//     static const decltype(fft_r2c*) call = fft_r2c<double>::exec_c2c;
+// };
+
+// template<>
+// struct fft<float, fftm::direction::C2R>
+// {
+//     static const decltype(fft_r2c*) call = fft_r2c<float>::exec_c2r;
+// };
+
+// template<>
+// struct fft<double, fftm::direction::C2R>
+// {
+//     static const decltype(fft_r2c*) call = fft_r2c<double>::exec_c2r;
+// };
+
 
 }
 
@@ -107,6 +165,7 @@ public:
     {
         if(!plan_created)
         {
+            type_ = type;
         //cufftResult cufftMakePlanMany64(cufftHandle plan, int rank, long long int *n, long long int *inembed, long long int istride, long long int idist, long long int *onembed, long long int ostride, long long int odist, cufftType type, long long int batch, size_t *workSize);
 
         // plan[In] – cufftHandle returned by cufftCreate.
@@ -146,10 +205,31 @@ public:
         return work_size;
     }
 
+
+    template<class ArrayIn, class ArrayOut, class Strip2Pointer = int>
+    void exec(const ArrayIn& idata, ArrayOut& odata) const
+    {
+        if constexpr (std::is_class<Strip2Pointer>::value)
+        {
+            SCFD_TODO("add implementation to strip array to a pointer via an external structure");
+        }
+        else
+        {
+            {
+                CUFFT_SAFE_CALL( detail::fft_c2c<T>::exec_c2c( handle_, idata.raw_ptr(), odata.raw_ptr()  ) );
+            }
+        }
+
+    }
+
+
+
+
 private:
     cufftHandle handle_;
     bool plan_created;
     std::size_t work_size;
+    direction type_;
 
     cufftType get_fft_direction(direction dir)
     {
@@ -165,6 +245,7 @@ private:
                 return detail::fft_c2c<T>::type;
                 break;
         }
+        
         return detail::fft_c2c<T>::type;
     }
 

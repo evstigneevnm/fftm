@@ -15,11 +15,11 @@
 namespace fftm{
 namespace wrap{
 
-template<class T>
+template<class T, ::fftm::direction D>
 class cufft_wrap_many
 {
 private:
-    using wrap_t = cufft_wrap<T>;
+    using wrap_t = cufft_wrap<T, D>;
 public:
     using real = T;
     using complex = typename wrap_t::complex;
@@ -40,7 +40,7 @@ public:
 
 
 
-    void add_plan_1D(const std::string& name, long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, direction type, long long int batch)
+    void add_plan_1D(const std::string& name, long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, long long int batch)
     {
         if(activated_)
         {
@@ -48,7 +48,6 @@ public:
         }
         container_.emplace(name, wrap_t{});
         container_.at(name).plan1D_create(n, inembed, istride, idist, onembed, ostride, odist, type, batch);
-
     }
 
 
@@ -80,6 +79,12 @@ public:
     std::size_t get_work_size() const
     {
         return work_area_size_;
+    }
+
+
+    void exec(const std::string& name)
+    {
+
     }
 
 

@@ -10,7 +10,8 @@ enum class direction: std::uint8_t
 { 
     R2C = 1,
     C2R,
-    C2C 
+    C2CF,
+    C2CB
 };
 
 }
