@@ -11,126 +11,278 @@
 
 #include "fft_direction.h"
 
-namespace fftm{
-namespace wrap{
+namespace fftm
+{
+namespace wrap
+{
+namespace cufft
+{
+namespace detail
+{
 
-namespace detail{
+
 
 template<typename T>
-struct complex_type
+struct fft_complex;
+
+template<>
+struct fft_complex<float>
 {
+    using complex = cufftComplex;
 };
 
 template<>
-struct complex_type<float>
+struct fft_complex<double>
 {
-    using type = cufftComplex ;
+    using complex = cufftDoubleComplex;
+};
+
+template<typename T> 
+struct fft_r2c;
+
+template<>
+struct fft_r2c<float>
+{
+    static constexpr cufftType type = CUFFT_R2C;
+    using in_type  = float;
+    using out_type = cufftComplex;
+
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecR2C(plan, in, out);
+    }
 };
 
 template<>
-struct complex_type<double>
+struct fft_r2c<double>
 {
-    using type = cufftDoubleComplex;
+    static constexpr cufftType type = CUFFT_D2Z;
+    using in_type  = double;
+    using out_type = cufftDoubleComplex;
+
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecD2Z(plan, in, out);
+    }
 };
 
-template<typename T>
-struct fft_c2r{};
-
-template<typename T>
-struct fft_r2c{};
-
-template<typename T>
-struct fft_c2c{};
-
+// C2R
+template<typename T> 
+struct fft_c2r;
 
 template<>
 struct fft_c2r<float>
 {
-    static const cufftType type = CUFFT_C2R;
-    decltype(cufftExecC2R)* exec_c2r = cufftExecC2R;
+    static constexpr cufftType type = CUFFT_C2R;
+    using in_type  = cufftComplex;
+    using out_type = float;
+
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecC2R(plan, in, out);
+    }
 };
 
 template<>
 struct fft_c2r<double>
 {
-    static const cufftType type = CUFFT_Z2D;
-    decltype(cufftExecZ2D)* exec_c2r = cufftExecZ2D;
-};
-template<>
-struct fft_r2c<float>
-{
-    static const cufftType type = CUFFT_R2C;
-    decltype(cufftExecR2C)* exec_r2c = cufftExecR2C;
+    static constexpr cufftType type = CUFFT_Z2D;
+    using in_type  = cufftDoubleComplex;
+    using out_type = double;
 
-};
-template<>
-struct fft_r2c<double>
-{
-    static const cufftType type = CUFFT_D2Z;
-    decltype(cufftExecD2Z)* exec_r2c = cufftExecD2Z;
-};
-template<>
-struct fft_c2c<float>
-{
-    static const cufftType type = CUFFT_C2C;
-};
-template<>
-struct fft_c2c<double>
-{
-    static const cufftType type = CUFFT_Z2Z;
-    decltype(cufftExecZ2Z)* exec_c2c = cufftExecZ2Z;
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecZ2D(plan, in, out);
+    }
 };
 
-
-template<typename T, fftm::direction D>
-struct fft
-{};
+// C2C forward
+template<typename T> 
+struct fft_c2cf;
 
 template<>
-struct fft<float, fftm::direction::R2C>
+struct fft_c2cf<float>
 {
-    decltype(cufftExecC2C)* exec_c2c = cufftExecC2C;
+    static constexpr cufftType type = CUFFT_C2C;
+    using in_type  = cufftComplex;
+    using out_type = cufftComplex;
+
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecC2C(plan, in, out, CUFFT_FORWARD);
+    }
 };
 
-// template<>
-// struct fft<float, fftm::direction::R2C>
-// {
-//     static const decltype(fft_r2c*) call = fft_r2c<float>::exec_r2c;
-// };
+template<>
+struct fft_c2cf<double>
+{
+    static constexpr cufftType type = CUFFT_Z2Z;
+    using in_type  = cufftDoubleComplex;
+    using out_type = cufftDoubleComplex;
 
-// template<>
-// struct fft<double, fftm::direction::R2C>
-// {
-//     static const decltype(fft_r2c*) call = fft_r2c<double>::exec_r2c;
-// };
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecZ2Z(plan, in, out, CUFFT_FORWARD);
+    }
+};
 
-// template<>
-// struct fft<float, fftm::direction::C2C>
-// {
-//     static const decltype(fft_r2c*) call = fft_r2c<float>::exec_c2c;
-// };
+// C2C backward
+template<typename T> 
+struct fft_c2cb;
 
-// template<>
-// struct fft<double, fftm::direction::C2C>
-// {
-//     static const decltype(fft_r2c*) call = fft_r2c<double>::exec_c2c;
-// };
+template<>
+struct fft_c2cb<float>
+{
+    static constexpr cufftType type = CUFFT_C2C;
+    using in_type  = cufftComplex;
+    using out_type = cufftComplex;
 
-// template<>
-// struct fft<float, fftm::direction::C2R>
-// {
-//     static const decltype(fft_r2c*) call = fft_r2c<float>::exec_c2r;
-// };
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecC2C(plan, in, out, CUFFT_INVERSE);
+    }
+};
 
-// template<>
-// struct fft<double, fftm::direction::C2R>
-// {
-//     static const decltype(fft_r2c*) call = fft_r2c<double>::exec_c2r;
-// };
+template<>
+struct fft_c2cb<double>
+{
+    static constexpr cufftType type = CUFFT_Z2Z;
+    using in_type  = cufftDoubleComplex;
+    using out_type = cufftDoubleComplex;
+
+    static cufftResult exec(cufftHandle& plan, in_type* in, out_type* out)
+    {
+        return cufftExecZ2Z(plan, in, out, CUFFT_INVERSE);
+    }
+};
+
+
+template<typename T, direction D>
+struct fft_traits;
+
+template<typename T>
+struct fft_traits<T, direction::R2C> : fft_r2c<T> {};
+
+template<typename T>
+struct fft_traits<T, direction::C2R> : fft_c2r<T> {};
+
+template<typename T>
+struct fft_traits<T, direction::C2CF> : fft_c2cf<T> {};
+
+template<typename T>
+struct fft_traits<T, direction::C2CB> : fft_c2cb<T> {};
 
 
 }
 
+
+template<typename T>
+class fft_base
+{
+public:
+    using complex = typename detail::fft_complex<T>::complex;
+    virtual ~fft_base() {}
+    // virtual cufftResult exec(void* in, void* out) = 0; //check error here
+    virtual void exec(void* in, void* out) = 0;
+    virtual direction get_direction() const = 0;
+    virtual std::size_t get_work_size() const = 0;
+    virtual void set_work_area(void* work_area) = 0;
+};
+
+
+template<typename T, ::fftm::direction D>
+class fft : public fft_base<T>
+{
+    using traits = detail::fft_traits<T, D>;
+
+public:
+    using in_type  = typename traits::in_type;
+    using out_type = typename traits::out_type;
+
+
+    explicit fft(long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, long long int batch)
+    {
+
+        CUFFT_SAFE_CALL(cufftCreate(&handle_));
+        CUFFT_SAFE_CALL( cufftSetAutoAllocation(handle_, 0) );
+        //cufftResult cufftMakePlanMany64(cufftHandle plan, int rank, long long int *n, long long int *inembed, long long int istride, long long int idist, long long int *onembed, long long int ostride, long long int odist, cufftType type, long long int batch, size_t *workSize);
+
+        // plan[In] – cufftHandle returned by cufftCreate.
+        // rank[In] – Dimensionality of the transform (1, 2, or 3).
+        // n[In] – Array of size rank, describing the size of each dimension. For multiple GPUs and rank equal to 1, the sizes must be a power of 2. For multiple GPUs and rank equal to 2 or 3, the sizes must be factorable into primes less than or equal to 127.
+        // inembed[In] – Pointer of size rank that indicates the storage dimensions of the input data in memory. If set to NULL all other advanced data layout parameters are ignored.
+        // istride[In] – Indicates the distance between two successive input elements in the least significant (i.e., innermost) dimension.
+        // idist[In] – Indicates the distance between the first element of two consecutive signals in a batch of the input data.
+        // onembed[In] – Pointer of size rank that indicates the storage dimensions of the output data in memory. If set to NULL all other advanced data layout parameters are ignored.
+        // ostride[In] – Indicates the distance between two successive output elements in the output array in the least significant (i.e., innermost) dimension.
+        // odist[In] – Indicates the distance between the first element of two consecutive signals in a batch of the output data.
+        // type[In] – The transform data type (e.g., CUFFT_R2C for single precision real to complex). For 2 GPUs this must be a complex to complex transform.
+        // batch[In] – Batch size for this transform.
+        // *workSize[In] – Pointer to the size(s), in bytes, of the work areas. For example for two GPUs worksize must be declared to have two elements.
+        // *workSize[Out] – Pointer to the size(s) of the work areas.
+        CUFFT_SAFE_CALL(cufftMakePlanMany64(
+            handle_, 1, &n, 
+            &inembed, istride, idist, 
+            &onembed, ostride, odist, 
+            get_fft_direction(D), batch, &work_size) );        
+    }
+
+    ~fft() override
+    {
+        cufftDestroy(handle_); 
+    }
+
+    virtual std::size_t get_work_size() const override
+    {
+        return work_size;
+    }
+
+
+    virtual void set_work_area(void* work_area) override
+    {
+        CUFFT_SAFE_CALL( cufftSetWorkArea(handle_, work_area) );
+    }
+
+
+    virtual void exec(void* in, void* out) override
+    {
+        CUFFT_SAFE_CALL( traits::exec(handle_, static_cast<in_type*>(in), static_cast<out_type*>(out) ) );
+    }
+
+    virtual direction get_direction() const override
+    {
+        return D;
+    }
+
+private:
+
+    cufftHandle handle_;
+    std::size_t work_size;
+
+    cufftType get_fft_direction(direction dir)
+    {
+        switch(dir)
+        {
+            case direction::R2C:
+                return detail::fft_r2c<T>::type;
+                break;
+            case direction::C2R:
+                return detail::fft_c2r<T>::type;
+                break;
+            case direction::C2CF:
+                return detail::fft_c2cf<T>::type;
+                break;
+            case direction::C2CB:
+                return detail::fft_c2cb<T>::type;
+                break;
+        }
+        
+        return detail::fft_c2cf<T>::type; //to avoid warning
+    }
+
+};
+
+/*
 template<class T>
 class cufft_wrap
 {
@@ -252,8 +404,11 @@ private:
 
 
 };
+*/
 
-}}
+}
+}
+}
 
 
 #endif // __FFTM_CUFFT_WRAP_H__
