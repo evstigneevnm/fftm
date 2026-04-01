@@ -29,6 +29,9 @@ namespace arrays
 template <scfd::arrays::ordinal_type... Dims>
 using custom_arranger_102_t = scfd::arrays::custom_index_fast_arranger<1, 0, 2>::type<Dims...>;
 
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_201_t = scfd::arrays::custom_index_fast_arranger<2, 0, 1>::type<Dims...>;
+
 }
 }
 
@@ -267,75 +270,37 @@ inline void launchMemcpy3DKernel(const cudaMemcpy3DParms& p, cudaStream_t stream
 }
 
 
-struct partition
-{
-    void compute_offsets()
-    {
-        start_x.clear();
-        start_y.clear();
-        start_z.clear();
-        start_w.clear();
-        computeStart(size_x, start_x);
-        computeStart(size_y, start_y);
-        computeStart(size_z, start_z);
-    }
-
-    std::vector<std::size_t> size_x;
-    std::vector<std::size_t> size_y;
-    std::vector<std::size_t> size_z;
-    std::vector<std::size_t> size_w;
-
-    std::vector<std::size_t> start_x;
-    std::vector<std::size_t> start_y;
-    std::vector<std::size_t> start_z;
-    std::vector<std::size_t> start_w;
-
-private:
-    void computeStart(const std::vector<std::size_t>& size, std::vector<std::size_t>& start)
-    {
-        std::size_t offset = 0;
-        for (std::size_t j = 0; j < size.size(); j++)
-        {
-            start.push_back(offset);
-            offset += size[j];
-        }
-    }    
-
-};
-
 template<class C>
 cudaMemcpy3DParms set_params(
+    std::size_t Nx,
     std::size_t Ny,
+    std::size_t Nz,
     C* send_ptr,
     C* recv_ptr,
-    const partition& input_dim,
-    const partition& transposed_dim,
-    bool cuda_aware,
-    int pidx_i,
-    int pidx_j,
-    int p_j
+    bool cuda_aware
 )
 {
     cudaMemcpy3DParms cpy_params = {0};
     cpy_params.dstPos = make_cudaPos(0, 0, 0);
+    cpy_params.dstPtr = make_cudaPitchedPtr(recv_ptr, Ny * sizeof(C), Ny, Nx);
 
-    cpy_params.dstPtr = make_cudaPitchedPtr(&recv_ptr[transposed_dim.size_x[pidx_i]*input_dim.start_y[p_j]*transposed_dim.size_z[pidx_j]], input_dim.size_y[p_j]*sizeof(C), input_dim.size_y[p_j], input_dim.size_x[pidx_i]);
+    cpy_params.srcPos = make_cudaPos(0, 0, 0);
+    cpy_params.srcPtr = make_cudaPitchedPtr(send_ptr, Ny * sizeof(C), Ny, Nx);
 
-    cpy_params.srcPos = make_cudaPos(input_dim.start_y[p_j]*sizeof(C), 0, 0);
-    cpy_params.srcPtr = make_cudaPitchedPtr(send_ptr, Ny*sizeof(C), Ny, transposed_dim.size_x[pidx_i]);
-
-    cpy_params.extent = make_cudaExtent(input_dim.size_y[p_j]*sizeof(C), input_dim.size_x[pidx_i], transposed_dim.size_z[pidx_j]);
+    cpy_params.extent = make_cudaExtent(Ny * sizeof(C), Nx, Nz);
 
     cpy_params.kind   = cuda_aware ? cudaMemcpyDeviceToDevice : cudaMemcpyDeviceToHost; 
     return cpy_params;
 }
 
 
-template<class Idx, class Array>
+template<class Idx, class ArrayLhs, class ArrayRhs, class ArrayRes>
 struct test_diff
 {
-    test_diff(const Array& _f1, const Array& _f2, Array& _res) : f1(_f1), f2(_f2), res(_res) {}
-    Array f1, f2, res;
+    test_diff(const ArrayLhs& _f1, const ArrayRhs& _f2, ArrayRes& _res) : f1(_f1), f2(_f2), res(_res) {}
+    ArrayLhs f1;
+    ArrayRhs f2;
+    ArrayRes res;
 
     __DEVICE_TAG__ void operator()(const Idx& idx)
     {
@@ -345,11 +310,12 @@ struct test_diff
 };
 
 
-template<class Idx, class Array, int axis0, int axis1, int axis2>
+template<class Idx, class ArrayIn, class ArrayOut, int axis0, int axis1, int axis2>
 struct manual_transpose
 {
-    manual_transpose(const Array& _f1, Array& _res) : f1(_f1), res(_res) {}
-    Array f1, res;
+    manual_transpose(const ArrayIn& _f1, ArrayOut& _res) : f1(_f1), res(_res) {}
+    ArrayIn  f1;
+    ArrayOut res;
 
     __DEVICE_TAG__ void operator()(const Idx& idx)
     {
@@ -389,40 +355,25 @@ int main(int argc, char const *argv[])
     using idx_t = scfd::static_vec::vec<int, dim>;
     using backend_t = scfd::backend::cuda;
     using for_each_t = backend_t::for_each_nd_type<dim>;
-    using array_C_type = scfd::arrays::tensor_array_nd<C, dim, backend_t::memory_type, scfd::arrays::custom_arranger_102_t>;
-    using array_C_view_type = array_C_type::view_type;
+    using send_array_t = scfd::arrays::tensor_array_nd<C, dim, backend_t::memory_type, scfd::arrays::custom_arranger_102_t>;
+    using transpose_array_t = scfd::arrays::tensor_array_nd<C, dim, backend_t::memory_type, scfd::arrays::custom_arranger_201_t>;
+    using send_array_view_t = send_array_t::view_type;
     using timer_t = scfd::utils::cuda_timer_event;
     
     
-    timer_t cuda3d_s, cuda3d_e, my_s, my_e;
-
     std::size_t Nx =20, Ny=30, Nz=50;
     bool cuda_aware = true;
 
-    int pidx_i = 0, pidx_j = 0;
-    int p_j = 0;
-
     scfd::utils::init_cuda_persistent();
+    timer_t cuda3d_s, cuda3d_e, my_s, my_e;
 
-    partition input_dim, transposed_dim;
-
-    input_dim.size_x.resize(1, Nx);
-    input_dim.size_y.resize(1, Ny);
-    input_dim.size_z.resize(1, Nz);
-    input_dim.compute_offsets();
-    transposed_dim.size_x.resize(1, Nx);
-    transposed_dim.size_y.resize(1, Nz);
-    transposed_dim.size_z.resize(1, Ny);
-    transposed_dim.compute_offsets();
-
-
-    array_C_type send_array;
-    array_C_type temp_array;
-    array_C_type temp_array_check;
-    array_C_type diff_cuda_vs_kernel;
-    array_C_type diff_cuda_vs_manual;
-    array_C_type diff_kernel_vs_manual;
-    array_C_type temp_manual;
+    send_array_t      send_array;
+    transpose_array_t temp_array;
+    transpose_array_t temp_array_check;
+    transpose_array_t diff_cuda_vs_kernel;
+    transpose_array_t diff_cuda_vs_manual;
+    transpose_array_t diff_kernel_vs_manual;
+    transpose_array_t temp_manual;
 
     SCFD_SAFE_CALL(send_array.init(Nx,Ny,Nz));
     SCFD_SAFE_CALL(temp_array.init(Nx,Nz,Ny));
@@ -433,7 +384,7 @@ int main(int argc, char const *argv[])
     SCFD_SAFE_CALL( temp_manual.init(Nx,Nz,Ny) );
 
 
-    array_C_view_type send_array_view(send_array);
+    send_array_view_t send_array_view(send_array);
     for(std::size_t j = 0; j<Nx; j++)
     for(std::size_t k = 0; k<Ny; k++)
     for(std::size_t l = 0; l<Nz; l++)
@@ -447,8 +398,8 @@ int main(int argc, char const *argv[])
     C* temp_ptr = temp_array.raw_ptr();
     C* temp_ptr_check = temp_array_check.raw_ptr();
 
-    auto papars_1 = set_params<C>(Ny, send_ptr, temp_ptr_check, input_dim, transposed_dim, cuda_aware, pidx_i, pidx_j, p_j);
-    auto papars_2 = set_params<C>(Ny, send_ptr, temp_ptr, input_dim, transposed_dim, cuda_aware, pidx_i, pidx_j, p_j);
+    auto papars_1 = set_params<C>(Nx, Ny, Nz, send_ptr, temp_ptr_check, cuda_aware);
+    auto papars_2 = set_params<C>(Nx, Ny, Nz, send_ptr, temp_ptr, cuda_aware);
 
 
 
@@ -465,13 +416,13 @@ int main(int argc, char const *argv[])
     for_each_t for_each;
     scfd::static_vec::rect<int, dim> range_T(idx_t(0,0,0), idx_t(Nx, Nz, Ny));
     scfd::static_vec::rect<int, dim> range(idx_t(0,0,0), idx_t(Nx, Ny, Nz));
-    for_each( manual_transpose<idx_t, array_C_type, 0, 2, 1>(send_array, temp_manual), range);
+    for_each( manual_transpose<idx_t, send_array_t, transpose_array_t, 0, 2, 1>(send_array, temp_manual), range);
     for_each.wait();
-    for_each(test_diff<idx_t, array_C_type>(temp_array, temp_array_check, diff_cuda_vs_kernel), range_T);
+    for_each(test_diff<idx_t, transpose_array_t, transpose_array_t, transpose_array_t>(temp_array, temp_array_check, diff_cuda_vs_kernel), range_T);
     for_each.wait();
-    for_each(test_diff<idx_t, array_C_type>(temp_array_check, temp_manual, diff_cuda_vs_manual), range_T);
+    for_each(test_diff<idx_t, transpose_array_t, transpose_array_t, transpose_array_t>(temp_array_check, temp_manual, diff_cuda_vs_manual), range_T);
     for_each.wait();
-    for_each(test_diff<idx_t, array_C_type>(temp_array, temp_manual, diff_kernel_vs_manual), range_T);
+    for_each(test_diff<idx_t, transpose_array_t, transpose_array_t, transpose_array_t>(temp_array, temp_manual, diff_kernel_vs_manual), range_T);
     for_each.wait();
 
     const std::size_t total_size = Nx * Ny * Nz;
@@ -489,10 +440,10 @@ int main(int argc, char const *argv[])
     std::cout << "cudaMemcpy3DAsync: " << cuda3d_e.elapsed_time(cuda3d_s) << " launchMemcpy3DKernel: " << my_e.elapsed_time(my_s) << std::endl;
 
 
-    io::write_out_pos_file_scal_3D_point<T, array_C_type>("send_array.pos", send_array, Nx, Ny, Nz);
-    io::write_out_pos_file_scal_3D_point<T, array_C_type>("temp_array.pos", temp_array, Nx, Nz, Ny);
-    io::write_out_pos_file_scal_3D_point<T, array_C_type>("temp_array_check.pos", temp_array_check, Nx, Nz, Ny);
-    io::write_out_pos_file_scal_3D_point<T, array_C_type>("temp_manual.pos", temp_manual, Nx, Nz, Ny);
+    io::write_out_pos_file_scal_3D_point<T>("send_array.pos", send_array, Nx, Ny, Nz);
+    io::write_out_pos_file_scal_3D_point<T>("temp_array.pos", temp_array, Nx, Nz, Ny);
+    io::write_out_pos_file_scal_3D_point<T>("temp_array_check.pos", temp_array_check, Nx, Nz, Ny);
+    io::write_out_pos_file_scal_3D_point<T>("temp_manual.pos", temp_manual, Nx, Nz, Ny);
 
     if ((norm_cuda_vs_manual > tol) || (norm_kernel_vs_manual > tol))
     {
