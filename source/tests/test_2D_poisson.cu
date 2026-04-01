@@ -166,11 +166,8 @@ public:
         real_array_t exact_solution;
         real_array_t exact_dx;
         real_array_t exact_dy;
-        T lx;
-        T ly;
         T hx;
         T hy;
-        T mean_shift;
 
         __device__ __host__ void operator()( const idx_t &idx )
         {
@@ -178,13 +175,15 @@ public:
             const T x = hx * static_cast<T>( idx[0] );
             const T y = hy * static_cast<T>( idx[1] );
 
-            const T x_term = x * ( x - lx );
-            const T y_term = y * ( y - ly );
+            const T sin_x = scfd::utils::scalar_traits<T>::sin( x );
+            const T cos_x = scfd::utils::scalar_traits<T>::cos( x );
+            const T sin_y = scfd::utils::scalar_traits<T>::sin( y );
+            const T cos_y = scfd::utils::scalar_traits<T>::cos( y );
 
-            rhs( idx )            = T( 2 ) * ( x_term + y_term );
-            exact_solution( idx ) = x_term * y_term - mean_shift;
-            exact_dx( idx )       = ( T( 2 ) * x - lx ) * y_term;
-            exact_dy( idx )       = ( T( 2 ) * y - ly ) * x_term;
+            exact_solution( idx ) = sin_x * cos_y;
+            rhs( idx )            = -T( 2 ) * sin_x * cos_y;
+            exact_dx( idx )       = cos_x * cos_y;
+            exact_dy( idx )       = -sin_x * sin_y;
         }
     };
 
@@ -286,12 +285,6 @@ private:
         return static_cast<int>( value );
     }
 
-    T zero_mean_shift() const
-    {
-        const T l = domain_length();
-        return ( l * l * l * l ) / T( 36 );
-    }
-
     T normalization_factor() const
     {
         return T( 1 ) / static_cast<T>( nx_ * ny_ );
@@ -360,11 +353,8 @@ private:
                 exact_solution_,
                 exact_dx_,
                 exact_dy_,
-                domain_length(),
-                domain_length(),
                 hx_,
                 hy_,
-                zero_mean_shift(),
             },
             real_range_
         );
@@ -543,8 +533,8 @@ int main( int argc, char *argv[] )
                 std::cout << "warning: rhs_mean = " << rhs_mean
                           << " for Nx=" << grid.first
                           << ", Ny=" << grid.second
-                          << "; the periodic FFT solve removes the zero Fourier mode, so this polynomial"
-                          << " reference pair will not converge to zero error on the torus."
+                          << "; the periodic FFT solve removes the zero Fourier mode, so the manufactured"
+                          << " rhs should have zero mean."
                           << std::endl;
             }
 
