@@ -1,6 +1,7 @@
 #ifndef __FFTM_CUFFT_WRAP_MANY_H__
 #define __FFTM_CUFFT_WRAP_MANY_H__
 
+#include <array>
 #include <utility>
 #include <memory>
 #include <string>
@@ -41,14 +42,59 @@ public:
         
 
 
-    template<::fftm::direction D>
-    void add_plan_1D(const std::string& name, long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, long long int batch)
+    template<::fftm::direction D, std::size_t Rank>
+    void add_plan(const std::string& name, const std::array<long long int, Rank>& n, const std::array<long long int, Rank>& inembed, long long int istride, long long int idist, const std::array<long long int, Rank>& onembed, long long int ostride, long long int odist, long long int batch)
     {
         if(activated_)
         {
-            throw std::logic_error("cufft_wrap_many::add_plan_1D: cannot add new plans after the wrap was activated.");
+            throw std::logic_error("cufft_wrap_many::add_plan: cannot add new plans after the wrap was activated.");
         }
-        container_.emplace(name, std::unique_ptr<wrap_t>( new cufft::fft<T, D>(n, inembed, istride, idist, onembed, ostride, odist, batch) ) );
+        container_.emplace(name, std::make_unique<cufft::fft<T, D>>(n, inembed, istride, idist, onembed, ostride, odist, batch));
+    }
+
+
+    template<::fftm::direction D>
+    void add_plan_1D(const std::string& name, long long int n, long long int inembed, long long int istride, long long int idist, long long int onembed, long long int ostride, long long int odist, long long int batch)
+    {
+        add_plan<D>(name,
+                    std::array<long long int, 1>{n},
+                    std::array<long long int, 1>{inembed},
+                    istride,
+                    idist,
+                    std::array<long long int, 1>{onembed},
+                    ostride,
+                    odist,
+                    batch);
+    }
+
+
+    template<::fftm::direction D>
+    void add_plan_2D(const std::string& name, long long int n0, long long int n1, long long int inembed0, long long int inembed1, long long int istride, long long int idist, long long int onembed0, long long int onembed1, long long int ostride, long long int odist, long long int batch)
+    {
+        add_plan<D>(name,
+                    std::array<long long int, 2>{n0, n1},
+                    std::array<long long int, 2>{inembed0, inembed1},
+                    istride,
+                    idist,
+                    std::array<long long int, 2>{onembed0, onembed1},
+                    ostride,
+                    odist,
+                    batch);
+    }
+
+
+    template<::fftm::direction D>
+    void add_plan_3D(const std::string& name, long long int n0, long long int n1, long long int n2, long long int inembed0, long long int inembed1, long long int inembed2, long long int istride, long long int idist, long long int onembed0, long long int onembed1, long long int onembed2, long long int ostride, long long int odist, long long int batch)
+    {
+        add_plan<D>(name,
+                    std::array<long long int, 3>{n0, n1, n2},
+                    std::array<long long int, 3>{inembed0, inembed1, inembed2},
+                    istride,
+                    idist,
+                    std::array<long long int, 3>{onembed0, onembed1, onembed2},
+                    ostride,
+                    odist,
+                    batch);
     }
 
 
