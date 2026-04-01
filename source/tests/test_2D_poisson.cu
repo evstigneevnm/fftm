@@ -28,7 +28,7 @@ namespace arrays
 {
 
 template <scfd::arrays::ordinal_type... Dims>
-using custom_arranger_01_t = scfd::arrays::custom_index_fast_arranger<0, 1>::type<Dims...>;
+using custom_arranger_10_t = scfd::arrays::custom_index_fast_arranger<1, 0>::type<Dims...>;
 
 }
 }
@@ -155,8 +155,9 @@ private:
     using complex_t      = typename base_fft_t::complex;
     using idx_t          = scfd::static_vec::vec<int, dim>;
     using range_t        = scfd::static_vec::rect<int, dim>;
-    using real_array_t   = scfd::arrays::tensor_array_nd<T, dim, memory_t, scfd::arrays::custom_arranger_01_t>;
-    using complex_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_01_t>;
+    // CUFFT plans below assume row-major storage, so the last index must be contiguous.
+    using real_array_t   = scfd::arrays::tensor_array_nd<T, dim, memory_t, scfd::arrays::custom_arranger_10_t>;
+    using complex_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_10_t>;
 
 public:
     struct fill_problem_functor
