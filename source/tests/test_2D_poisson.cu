@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -13,6 +14,7 @@
 #include <scfd/backend/cuda.h>
 #include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
+#include <scfd/utils/init_cuda.h>
 #include <scfd/utils/scalar_traits.h>
 #include <scfd/utils/system_timer_event.h>
 
@@ -29,6 +31,67 @@ template <scfd::arrays::ordinal_type... Dims>
 using custom_arranger_01_t = scfd::arrays::custom_index_fast_arranger<0, 1>::type<Dims...>;
 
 }
+}
+
+namespace io
+{
+
+template <class T, class Array>
+void write_out_pos_file_scal_2D_quad( const std::string &filename, const Array &u_in, T lx, T ly )
+{
+    using view_t = typename Array::view_type;
+
+    view_t u( u_in, true );
+    auto   sz = u.size_nd();
+
+    const std::size_t nx = static_cast<std::size_t>( sz[0] );
+    const std::size_t ny = static_cast<std::size_t>( sz[1] );
+
+    FILE *stream = std::fopen( filename.c_str(), "w" );
+    if ( stream == NULL )
+    {
+        throw std::runtime_error( "error creating file: " + filename );
+    }
+
+    std::fprintf( stream, "View '%s %i' {\n", filename.c_str(), 0 );
+    std::fprintf( stream, "TIME{0};\n" );
+
+    for ( std::size_t i = 0; i < nx; ++i )
+    {
+        const std::size_t ip = ( i + 1 ) % nx;
+        const T           x0 = lx * static_cast<T>( i ) / static_cast<T>( nx );
+        const T           x1 = lx * static_cast<T>( i + 1 ) / static_cast<T>( nx );
+
+        for ( std::size_t j = 0; j < ny; ++j )
+        {
+            const std::size_t jp = ( j + 1 ) % ny;
+            const T           y0 = ly * static_cast<T>( j ) / static_cast<T>( ny );
+            const T           y1 = ly * static_cast<T>( j + 1 ) / static_cast<T>( ny );
+
+            std::fprintf(
+                stream,
+                "SQ(%le, %le, 0, %le, %le, 0, %le, %le, 0, %le, %le, 0){%le, %le, %le, %le};\n",
+                static_cast<double>( x0 ),
+                static_cast<double>( y0 ),
+                static_cast<double>( x1 ),
+                static_cast<double>( y0 ),
+                static_cast<double>( x1 ),
+                static_cast<double>( y1 ),
+                static_cast<double>( x0 ),
+                static_cast<double>( y1 ),
+                static_cast<double>( u( i, j ) ),
+                static_cast<double>( u( ip, j ) ),
+                static_cast<double>( u( ip, jp ) ),
+                static_cast<double>( u( i, jp ) )
+            );
+        }
+    }
+
+    std::fprintf( stream, "};\n" );
+    std::fclose( stream );
+    u.release( false );
+}
+
 }
 
 template <class T>
@@ -64,6 +127,23 @@ public:
         return { validate(), wall_time_ms };
     }
 
+    T rhs_mean() const
+    {
+        return reduce_( rhs_.size(), rhs_.raw_ptr(), T( 0 ) ) / static_cast<T>( rhs_.size() );
+    }
+
+    void write_gmsh_outputs( const std::string &prefix ) const
+    {
+        io::write_out_pos_file_scal_2D_quad( prefix + "_rhs.pos", rhs_, domain_length(), domain_length() );
+        io::write_out_pos_file_scal_2D_quad(
+            prefix + "_solution.pos",
+            numerical_solution_,
+            domain_length(),
+            domain_length()
+        );
+        io::write_out_pos_file_scal_2D_quad( prefix + "_exact.pos", exact_solution_, domain_length(), domain_length() );
+    }
+
 private:
     static constexpr int dim = 2;
 
@@ -93,6 +173,7 @@ public:
 
         __device__ __host__ void operator()( const idx_t &idx )
         {
+            // Physical coordinates on [0, 2*pi)^2.
             const T x = hx * static_cast<T>( idx[0] );
             const T y = hy * static_cast<T>( idx[1] );
 
@@ -444,6 +525,8 @@ int main( int argc, char *argv[] )
         using grid_t = std::pair<std::size_t, std::size_t>;
         using run_t  = std::pair<grid_t, results_t<T>>;
 
+        scfd::utils::init_cuda_persistent();
+
         const auto grids = parse_grids( argc, argv );
 
         std::vector<run_t> runs;
@@ -452,7 +535,22 @@ int main( int argc, char *argv[] )
         for ( const auto &grid : grids )
         {
             poisson_2d_fft_case<T> poisson_case( grid.first, grid.second );
+            const T                rhs_mean = poisson_case.rhs_mean();
+
+            if ( std::abs( rhs_mean ) > T( 1.0e-12 ) )
+            {
+                std::cout << "warning: rhs_mean = " << rhs_mean
+                          << " for Nx=" << grid.first
+                          << ", Ny=" << grid.second
+                          << "; the periodic FFT solve removes the zero Fourier mode, so this polynomial"
+                          << " reference pair will not converge to zero error on the torus."
+                          << std::endl;
+            }
+
             runs.push_back( { grid, poisson_case.run() } );
+            poisson_case.write_gmsh_outputs(
+                "poisson_2d_" + std::to_string( grid.first ) + "x" + std::to_string( grid.second )
+            );
         }
 
         std::cout << std::scientific << std::setprecision( 8 );
