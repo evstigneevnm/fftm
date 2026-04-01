@@ -1,8 +1,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <iomanip>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -15,6 +13,7 @@
 #include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/init_cuda.h>
+#include <scfd/utils/log_std.h>
 #include <scfd/utils/scalar_traits.h>
 #include <scfd/utils/system_timer_event.h>
 
@@ -526,13 +525,15 @@ std::vector<std::pair<std::size_t, std::size_t>> parse_grids( int argc, char *ar
 
 int main( int argc, char *argv[] )
 {
+    scfd::utils::log_std log;
+
     try
     {
         using T = double;
         using grid_t = std::pair<std::size_t, std::size_t>;
         using run_t  = std::pair<grid_t, results_t<T>>;
 
-        scfd::utils::init_cuda_persistent();
+        scfd::utils::init_cuda_persistent( log, 0 );
 
         const auto grids = parse_grids( argc, argv );
 
@@ -546,12 +547,13 @@ int main( int argc, char *argv[] )
 
             if ( std::abs( rhs_mean ) > T( 1.0e-12 ) )
             {
-                std::cout << "warning: rhs_mean = " << rhs_mean
-                          << " for Nx=" << grid.first
-                          << ", Ny=" << grid.second
-                          << "; the periodic FFT solve removes the zero Fourier mode, so the manufactured"
-                          << " rhs should have zero mean."
-                          << std::endl;
+                log.warning_f(
+                    "rhs_mean = %.8e for Nx=%zu, Ny=%zu; the periodic FFT solve removes the zero Fourier mode,"
+                    " so the manufactured rhs should have zero mean.",
+                    rhs_mean,
+                    grid.first,
+                    grid.second
+                );
             }
 
             runs.push_back( { grid, poisson_case.run() } );
@@ -560,25 +562,26 @@ int main( int argc, char *argv[] )
             );
         }
 
-        std::cout << std::scientific << std::setprecision( 8 );
         for ( const auto &run : runs )
         {
             const auto &grid = run.first;
             const auto &res  = run.second;
 
-            std::cout << "Nx=" << grid.first
-                      << ", Ny=" << grid.second
-                      << ": L2=" << res.first.first
-                      << ", H1=" << res.first.second
-                      << ", wall_ms=" << res.second
-                      << std::endl;
+            log.info_f(
+                "Nx=%zu, Ny=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
+                grid.first,
+                grid.second,
+                res.first.first,
+                res.first.second,
+                res.second
+            );
         }
 
         return 0;
     }
     catch ( const std::exception &e )
     {
-        std::cerr << e.what() << std::endl;
+        log.error( e.what() );
         return 1;
     }
 }
