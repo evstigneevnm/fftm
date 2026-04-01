@@ -19,10 +19,11 @@
 
 #include <external_wrap/cufft_wrap_many.h>
 
+#include "detail/cuda_memcpy_4d_slab_transposer.h"
 #include "detail/direct_transpose_4d.h"
 #include "detail/poisson_fft_test_common.h"
 
-template <class T>
+template <class T, class Transposer>
 class poisson_4d_fft_case
 {
 public:
@@ -593,7 +594,7 @@ private:
     for_each_t for_each_;
     reduce_t   reduce_;
     base_fft_t fft_;
-    fftm::tests::detail::direct_transpose_4d transposer_;
+    Transposer transposer_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
@@ -619,36 +620,140 @@ private:
 };
 
 template <class T>
-using results_4d_t = typename poisson_4d_fft_case<T>::results_t;
+using results_4d_t = std::pair<std::pair<T, T>, T>;
 
-std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> parse_grids_4d( int argc, char *argv[] )
+enum class transpose_backend
 {
-    if ( argc == 1 )
+    direct,
+    memcpy
+};
+
+const char *transpose_backend_name( transpose_backend backend )
+{
+    switch ( backend )
     {
-        return {
+        case transpose_backend::direct:
+            return "direct";
+        case transpose_backend::memcpy:
+            return "memcpy";
+    }
+
+    return "unknown";
+}
+
+struct test_options_4d
+{
+    transpose_backend backend = transpose_backend::direct;
+    std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> grids;
+};
+
+test_options_4d parse_options_4d( int argc, char *argv[] )
+{
+    test_options_4d options;
+
+    int arg_i = 1;
+    while ( arg_i < argc )
+    {
+        const std::string arg = argv[arg_i];
+        if ( arg != "--transpose" )
+        {
+            break;
+        }
+
+        if ( arg_i + 1 >= argc )
+        {
+            throw std::logic_error(
+                "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
+            );
+        }
+
+        const std::string backend_name = argv[arg_i + 1];
+        if ( backend_name == "direct" )
+        {
+            options.backend = transpose_backend::direct;
+        }
+        else if ( backend_name == "memcpy" )
+        {
+            options.backend = transpose_backend::memcpy;
+        }
+        else
+        {
+            throw std::logic_error( "Unknown transpose backend: " + backend_name );
+        }
+
+        arg_i += 2;
+    }
+
+    if ( arg_i == argc )
+    {
+        options.grids = {
             { 8, 8, 8, 8 },
             { 16, 16, 16, 16 },
             { 32, 32, 32, 32 },
         };
+        return options;
     }
 
-    if ( ( ( argc - 1 ) % 4 ) != 0 )
+    if ( ( ( argc - arg_i ) % 4 ) != 0 )
     {
-        throw std::logic_error( "USAGE: test_4D_poisson.bin Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]" );
+        throw std::logic_error(
+            "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
+        );
     }
 
-    std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> grids;
-    grids.reserve( ( argc - 1 ) / 4 );
-    for ( int arg_i = 1; arg_i < argc; arg_i += 4 )
+    options.grids.reserve( ( argc - arg_i ) / 4 );
+    for ( ; arg_i < argc; arg_i += 4 )
     {
-        grids.emplace_back(
+        options.grids.emplace_back(
             static_cast<std::size_t>( std::stoul( argv[arg_i] ) ),
             static_cast<std::size_t>( std::stoul( argv[arg_i + 1] ) ),
             static_cast<std::size_t>( std::stoul( argv[arg_i + 2] ) ),
             static_cast<std::size_t>( std::stoul( argv[arg_i + 3] ) )
         );
     }
-    return grids;
+
+    return options;
+}
+
+template <class T, class Transposer>
+std::vector<std::pair<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>, results_4d_t<T>>> run_cases_4d(
+    const std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> &grids,
+    scfd::utils::log_std                                                               &log
+)
+{
+    using grid_t = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
+    using run_t  = std::pair<grid_t, results_4d_t<T>>;
+
+    std::vector<run_t> runs;
+    runs.reserve( grids.size() );
+
+    for ( const auto &grid : grids )
+    {
+        const auto nx = std::get<0>( grid );
+        const auto ny = std::get<1>( grid );
+        const auto nz = std::get<2>( grid );
+        const auto nw = std::get<3>( grid );
+
+        poisson_4d_fft_case<T, Transposer> poisson_case( nx, ny, nz, nw );
+        const T                            rhs_mean = poisson_case.rhs_mean();
+
+        if ( std::abs( rhs_mean ) > T( 1.0e-12 ) )
+        {
+            log.warning_f(
+                "rhs_mean = %.8e for Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the zero Fourier mode,"
+                " so the manufactured rhs should have zero mean.",
+                rhs_mean,
+                nx,
+                ny,
+                nz,
+                nw
+            );
+        }
+
+        runs.push_back( { grid, poisson_case.run() } );
+    }
+
+    return runs;
 }
 
 int main( int argc, char *argv[] )
@@ -660,38 +765,23 @@ int main( int argc, char *argv[] )
         using T      = double;
         using grid_t = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
         using run_t  = std::pair<grid_t, results_4d_t<T>>;
+        using direct_transposer_t = fftm::tests::detail::direct_transpose_4d;
+        using memcpy_transposer_t = fftm::tests::detail::cuda_memcpy_4d_slab_transposer<
+            typename fftm::wrap::cufft_wrap_many<T>::complex>;
 
         scfd::utils::init_cuda_persistent( log, 0 );
 
-        const auto grids = parse_grids_4d( argc, argv );
+        const auto options = parse_options_4d( argc, argv );
+        log.info_f( "transpose_backend = %s", transpose_backend_name( options.backend ) );
 
         std::vector<run_t> runs;
-        runs.reserve( grids.size() );
-
-        for ( const auto &grid : grids )
+        if ( options.backend == transpose_backend::direct )
         {
-            const auto nx = std::get<0>( grid );
-            const auto ny = std::get<1>( grid );
-            const auto nz = std::get<2>( grid );
-            const auto nw = std::get<3>( grid );
-
-            poisson_4d_fft_case<T> poisson_case( nx, ny, nz, nw );
-            const T                rhs_mean = poisson_case.rhs_mean();
-
-            if ( std::abs( rhs_mean ) > T( 1.0e-12 ) )
-            {
-                log.warning_f(
-                    "rhs_mean = %.8e for Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the zero Fourier mode,"
-                    " so the manufactured rhs should have zero mean.",
-                    rhs_mean,
-                    nx,
-                    ny,
-                    nz,
-                    nw
-                );
-            }
-
-            runs.push_back( { grid, poisson_case.run() } );
+            runs = run_cases_4d<T, direct_transposer_t>( options.grids, log );
+        }
+        else
+        {
+            runs = run_cases_4d<T, memcpy_transposer_t>( options.grids, log );
         }
 
         for ( const auto &run : runs )

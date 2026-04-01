@@ -26,38 +26,38 @@ public:
     {
     }
 
-    template <class SrcArray, class DstArray>
-    void xyzw_to_xywz( const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    template <class ForEach, class SrcArray, class DstArray>
+    void xyzw_to_xywz( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
         copy_step_x_slabs( src, dst, stream );
     }
 
-    template <class SrcArray, class DstArray>
-    void xywz_to_xyzw( const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    template <class ForEach, class SrcArray, class DstArray>
+    void xywz_to_xyzw( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
         copy_step_x_slabs( src, dst, stream );
     }
 
-    template <class SrcArray, class DstArray>
-    void xywz_to_xzwy( const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    template <class ForEach, class SrcArray, class DstArray>
+    void xywz_to_xzwy( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
         copy_step_w_slabs( src, dst, stream );
     }
 
-    template <class SrcArray, class DstArray>
-    void xzwy_to_xywz( const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    template <class ForEach, class SrcArray, class DstArray>
+    void xzwy_to_xywz( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
         copy_step_w_slabs( src, dst, stream );
     }
 
-    template <class SrcArray, class DstArray>
-    void xzwy_to_yzwx( const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    template <class ForEach, class SrcArray, class DstArray>
+    void xzwy_to_yzwx( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
         copy_step_z_slabs( src, dst, stream );
     }
 
-    template <class SrcArray, class DstArray>
-    void yzwx_to_xzwy( const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    template <class ForEach, class SrcArray, class DstArray>
+    void yzwx_to_xzwy( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
         copy_step_z_slabs( src, dst, stream );
     }
