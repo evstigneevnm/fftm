@@ -174,16 +174,32 @@ public:
             // Physical coordinates on [0, 2*pi)^2.
             const T x = hx * static_cast<T>( idx[0] );
             const T y = hy * static_cast<T>( idx[1] );
+            const T pi = scfd::utils::scalar_traits<T>::pi();
+
+            const T dx = x - pi;
+            const T dy = y - pi;
+            const T exponent = -( dx * dx + dy * dy );
+
+            T gaussian;
+#ifndef __CUDA_ARCH__
+            gaussian = std::exp( exponent );
+#else
+            gaussian = ::exp( exponent );
+#endif
 
             const T sin_x = scfd::utils::scalar_traits<T>::sin( x );
             const T cos_x = scfd::utils::scalar_traits<T>::cos( x );
             const T sin_y = scfd::utils::scalar_traits<T>::sin( y );
             const T cos_y = scfd::utils::scalar_traits<T>::cos( y );
 
-            exact_solution( idx ) = sin_x * cos_y;
-            rhs( idx )            = -T( 2 ) * sin_x * cos_y;
-            exact_dx( idx )       = cos_x * cos_y;
-            exact_dy( idx )       = -sin_x * sin_y;
+            exact_solution( idx ) = T( 100 ) * gaussian * sin_x * sin_y;
+            exact_dx( idx )       = T( 100 ) * gaussian * ( cos_x - T( 2 ) * dx * sin_x ) * sin_y;
+            exact_dy( idx )       = T( 100 ) * gaussian * sin_x * ( cos_y - T( 2 ) * dy * sin_y );
+
+            rhs( idx ) = T( 100 ) * gaussian *
+                         ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy - T( 6 ) ) * sin_x * sin_y -
+                           T( 4 ) * dx * cos_x * sin_y -
+                           T( 4 ) * dy * sin_x * cos_y );
         }
     };
 
