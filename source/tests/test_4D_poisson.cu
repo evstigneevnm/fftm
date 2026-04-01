@@ -19,7 +19,7 @@
 
 #include <external_wrap/cufft_wrap_many.h>
 
-#include "detail/cuda_memcpy_4d_slab_transposer.h"
+#include "detail/direct_transpose_4d.h"
 #include "detail/poisson_fft_test_common.h"
 
 template <class T>
@@ -441,13 +441,13 @@ private:
     void forward_to_spectral()
     {
         fft_.template exec<real_array_t, xyzw_complex_array_t>( "forward_w", rhs_, xyzw_stage_ );
-        transposer_.xyzw_to_xywz( xyzw_stage_, xywz_stage_ );
+        transposer_.xyzw_to_xywz( for_each_, xyzw_stage_, xywz_stage_ );
 
         fft_.template exec<xywz_complex_array_t, xywz_complex_array_t>( "forward_z", xywz_stage_, xywz_stage_ );
-        transposer_.xywz_to_xzwy( xywz_stage_, xzwy_stage_ );
+        transposer_.xywz_to_xzwy( for_each_, xywz_stage_, xzwy_stage_ );
 
         fft_.template exec<xzwy_complex_array_t, xzwy_complex_array_t>( "forward_y", xzwy_stage_, xzwy_stage_ );
-        transposer_.xzwy_to_yzwx( xzwy_stage_, solution_hat_ );
+        transposer_.xzwy_to_yzwx( for_each_, xzwy_stage_, solution_hat_ );
 
         fft_.template exec<yzwx_complex_array_t, yzwx_complex_array_t>( "forward_x", solution_hat_, solution_hat_ );
     }
@@ -489,13 +489,13 @@ private:
         copy_spectral_field( field_hat, work_hat_ );
 
         fft_.template exec<yzwx_complex_array_t, yzwx_complex_array_t>( "inverse_x", work_hat_, work_hat_ );
-        transposer_.yzwx_to_xzwy( work_hat_, xzwy_stage_ );
+        transposer_.yzwx_to_xzwy( for_each_, work_hat_, xzwy_stage_ );
 
         fft_.template exec<xzwy_complex_array_t, xzwy_complex_array_t>( "inverse_y", xzwy_stage_, xzwy_stage_ );
-        transposer_.xzwy_to_xywz( xzwy_stage_, xywz_stage_ );
+        transposer_.xzwy_to_xywz( for_each_, xzwy_stage_, xywz_stage_ );
 
         fft_.template exec<xywz_complex_array_t, xywz_complex_array_t>( "inverse_z", xywz_stage_, xywz_stage_ );
-        transposer_.xywz_to_xyzw( xywz_stage_, xyzw_stage_ );
+        transposer_.xywz_to_xyzw( for_each_, xywz_stage_, xyzw_stage_ );
 
         fft_.template exec<xyzw_complex_array_t, real_array_t>( "inverse_w", xyzw_stage_, out_real );
         scale_real_field( out_real, normalization_factor() );
@@ -593,7 +593,7 @@ private:
     for_each_t for_each_;
     reduce_t   reduce_;
     base_fft_t fft_;
-    fftm::tests::detail::cuda_memcpy_4d_slab_transposer<complex_t> transposer_;
+    fftm::tests::detail::direct_transpose_4d transposer_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
