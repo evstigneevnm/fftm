@@ -23,18 +23,44 @@
 #include "detail/direct_transpose_4d.h"
 #include "detail/poisson_fft_test_common.h"
 
-template <class T, class Transposer>
+enum class transpose_backend
+{
+    direct,
+    memcpy
+};
+
+const char *transpose_backend_name( transpose_backend backend )
+{
+    switch ( backend )
+    {
+        case transpose_backend::direct:
+            return "direct";
+        case transpose_backend::memcpy:
+            return "memcpy";
+    }
+
+    return "unknown";
+}
+
+template <class T>
 class poisson_4d_fft_case
 {
 public:
     using results_t = std::pair<std::pair<T, T>, T>;
 
-    poisson_4d_fft_case( std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw )
+    poisson_4d_fft_case(
+        std::size_t       nx,
+        std::size_t       ny,
+        std::size_t       nz,
+        std::size_t       nw,
+        transpose_backend backend
+    )
         : nx_( nx )
         , ny_( ny )
         , nz_( nz )
         , nw_( nw )
         , nw_half_( nw / 2 + 1 )
+        , backend_( backend )
         , hx_( domain_length() / static_cast<T>( nx_ ) )
         , hy_( domain_length() / static_cast<T>( ny_ ) )
         , hz_( domain_length() / static_cast<T>( nz_ ) )
@@ -45,7 +71,8 @@ public:
               idx_t( 0, 0, 0, 0 ),
               idx_t( to_int( ny_ ), to_int( nz_ ), to_int( nw_half_ ), to_int( nx_ ) )
           )
-        , transposer_( nx_, ny_, nz_, nw_half_ )
+        , direct_transposer_( nx_, ny_, nz_, nw_half_ )
+        , memcpy_transposer_( nx_, ny_, nz_, nw_half_ )
     {
         if ( nx_ < 2 || ny_ < 2 || nz_ < 2 || nw_ < 2 )
         {
@@ -285,6 +312,84 @@ private:
         return T( 1 ) / static_cast<T>( nx_ * ny_ * nz_ * nw_ );
     }
 
+    template <class SrcArray, class DstArray>
+    void transpose_xyzw_to_xywz( const SrcArray &src, DstArray &dst )
+    {
+        if ( backend_ == transpose_backend::direct )
+        {
+            direct_transposer_.xyzw_to_xywz( for_each_, src, dst );
+        }
+        else
+        {
+            memcpy_transposer_.xyzw_to_xywz( for_each_, src, dst );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_xywz_to_xzwy( const SrcArray &src, DstArray &dst )
+    {
+        if ( backend_ == transpose_backend::direct )
+        {
+            direct_transposer_.xywz_to_xzwy( for_each_, src, dst );
+        }
+        else
+        {
+            memcpy_transposer_.xywz_to_xzwy( for_each_, src, dst );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_xzwy_to_yzwx( const SrcArray &src, DstArray &dst )
+    {
+        if ( backend_ == transpose_backend::direct )
+        {
+            direct_transposer_.xzwy_to_yzwx( for_each_, src, dst );
+        }
+        else
+        {
+            memcpy_transposer_.xzwy_to_yzwx( for_each_, src, dst );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_yzwx_to_xzwy( const SrcArray &src, DstArray &dst )
+    {
+        if ( backend_ == transpose_backend::direct )
+        {
+            direct_transposer_.yzwx_to_xzwy( for_each_, src, dst );
+        }
+        else
+        {
+            memcpy_transposer_.yzwx_to_xzwy( for_each_, src, dst );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_xzwy_to_xywz( const SrcArray &src, DstArray &dst )
+    {
+        if ( backend_ == transpose_backend::direct )
+        {
+            direct_transposer_.xzwy_to_xywz( for_each_, src, dst );
+        }
+        else
+        {
+            memcpy_transposer_.xzwy_to_xywz( for_each_, src, dst );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_xywz_to_xyzw( const SrcArray &src, DstArray &dst )
+    {
+        if ( backend_ == transpose_backend::direct )
+        {
+            direct_transposer_.xywz_to_xyzw( for_each_, src, dst );
+        }
+        else
+        {
+            memcpy_transposer_.xywz_to_xyzw( for_each_, src, dst );
+        }
+    }
+
     void allocate_arrays()
     {
         rhs_.init( nx_, ny_, nz_, nw_ );
@@ -442,13 +547,13 @@ private:
     void forward_to_spectral()
     {
         fft_.template exec<real_array_t, xyzw_complex_array_t>( "forward_w", rhs_, xyzw_stage_ );
-        transposer_.xyzw_to_xywz( for_each_, xyzw_stage_, xywz_stage_ );
+        transpose_xyzw_to_xywz( xyzw_stage_, xywz_stage_ );
 
         fft_.template exec<xywz_complex_array_t, xywz_complex_array_t>( "forward_z", xywz_stage_, xywz_stage_ );
-        transposer_.xywz_to_xzwy( for_each_, xywz_stage_, xzwy_stage_ );
+        transpose_xywz_to_xzwy( xywz_stage_, xzwy_stage_ );
 
         fft_.template exec<xzwy_complex_array_t, xzwy_complex_array_t>( "forward_y", xzwy_stage_, xzwy_stage_ );
-        transposer_.xzwy_to_yzwx( for_each_, xzwy_stage_, solution_hat_ );
+        transpose_xzwy_to_yzwx( xzwy_stage_, solution_hat_ );
 
         fft_.template exec<yzwx_complex_array_t, yzwx_complex_array_t>( "forward_x", solution_hat_, solution_hat_ );
     }
@@ -490,13 +595,13 @@ private:
         copy_spectral_field( field_hat, work_hat_ );
 
         fft_.template exec<yzwx_complex_array_t, yzwx_complex_array_t>( "inverse_x", work_hat_, work_hat_ );
-        transposer_.yzwx_to_xzwy( for_each_, work_hat_, xzwy_stage_ );
+        transpose_yzwx_to_xzwy( work_hat_, xzwy_stage_ );
 
         fft_.template exec<xzwy_complex_array_t, xzwy_complex_array_t>( "inverse_y", xzwy_stage_, xzwy_stage_ );
-        transposer_.xzwy_to_xywz( for_each_, xzwy_stage_, xywz_stage_ );
+        transpose_xzwy_to_xywz( xzwy_stage_, xywz_stage_ );
 
         fft_.template exec<xywz_complex_array_t, xywz_complex_array_t>( "inverse_z", xywz_stage_, xywz_stage_ );
-        transposer_.xywz_to_xyzw( for_each_, xywz_stage_, xyzw_stage_ );
+        transpose_xywz_to_xyzw( xywz_stage_, xyzw_stage_ );
 
         fft_.template exec<xyzw_complex_array_t, real_array_t>( "inverse_w", xyzw_stage_, out_real );
         scale_real_field( out_real, normalization_factor() );
@@ -581,6 +686,7 @@ private:
     std::size_t nz_;
     std::size_t nw_;
     std::size_t nw_half_;
+    transpose_backend backend_;
 
     T hx_;
     T hy_;
@@ -594,7 +700,8 @@ private:
     for_each_t for_each_;
     reduce_t   reduce_;
     base_fft_t fft_;
-    Transposer transposer_;
+    fftm::tests::detail::direct_transpose_4d              direct_transposer_;
+    fftm::tests::detail::cuda_memcpy_4d_slab_transposer<complex_t> memcpy_transposer_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
@@ -621,25 +728,6 @@ private:
 
 template <class T>
 using results_4d_t = std::pair<std::pair<T, T>, T>;
-
-enum class transpose_backend
-{
-    direct,
-    memcpy
-};
-
-const char *transpose_backend_name( transpose_backend backend )
-{
-    switch ( backend )
-    {
-        case transpose_backend::direct:
-            return "direct";
-        case transpose_backend::memcpy:
-            return "memcpy";
-    }
-
-    return "unknown";
-}
 
 struct test_options_4d
 {
@@ -715,9 +803,10 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     return options;
 }
 
-template <class T, class Transposer>
+template <class T>
 std::vector<std::pair<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>, results_4d_t<T>>> run_cases_4d(
     const std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> &grids,
+    transpose_backend                                                                    backend,
     scfd::utils::log_std                                                               &log
 )
 {
@@ -734,8 +823,8 @@ std::vector<std::pair<std::tuple<std::size_t, std::size_t, std::size_t, std::siz
         const auto nz = std::get<2>( grid );
         const auto nw = std::get<3>( grid );
 
-        poisson_4d_fft_case<T, Transposer> poisson_case( nx, ny, nz, nw );
-        const T                            rhs_mean = poisson_case.rhs_mean();
+        poisson_4d_fft_case<T> poisson_case( nx, ny, nz, nw, backend );
+        const T                rhs_mean = poisson_case.rhs_mean();
 
         if ( std::abs( rhs_mean ) > T( 1.0e-12 ) )
         {
@@ -765,24 +854,13 @@ int main( int argc, char *argv[] )
         using T      = double;
         using grid_t = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
         using run_t  = std::pair<grid_t, results_4d_t<T>>;
-        using direct_transposer_t = fftm::tests::detail::direct_transpose_4d;
-        using memcpy_transposer_t = fftm::tests::detail::cuda_memcpy_4d_slab_transposer<
-            typename fftm::wrap::cufft_wrap_many<T>::complex>;
 
         scfd::utils::init_cuda_persistent( log, 0 );
 
         const auto options = parse_options_4d( argc, argv );
         log.info_f( "transpose_backend = %s", transpose_backend_name( options.backend ) );
 
-        std::vector<run_t> runs;
-        if ( options.backend == transpose_backend::direct )
-        {
-            runs = run_cases_4d<T, direct_transposer_t>( options.grids, log );
-        }
-        else
-        {
-            runs = run_cases_4d<T, memcpy_transposer_t>( options.grids, log );
-        }
+        std::vector<run_t> runs = run_cases_4d<T>( options.grids, options.backend, log );
 
         for ( const auto &run : runs )
         {
