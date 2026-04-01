@@ -13,6 +13,7 @@ lib_mpi=$(mpi_dir)/lib
 OMP=-fopenmp -lpthread
 CUDA_ARCH=-gencode arch=compute_52,code=sm_52 -gencode arch=compute_61,code=sm_61 #-gencode arch=compute_35,code=sm_35 
 NVCCFLAGS = -Wno-deprecated-gpu-targets $(CUDA_ARCH) -std=$(CPPSTD) $(TARGET_NVCC) --expt-relaxed-constexpr
+NVCCFLAGS_NO_DEVICE_DEBUG = $(filter-out -G,$(NVCCFLAGS))
 
 
 
@@ -37,7 +38,7 @@ test_3D_poisson.bin: test_3D_poisson.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_3D_poisson.cu -L$(lib_cuda) -lcudart -lcufft -o test_3D_poisson.bin
 
 test_4D_poisson.bin: test_4D_poisson.cu
-	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_4D_poisson.cu -L$(lib_cuda) -lcudart -lcufft -o test_4D_poisson.bin
+	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(contrib) test_4D_poisson.cu -L$(lib_cuda) -lcudart -lcufft -o test_4D_poisson.bin
 
 test_fft_3D.bin: test_fft_3D.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_fft_3D.cu -L$(lib_cuda) -lcudart -lcufft -o test_fft_3D.bin

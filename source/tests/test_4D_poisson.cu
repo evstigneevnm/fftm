@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -732,6 +733,7 @@ using results_4d_t = std::pair<std::pair<T, T>, T>;
 struct test_options_4d
 {
     transpose_backend backend = transpose_backend::direct;
+    bool debug_transpose = false;
     std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> grids;
 };
 
@@ -743,6 +745,13 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     while ( arg_i < argc )
     {
         const std::string arg = argv[arg_i];
+        if ( arg == "--debug-transpose" )
+        {
+            options.debug_transpose = true;
+            ++arg_i;
+            continue;
+        }
+
         if ( arg != "--transpose" )
         {
             break;
@@ -751,7 +760,7 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
         if ( arg_i + 1 >= argc )
         {
             throw std::logic_error(
-                "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
+                "USAGE: test_4D_poisson.bin [--debug-transpose] [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
             );
         }
 
@@ -785,7 +794,7 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     if ( ( ( argc - arg_i ) % 4 ) != 0 )
     {
         throw std::logic_error(
-            "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
+            "USAGE: test_4D_poisson.bin [--debug-transpose] [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
         );
     }
 
@@ -801,6 +810,287 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     }
 
     return options;
+}
+
+template <class T>
+struct transpose_debug_4d_types
+{
+    static constexpr int dim = 4;
+
+    using backend_t  = scfd::backend::cuda;
+    using memory_t   = typename backend_t::memory_type;
+    using for_each_t = typename backend_t::template for_each_nd_type<dim, int>;
+    using complex_t  = typename fftm::wrap::cufft_wrap_many<T>::complex;
+
+    using xyzw_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
+    using xywz_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3012_t>;
+    using xzwy_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_1023_t>;
+    using yzwx_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3120_t>;
+};
+
+template <class Array>
+void fill_unique_values_xyzw(
+    Array       &array,
+    std::size_t  nx,
+    std::size_t  ny,
+    std::size_t  nz,
+    std::size_t  nw_half
+)
+{
+    using value_t = typename Array::value_type;
+    using view_t  = typename Array::view_type;
+
+    view_t view( array );
+
+    for ( std::size_t x = 0; x < nx; ++x )
+    {
+        for ( std::size_t y = 0; y < ny; ++y )
+        {
+            for ( std::size_t z = 0; z < nz; ++z )
+            {
+                for ( std::size_t w = 0; w < nw_half; ++w )
+                {
+                    const double real_part =
+                        static_cast<double>( 1 + x + nx * ( y + ny * ( z + nz * w ) ) );
+                    const double imag_part = -static_cast<double>( 1 + w + nw_half * ( z + nz * ( y + ny * x ) ) );
+                    view( x, y, z, w ) = value_t{ real_part, imag_part };
+                }
+            }
+        }
+    }
+
+    view.release( true );
+}
+
+template <class ArrayLhs, class ArrayRhs>
+std::size_t count_mismatches_4d(
+    const ArrayLhs &lhs,
+    const ArrayRhs &rhs,
+    std::size_t    &first_i,
+    std::size_t    &first_j,
+    std::size_t    &first_k,
+    std::size_t    &first_l,
+    double         &lhs_real,
+    double         &lhs_imag,
+    double         &rhs_real,
+    double         &rhs_imag
+)
+{
+    using lhs_view_t = typename ArrayLhs::view_type;
+    using rhs_view_t = typename ArrayRhs::view_type;
+
+    lhs_view_t lhs_view( lhs );
+    rhs_view_t rhs_view( rhs );
+
+    const auto sz = lhs.size_nd();
+
+    std::size_t mismatches = 0;
+    first_i = first_j = first_k = first_l = 0;
+    lhs_real = lhs_imag = rhs_real = rhs_imag = 0.0;
+
+    for ( std::size_t i = 0; i < static_cast<std::size_t>( sz[0] ); ++i )
+    {
+        for ( std::size_t j = 0; j < static_cast<std::size_t>( sz[1] ); ++j )
+        {
+            for ( std::size_t k = 0; k < static_cast<std::size_t>( sz[2] ); ++k )
+            {
+                for ( std::size_t l = 0; l < static_cast<std::size_t>( sz[3] ); ++l )
+                {
+                    const auto lhs_value = lhs_view( i, j, k, l );
+                    const auto rhs_value = rhs_view( i, j, k, l );
+
+                    if ( ( lhs_value.x != rhs_value.x ) || ( lhs_value.y != rhs_value.y ) )
+                    {
+                        if ( mismatches == 0 )
+                        {
+                            first_i  = i;
+                            first_j  = j;
+                            first_k  = k;
+                            first_l  = l;
+                            lhs_real = lhs_value.x;
+                            lhs_imag = lhs_value.y;
+                            rhs_real = rhs_value.x;
+                            rhs_imag = rhs_value.y;
+                        }
+                        ++mismatches;
+                    }
+                }
+            }
+        }
+    }
+
+    lhs_view.release( false );
+    rhs_view.release( false );
+
+    return mismatches;
+}
+
+template <class ArrayActual, class ArrayReference>
+void verify_debug_step_4d(
+    scfd::utils::log_std &log,
+    const std::string    &label,
+    const ArrayActual    &actual,
+    const ArrayReference &reference
+)
+{
+    std::size_t first_i;
+    std::size_t first_j;
+    std::size_t first_k;
+    std::size_t first_l;
+    double      lhs_real;
+    double      lhs_imag;
+    double      rhs_real;
+    double      rhs_imag;
+
+    const std::size_t mismatches = count_mismatches_4d(
+        actual,
+        reference,
+        first_i,
+        first_j,
+        first_k,
+        first_l,
+        lhs_real,
+        lhs_imag,
+        rhs_real,
+        rhs_imag
+    );
+
+    if ( mismatches == 0 )
+    {
+        log.info_f( "%s: exact match", label.c_str() );
+        return;
+    }
+
+    log.error_f(
+        "%s: mismatches=%zu, first=(%zu,%zu,%zu,%zu), actual=(%.17e, %.17e), reference=(%.17e, %.17e)",
+        label.c_str(),
+        mismatches,
+        first_i,
+        first_j,
+        first_k,
+        first_l,
+        lhs_real,
+        lhs_imag,
+        rhs_real,
+        rhs_imag
+    );
+    throw std::runtime_error( label + " failed" );
+}
+
+template <class T>
+void debug_transpose_chain_4d(
+    std::size_t        nx,
+    std::size_t        ny,
+    std::size_t        nz,
+    std::size_t        nw,
+    transpose_backend  backend,
+    scfd::utils::log_std &log
+)
+{
+    using types_t             = transpose_debug_4d_types<T>;
+    using xyzw_array_t        = typename types_t::xyzw_array_t;
+    using xywz_array_t        = typename types_t::xywz_array_t;
+    using xzwy_array_t        = typename types_t::xzwy_array_t;
+    using yzwx_array_t        = typename types_t::yzwx_array_t;
+    using memcpy_transposer_t = fftm::tests::detail::cuda_memcpy_4d_slab_transposer<typename types_t::complex_t>;
+    using direct_transposer_t = fftm::tests::detail::direct_transpose_4d;
+
+    const std::size_t nw_half = nw / 2 + 1;
+
+    typename types_t::for_each_t for_each;
+    for_each.block_size = 128;
+
+    direct_transposer_t direct_transposer( nx, ny, nz, nw_half );
+    memcpy_transposer_t memcpy_transposer( nx, ny, nz, nw_half );
+
+    xyzw_array_t xyzw_initial;
+    xyzw_array_t xyzw_actual_back;
+    xyzw_array_t xyzw_reference_back;
+    xywz_array_t xywz_actual;
+    xywz_array_t xywz_reference;
+    xzwy_array_t xzwy_actual;
+    xzwy_array_t xzwy_reference;
+    yzwx_array_t yzwx_actual;
+    yzwx_array_t yzwx_reference;
+
+    xyzw_initial.init( nx, ny, nz, nw_half );
+    xyzw_actual_back.init( nx, ny, nz, nw_half );
+    xyzw_reference_back.init( nx, ny, nz, nw_half );
+    xywz_actual.init( nx, ny, nw_half, nz );
+    xywz_reference.init( nx, ny, nw_half, nz );
+    xzwy_actual.init( nx, nz, nw_half, ny );
+    xzwy_reference.init( nx, nz, nw_half, ny );
+    yzwx_actual.init( ny, nz, nw_half, nx );
+    yzwx_reference.init( ny, nz, nw_half, nx );
+
+    fill_unique_values_xyzw( xyzw_initial, nx, ny, nz, nw_half );
+
+    direct_transposer.xyzw_to_xywz( for_each, xyzw_initial, xywz_reference );
+    if ( backend == transpose_backend::direct )
+    {
+        direct_transposer.xyzw_to_xywz( for_each, xyzw_initial, xywz_actual );
+    }
+    else
+    {
+        memcpy_transposer.xyzw_to_xywz( for_each, xyzw_initial, xywz_actual );
+    }
+    verify_debug_step_4d( log, "transpose step 1: xyzw -> xywz", xywz_actual, xywz_reference );
+
+    direct_transposer.xywz_to_xzwy( for_each, xywz_reference, xzwy_reference );
+    if ( backend == transpose_backend::direct )
+    {
+        direct_transposer.xywz_to_xzwy( for_each, xywz_actual, xzwy_actual );
+    }
+    else
+    {
+        memcpy_transposer.xywz_to_xzwy( for_each, xywz_actual, xzwy_actual );
+    }
+    verify_debug_step_4d( log, "transpose step 2: xywz -> xzwy", xzwy_actual, xzwy_reference );
+
+    direct_transposer.xzwy_to_yzwx( for_each, xzwy_reference, yzwx_reference );
+    if ( backend == transpose_backend::direct )
+    {
+        direct_transposer.xzwy_to_yzwx( for_each, xzwy_actual, yzwx_actual );
+    }
+    else
+    {
+        memcpy_transposer.xzwy_to_yzwx( for_each, xzwy_actual, yzwx_actual );
+    }
+    verify_debug_step_4d( log, "transpose step 3: xzwy -> yzwx", yzwx_actual, yzwx_reference );
+
+    direct_transposer.yzwx_to_xzwy( for_each, yzwx_reference, xzwy_reference );
+    if ( backend == transpose_backend::direct )
+    {
+        direct_transposer.yzwx_to_xzwy( for_each, yzwx_actual, xzwy_actual );
+    }
+    else
+    {
+        memcpy_transposer.yzwx_to_xzwy( for_each, yzwx_actual, xzwy_actual );
+    }
+    verify_debug_step_4d( log, "transpose step 4: yzwx -> xzwy", xzwy_actual, xzwy_reference );
+
+    direct_transposer.xzwy_to_xywz( for_each, xzwy_reference, xywz_reference );
+    if ( backend == transpose_backend::direct )
+    {
+        direct_transposer.xzwy_to_xywz( for_each, xzwy_actual, xywz_actual );
+    }
+    else
+    {
+        memcpy_transposer.xzwy_to_xywz( for_each, xzwy_actual, xywz_actual );
+    }
+    verify_debug_step_4d( log, "transpose step 5: xzwy -> xywz", xywz_actual, xywz_reference );
+
+    direct_transposer.xywz_to_xyzw( for_each, xywz_reference, xyzw_reference_back );
+    if ( backend == transpose_backend::direct )
+    {
+        direct_transposer.xywz_to_xyzw( for_each, xywz_actual, xyzw_actual_back );
+    }
+    else
+    {
+        memcpy_transposer.xywz_to_xyzw( for_each, xywz_actual, xyzw_actual_back );
+    }
+    verify_debug_step_4d( log, "transpose step 6: xywz -> xyzw", xyzw_actual_back, xyzw_reference_back );
+    verify_debug_step_4d( log, "transpose round-trip", xyzw_actual_back, xyzw_initial );
 }
 
 template <class T>
@@ -859,6 +1149,26 @@ int main( int argc, char *argv[] )
 
         const auto options = parse_options_4d( argc, argv );
         log.info_f( "transpose_backend = %s", transpose_backend_name( options.backend ) );
+
+        if ( options.debug_transpose )
+        {
+            const auto &grid = options.grids.front();
+            log.info_f(
+                "debug_transpose grid = (%zu, %zu, %zu, %zu)",
+                std::get<0>( grid ),
+                std::get<1>( grid ),
+                std::get<2>( grid ),
+                std::get<3>( grid )
+            );
+            debug_transpose_chain_4d<T>(
+                std::get<0>( grid ),
+                std::get<1>( grid ),
+                std::get<2>( grid ),
+                std::get<3>( grid ),
+                options.backend,
+                log
+            );
+        }
 
         std::vector<run_t> runs = run_cases_4d<T>( options.grids, options.backend, log );
 
