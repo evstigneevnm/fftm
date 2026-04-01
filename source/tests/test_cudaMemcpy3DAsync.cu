@@ -1,455 +1,386 @@
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <limits>
-#include <vector>
+#include <stdexcept>
+#include <string>
 
-#include <cuda.h>
 #include <thrust/complex.h>
-#include <scfd/arrays/array_nd.h>
+
 #include <scfd/backend/cuda.h>
-#include <scfd/utils/cuda_safe_call.h>
-#include <scfd/utils/safe_call.h>
-#include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda.h>
 #include <scfd/for_each/cuda_nd.h>
 #include <scfd/for_each/cuda_nd_impl.cuh>
+#include <scfd/static_vec/rect.h>
+#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/cuda_timer_event.h>
-#include <scfd/utils/system_timer_event.h>
+#include <scfd/utils/init_cuda.h>
+#include <scfd/utils/safe_call.h>
 
-#include <contrib/scfd/test/arrays/custom_index_fast_arranger.h>
+#include "detail/cuda_memcpy_3d_transposer.h"
+#include "detail/manual_transpose_3d.h"
 
-//----
-
-namespace scfd
+template <class Idx, class ArrayLhs, class ArrayRhs, class ArrayRes>
+struct diff_functor
 {
-namespace arrays
-{
-
-template <scfd::arrays::ordinal_type... Dims>
-using custom_arranger_102_t = scfd::arrays::custom_index_fast_arranger<1, 0, 2>::type<Dims...>;
-
-template <scfd::arrays::ordinal_type... Dims>
-using custom_arranger_201_t = scfd::arrays::custom_index_fast_arranger<2, 0, 1>::type<Dims...>;
-
-}
-}
-
-
-namespace io
-{
-
-template<class T, class Array>
-void write_out_pos_file_scal_3D_point(const std::string& filename, const Array& U_in, std::size_t Nx_, std::size_t Ny_, std::size_t Nz_)
-{
-    using array_C_view_type = typename Array::view_type;
-
-    array_C_view_type U(U_in);
-
-    std::size_t Nx = Nx_, Ny = Ny_, Nz = Nz_;
-
-
-    FILE *stream = std::fopen( filename.c_str(), "w" );
-    if(stream == NULL)
+    diff_functor( const ArrayLhs &_lhs, const ArrayRhs &_rhs, ArrayRes &_res )
+        : lhs( _lhs )
+        , rhs( _rhs )
+        , res( _res )
     {
-        throw std::runtime_error("error creating file: " + filename);
-    }
-    fclose(stream);
-
-
-    stream=std::fopen(filename.c_str(), "a" );
-    if(stream == NULL)
-    {
-        throw std::runtime_error("error opening file: " + filename);
     }
 
-    fprintf( stream, "View");
-    fprintf( stream, " '");
-    fprintf( stream, "%s %i", filename.c_str(), 0);
-    fprintf( stream, "' {\n");
-    fprintf( stream, "TIME{0};\n");
-
-    for(int j=0;j<Nx;j++){
-        double xm = j;
-        double xp = j+1;
-        for(int k=0;k<Ny;k++){
-            double ym = k;
-            double yp = k+1;                
-            for(int l=0;l<Nz;l++){
-                double zm =l;
-                double zp = l+1;
-
-                    T par_x_mmm=0.0;
-                    T par_x_pmm=0.0;
-                    T par_x_ppm=0.0;
-                    T par_x_ppp=0.0;
-                    T par_x_mpp=0.0;
-                    T par_x_mmp=0.0;
-                    T par_x_pmp=0.0;
-                    T par_x_mpm=0.0;
-
-
-                    par_x_mmm=U(j,k,l).real();
-                    par_x_pmm=U(j,k,l).real();
-                    par_x_ppm=U(j,k,l).real();
-                    par_x_ppp=U(j,k,l).real();
-                    par_x_mpp=U(j,k,l).real();
-                    par_x_mmp=U(j,k,l).real();
-                    par_x_pmp=U(j,k,l).real();
-                    par_x_mpm=U(j,k,l).real();
-                                
-
-
-
-                    fprintf( stream, "SH(%le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le)",
-                    xm, ym, zm,  
-                    xp, ym, zm,  
-                    xp, yp, zm,  
-                    xm, yp, zm, 
-                    xm, ym, zp, 
-                    xp, ym, zp, 
-                    xp, yp, zp,
-                    xm, yp, zp);
-
-
-                    fprintf( stream,"{");
-                    fprintf(stream, "%le,",par_x_mmm);
-                    fprintf(stream, "%le,",par_x_pmm);
-                    fprintf(stream, "%le,",par_x_ppm);
-                    fprintf(stream, "%le,",par_x_mpm);
-                    fprintf(stream, "%le,",par_x_mmp);
-                    fprintf(stream, "%le,",par_x_pmp);
-                    fprintf(stream, "%le,",par_x_ppp);
-                    fprintf(stream, "%le",par_x_mpp);
-                    fprintf(stream, "};\n");
-
-                // }
-            }
-        }
-    }
-    fflush(stream);  //flush all to disk
-
-    fprintf( stream, "};");
-
-    fclose( stream );
-
-    std::cout << filename << " output done." << std::endl;
-
-
-}
-}
-
-//-----
-
-__global__ void copy3D_kernel(
-    char* dst_base, size_t dst_pitch, size_t dst_y_pitch,
-    const char* src_base, size_t src_pitch, size_t src_y_pitch,
-    size_t elem_size, size_t width, size_t height, size_t depth)
-{
-    size_t x = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t y = blockIdx.y * blockDim.y + threadIdx.y;
-    size_t z = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (x < width && y < height && z < depth) {
-        const char* src_slice = src_base + z * src_y_pitch + y * src_pitch;
-        char* dst_slice       = dst_base + z * dst_y_pitch + y * dst_pitch;
-
-        const char* src_elem = src_slice + x * elem_size;
-        char* dst_elem       = dst_slice + x * elem_size;
-
-        for (size_t i = 0; i < elem_size; ++i)
-            dst_elem[i] = src_elem[i];
-    }
-}
-
-
-
-inline void getPitchedPtrs(const cudaMemcpy3DParms& p,
-                           char*& dst_base, size_t& dst_pitch, size_t& dst_y_pitch,
-                           const char*& src_base, size_t& src_pitch, size_t& src_y_pitch)
-{
-    // destination
-    dst_base = (char*)p.dstPtr.ptr +
-               p.dstPos.z * p.dstPtr.pitch * p.dstPtr.ysize +
-               p.dstPos.y * p.dstPtr.pitch +
-               p.dstPos.x;
-
-    dst_pitch   = p.dstPtr.pitch;
-    dst_y_pitch = p.dstPtr.pitch * p.dstPtr.ysize;
-
-    // source
-    src_base = (const char*)p.srcPtr.ptr +
-               p.srcPos.z * p.srcPtr.pitch * p.srcPtr.ysize +
-               p.srcPos.y * p.srcPtr.pitch +
-               p.srcPos.x;
-
-    src_pitch   = p.srcPtr.pitch;
-    src_y_pitch = p.srcPtr.pitch * p.srcPtr.ysize;
-}
-
-
-template <class T>
-inline void launchMemcpy3DKernel(const cudaMemcpy3DParms& p, cudaStream_t stream)
-{
-    size_t elem_size = sizeof(T);  // could be generalized with a param
-
-    size_t width  = p.extent.width / elem_size;  
-    size_t height = p.extent.height;
-    size_t depth  = p.extent.depth;
-
-    std::cout << "width: " << width << ", height: " << height << ", depth: " << depth << std::endl;
-
-    char* dst_base; size_t dst_pitch, dst_y_pitch;
-    const char* src_base; size_t src_pitch, src_y_pitch;
-
-    getPitchedPtrs(p, dst_base, dst_pitch, dst_y_pitch,
-                      src_base, src_pitch, src_y_pitch);
-
-    dim3 block(16, 8, 8);
-    dim3 grid(
-        (width  + block.x - 1) / block.x,
-        (height + block.y - 1) / block.y,
-        (depth  + block.z - 1) / block.z
-    );
-
-    switch (p.kind) {
-        case cudaMemcpyDeviceToDevice:
-            copy3D_kernel<<<grid, block, 0, stream>>>(
-                dst_base, dst_pitch, dst_y_pitch,
-                src_base, src_pitch, src_y_pitch,
-                elem_size, width, height, depth);
-            break;
-
-        case cudaMemcpyDeviceToHost: {
-            // Allocate temp buffer on device
-            size_t buf_size = width * height * depth * elem_size;
-            char* tmp_dev;
-            CUDA_SAFE_CALL(cudaMalloc(&tmp_dev, buf_size));
-
-            // Pack device data into contiguous buffer
-            copy3D_kernel<<<grid, block, 0, stream>>>(
-                tmp_dev, width * elem_size, width * height * elem_size,
-                src_base, src_pitch, src_y_pitch,
-                elem_size, width, height, depth);
-
-            // Async copy to host
-            CUDA_SAFE_CALL(cudaMemcpyAsync(p.dstPtr.ptr, tmp_dev, buf_size, cudaMemcpyDeviceToHost, stream));
-            CUDA_SAFE_CALL(cudaStreamSynchronize(stream));
-            CUDA_SAFE_CALL(cudaFree(tmp_dev));
-            break;
-        }
-
-        case cudaMemcpyHostToDevice: {
-            // Allocate temp buffer on device
-            size_t buf_size = width * height * depth * elem_size;
-            char* tmp_dev;
-            CUDA_SAFE_CALL(cudaMalloc(&tmp_dev, buf_size));
-
-            // Async copy from host to staging buffer
-            CUDA_SAFE_CALL(cudaMemcpyAsync(tmp_dev, p.srcPtr.ptr, buf_size, cudaMemcpyHostToDevice, stream));
-
-            // Scatter into pitched destination
-            copy3D_kernel<<<grid, block, 0, stream>>>(
-                dst_base, dst_pitch, dst_y_pitch,
-                tmp_dev, width * elem_size, width * height * elem_size,
-                elem_size, width, height, depth);
-
-            CUDA_SAFE_CALL(cudaStreamSynchronize(stream));
-            CUDA_SAFE_CALL(cudaFree(tmp_dev));
-            break;
-        }
-
-        case cudaMemcpyHostToHost:
-            // Just CPU memcpy (blocking)
-            std::memcpy(p.dstPtr.ptr, p.srcPtr.ptr,
-                        width * height * depth * elem_size);
-            break;
-    }
-
-    CUDA_SAFE_CALL(cudaGetLastError());
-}
-
-
-template<class C>
-cudaMemcpy3DParms set_params(
-    std::size_t Nx,
-    std::size_t Ny,
-    std::size_t Nz,
-    C* send_ptr,
-    C* recv_ptr,
-    bool cuda_aware
-)
-{
-    cudaMemcpy3DParms cpy_params = {0};
-    cpy_params.dstPos = make_cudaPos(0, 0, 0);
-    cpy_params.dstPtr = make_cudaPitchedPtr(recv_ptr, Ny * sizeof(C), Ny, Nx);
-
-    cpy_params.srcPos = make_cudaPos(0, 0, 0);
-    cpy_params.srcPtr = make_cudaPitchedPtr(send_ptr, Ny * sizeof(C), Ny, Nx);
-
-    cpy_params.extent = make_cudaExtent(Ny * sizeof(C), Nx, Nz);
-
-    cpy_params.kind   = cuda_aware ? cudaMemcpyDeviceToDevice : cudaMemcpyDeviceToHost; 
-    return cpy_params;
-}
-
-
-template<class Idx, class ArrayLhs, class ArrayRhs, class ArrayRes>
-struct test_diff
-{
-    test_diff(const ArrayLhs& _f1, const ArrayRhs& _f2, ArrayRes& _res) : f1(_f1), f2(_f2), res(_res) {}
-    ArrayLhs f1;
-    ArrayRhs f2;
+    ArrayLhs lhs;
+    ArrayRhs rhs;
     ArrayRes res;
 
-    __DEVICE_TAG__ void operator()(const Idx& idx)
+    __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
-        res(idx) =  f1(idx) - f2(idx);
+        res( idx ) = lhs( idx ) - rhs( idx );
     }
-
 };
 
-
-template<class Idx, class ArrayIn, class ArrayOut, int axis0, int axis1, int axis2>
-struct manual_transpose
+template <class T, class Array>
+T abs_sum_norm( const Array &array )
 {
-    manual_transpose(const ArrayIn& _f1, ArrayOut& _res) : f1(_f1), res(_res) {}
-    ArrayIn  f1;
-    ArrayOut res;
+    using view_t = typename Array::view_type;
 
-    __DEVICE_TAG__ void operator()(const Idx& idx)
+    view_t view( array );
+
+    T norm = 0;
+    #pragma omp parallel for reduction(+:norm)
+    for ( std::size_t i = 0; i < static_cast<std::size_t>( array.total_size() ); ++i )
     {
-        auto i = idx[axis0];
-        auto j = idx[axis1];
-        auto k = idx[axis2];
-        res(i,j,k) =  f1(idx);
+        norm += thrust::abs( view.raw_ptr()[i] );
     }
 
-};
-
-template<class T, class Array>
-T get_norm(const Array& temp_array, std::size_t sz)
-{
-    using array_C_view_type = typename Array::view_type;
-    array_C_view_type temp_array_view(temp_array);
-
-    T norm = 0.0;
-    #pragma omp parallel for reduction (+: norm)
-    for(std::size_t j = 0; j<sz; j++)
-    {
-        norm += thrust::abs(temp_array_view.raw_ptr()[j]);
-    }
-
+    view.release( false );
     return norm;
 }
 
+template <class Idx, class Array>
+scfd::static_vec::rect<int, 3> make_range_for_array( const Array &array )
+{
+    const auto sz = array.size_nd();
+    return scfd::static_vec::rect<int, 3>(
+        Idx( 0, 0, 0 ),
+        Idx( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) )
+    );
+}
 
+template <class T, class Array>
+void fill_unique_values_xyz( Array &array, std::size_t nx, std::size_t ny, std::size_t nz )
+{
+    using complex_t = typename Array::value_type;
+    using view_t    = typename Array::view_type;
 
+    view_t view( array );
 
+    for ( std::size_t i = 0; i < nx; ++i )
+    {
+        for ( std::size_t j = 0; j < ny; ++j )
+        {
+            for ( std::size_t k = 0; k < nz; ++k )
+            {
+                const T value = static_cast<T>( 1 + i + nx * ( j + ny * k ) );
+                view( i, j, k ) = complex_t( value, 0 );
+            }
+        }
+    }
 
-int main(int argc, char const *argv[]) 
+    view.release( true );
+}
+
+template <fftm::tests::detail::permutation_3d Perm, class T, class Array>
+void write_pos_if_requested(
+    bool               write_pos_files,
+    const std::string &filename,
+    const Array       &array,
+    std::size_t        nx,
+    std::size_t        ny,
+    std::size_t        nz
+)
+{
+    if ( !write_pos_files )
+    {
+        return;
+    }
+
+    const auto dims = fftm::tests::detail::dims_for_permutation<Perm>( nx, ny, nz );
+    fftm::tests::detail::write_out_pos_file_scal_3D_point<T>( filename, array, dims[0], dims[1], dims[2] );
+}
+
+template <
+    class T,
+    class Idx,
+    fftm::tests::detail::permutation_3d SrcPerm,
+    fftm::tests::detail::permutation_3d DstPerm,
+    class ForEach,
+    class Transposer,
+    class SrcArray,
+    class DstArray,
+    class DiffArray>
+void execute_verified_step(
+    const std::string                  &label,
+    const ForEach                      &for_each,
+    const Transposer                   &cuda_transposer,
+    scfd::utils::cuda_timer_event      &timer_begin,
+    scfd::utils::cuda_timer_event      &timer_end,
+    const SrcArray                     &src_actual,
+    const SrcArray                     &src_reference,
+    DstArray                           &dst_actual,
+    DstArray                           &dst_reference,
+    DiffArray                          &diff_array
+)
+{
+    using manual_t = fftm::tests::detail::manual_transpose_3d<SrcPerm, DstPerm>;
+
+    manual_t manual_transposer( cuda_transposer.nx(), cuda_transposer.ny(), cuda_transposer.nz() );
+
+    timer_begin.record();
+    cuda_transposer.template transpose_async<SrcPerm, DstPerm>( src_actual, dst_actual );
+    CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+    timer_end.record();
+
+    manual_transposer.transpose( for_each, src_reference, dst_reference );
+
+    const auto diff_range = make_range_for_array<Idx>( dst_actual );
+    for_each( diff_functor<Idx, DstArray, DstArray, DiffArray>( dst_actual, dst_reference, diff_array ), diff_range );
+    for_each.wait();
+
+    const T reference_norm = abs_sum_norm<T>( dst_reference );
+    const T diff_norm      = abs_sum_norm<T>( diff_array );
+    const T tolerance      = 10 * std::numeric_limits<T>::epsilon() * ( reference_norm > T( 1 ) ? reference_norm : T( 1 ) );
+
+    std::cout << label << ": " << fftm::tests::detail::permutation_3d_traits<SrcPerm>::label() << " -> "
+              << fftm::tests::detail::permutation_3d_traits<DstPerm>::label() << ", diff=" << diff_norm
+              << ", wall_ms=" << timer_end.elapsed_time( timer_begin ) << std::endl;
+
+    if ( diff_norm > tolerance )
+    {
+        throw std::runtime_error( label + " failed: diff norm = " + std::to_string( diff_norm ) );
+    }
+}
+
+template <class T, class Idx, class ForEach, class Array, class DiffArray>
+void verify_arrays_equal(
+    const std::string &label,
+    const ForEach     &for_each,
+    const Array       &lhs,
+    const Array       &rhs,
+    DiffArray         &diff_array
+)
+{
+    const auto diff_range = make_range_for_array<Idx>( lhs );
+    for_each( diff_functor<Idx, Array, Array, DiffArray>( lhs, rhs, diff_array ), diff_range );
+    for_each.wait();
+
+    const T reference_norm = abs_sum_norm<T>( rhs );
+    const T diff_norm      = abs_sum_norm<T>( diff_array );
+    const T tolerance      = 10 * std::numeric_limits<T>::epsilon() * ( reference_norm > T( 1 ) ? reference_norm : T( 1 ) );
+
+    std::cout << label << ": diff=" << diff_norm << std::endl;
+
+    if ( diff_norm > tolerance )
+    {
+        throw std::runtime_error( label + " failed: diff norm = " + std::to_string( diff_norm ) );
+    }
+}
+
+int main( int argc, char const *argv[] )
 {
     static const int dim = 3;
-    using T = double;
-    using C = thrust::complex<T>;
-    using idx_t = scfd::static_vec::vec<int, dim>;
+
+    using T         = double;
+    using complex_t = thrust::complex<T>;
+    using idx_t     = scfd::static_vec::vec<int, dim>;
     using backend_t = scfd::backend::cuda;
+    using memory_t  = backend_t::memory_type;
     using for_each_t = backend_t::for_each_nd_type<dim>;
-    using send_array_t = scfd::arrays::tensor_array_nd<C, dim, backend_t::memory_type, scfd::arrays::custom_arranger_102_t>;
-    using transpose_array_t = scfd::arrays::tensor_array_nd<C, dim, backend_t::memory_type, scfd::arrays::custom_arranger_201_t>;
-    using send_array_view_t = send_array_t::view_type;
-    using timer_t = scfd::utils::cuda_timer_event;
-    
-    
-    std::size_t Nx =20, Ny=30, Nz=50;
-    bool cuda_aware = true;
+    using timer_t    = scfd::utils::cuda_timer_event;
+    using perm_t     = fftm::tests::detail::permutation_3d;
+
+    using xyz_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::xyz>;
+    using xzy_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::xzy>;
+    using zxy_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::zxy>;
+    using zyx_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::zyx>;
+    using yzx_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::yzx>;
+    using yxz_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::yxz>;
+
+    std::size_t nx = 20;
+    std::size_t ny = 30;
+    std::size_t nz = 50;
+    bool        write_pos_files = false;
+
+    int argi = 1;
+    if ( ( argi < argc ) && ( std::string( argv[argi] ) == "--write-pos" ) )
+    {
+        write_pos_files = true;
+        ++argi;
+    }
+
+    if ( argc - argi == 3 )
+    {
+        nx = static_cast<std::size_t>( std::strtoull( argv[argi], NULL, 10 ) );
+        ny = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
+        nz = static_cast<std::size_t>( std::strtoull( argv[argi + 2], NULL, 10 ) );
+    }
+    else if ( argc != argi )
+    {
+        throw std::logic_error( "USAGE: test_cudaMemcpy3DAsync.bin [--write-pos] [Nx Ny Nz]" );
+    }
 
     scfd::utils::init_cuda_persistent();
-    timer_t cuda3d_s, cuda3d_e, my_s, my_e;
-
-    send_array_t      send_array;
-    transpose_array_t temp_array;
-    transpose_array_t temp_array_check;
-    transpose_array_t diff_cuda_vs_kernel;
-    transpose_array_t diff_cuda_vs_manual;
-    transpose_array_t diff_kernel_vs_manual;
-    transpose_array_t temp_manual;
-
-    SCFD_SAFE_CALL(send_array.init(Nx,Ny,Nz));
-    SCFD_SAFE_CALL(temp_array.init(Nx,Nz,Ny));
-    SCFD_SAFE_CALL(temp_array_check.init(Nx,Nz,Ny));
-    SCFD_SAFE_CALL(diff_cuda_vs_kernel.init(Nx,Nz,Ny));
-    SCFD_SAFE_CALL(diff_cuda_vs_manual.init(Nx,Nz,Ny));
-    SCFD_SAFE_CALL(diff_kernel_vs_manual.init(Nx,Nz,Ny));
-    SCFD_SAFE_CALL( temp_manual.init(Nx,Nz,Ny) );
-
-
-    send_array_view_t send_array_view(send_array);
-    for(std::size_t j = 0; j<Nx; j++)
-    for(std::size_t k = 0; k<Ny; k++)
-    for(std::size_t l = 0; l<Nz; l++)
-    {
-        const T value = static_cast<T>(1 + j + Nx * (k + Ny * l));
-        send_array_view(j,k,l) = C(value,0);
-    }
-    send_array_view.release(true);
-
-    C* send_ptr = send_array.raw_ptr();
-    C* temp_ptr = temp_array.raw_ptr();
-    C* temp_ptr_check = temp_array_check.raw_ptr();
-
-    auto papars_1 = set_params<C>(Nx, Ny, Nz, send_ptr, temp_ptr_check, cuda_aware);
-    auto papars_2 = set_params<C>(Nx, Ny, Nz, send_ptr, temp_ptr, cuda_aware);
-
-
-
-    cuda3d_s.record();
-    CUDA_SAFE_CALL(cudaMemcpy3DAsync(&papars_1));
-    CUDA_SAFE_CALL(cudaDeviceSynchronize());
-    cuda3d_e.record();
-
-    my_s.record();
-    SCFD_SAFE_CALL(launchMemcpy3DKernel<C>(papars_2, nullptr));
-    CUDA_SAFE_CALL(cudaDeviceSynchronize());
-    my_e.record();
 
     for_each_t for_each;
-    scfd::static_vec::rect<int, dim> range_T(idx_t(0,0,0), idx_t(Nx, Nz, Ny));
-    scfd::static_vec::rect<int, dim> range(idx_t(0,0,0), idx_t(Nx, Ny, Nz));
-    for_each( manual_transpose<idx_t, send_array_t, transpose_array_t, 0, 2, 1>(send_array, temp_manual), range);
-    for_each.wait();
-    for_each(test_diff<idx_t, transpose_array_t, transpose_array_t, transpose_array_t>(temp_array, temp_array_check, diff_cuda_vs_kernel), range_T);
-    for_each.wait();
-    for_each(test_diff<idx_t, transpose_array_t, transpose_array_t, transpose_array_t>(temp_array_check, temp_manual, diff_cuda_vs_manual), range_T);
-    for_each.wait();
-    for_each(test_diff<idx_t, transpose_array_t, transpose_array_t, transpose_array_t>(temp_array, temp_manual, diff_kernel_vs_manual), range_T);
-    for_each.wait();
+    timer_t    timer_begin;
+    timer_t    timer_end;
 
-    const std::size_t total_size = Nx * Ny * Nz;
-    const T norm_reference = get_norm<T, decltype(temp_manual)>(temp_manual, total_size);
-    const T norm_cuda_vs_kernel = get_norm<T, decltype(diff_cuda_vs_kernel)>(diff_cuda_vs_kernel, total_size);
-    const T norm_cuda_vs_manual = get_norm<T, decltype(diff_cuda_vs_manual)>(diff_cuda_vs_manual, total_size);
-    const T norm_kernel_vs_manual = get_norm<T, decltype(diff_kernel_vs_manual)>(diff_kernel_vs_manual, total_size);
-    const T tol = 10 * std::numeric_limits<T>::epsilon() * norm_reference;
+    fftm::tests::detail::cuda_memcpy_3d_transposer<complex_t> cuda_transposer( nx, ny, nz );
 
-    std::cout << "reference norm: " << norm_reference
-              << " cuda-vs-kernel: " << norm_cuda_vs_kernel
-              << " cuda-vs-manual: " << norm_cuda_vs_manual
-              << " kernel-vs-manual: " << norm_kernel_vs_manual << std::endl;
-    
-    std::cout << "cudaMemcpy3DAsync: " << cuda3d_e.elapsed_time(cuda3d_s) << " launchMemcpy3DKernel: " << my_e.elapsed_time(my_s) << std::endl;
+    xyz_array_t xyz_initial;
+    xyz_array_t xyz_roundtrip_actual;
+    xyz_array_t xyz_roundtrip_reference;
+    xyz_array_t xyz_diff;
 
+    xzy_array_t xzy_actual;
+    xzy_array_t xzy_reference;
+    xzy_array_t xzy_diff;
 
-    io::write_out_pos_file_scal_3D_point<T>("send_array.pos", send_array, Nx, Ny, Nz);
-    io::write_out_pos_file_scal_3D_point<T>("temp_array.pos", temp_array, Nx, Nz, Ny);
-    io::write_out_pos_file_scal_3D_point<T>("temp_array_check.pos", temp_array_check, Nx, Nz, Ny);
-    io::write_out_pos_file_scal_3D_point<T>("temp_manual.pos", temp_manual, Nx, Nz, Ny);
+    zxy_array_t zxy_actual;
+    zxy_array_t zxy_reference;
+    zxy_array_t zxy_diff;
 
-    if ((norm_cuda_vs_manual > tol) || (norm_kernel_vs_manual > tol))
-    {
-        std::cerr << "transpose verification failed" << std::endl;
-        return EXIT_FAILURE;
-    }
+    zyx_array_t zyx_actual;
+    zyx_array_t zyx_reference;
+    zyx_array_t zyx_diff;
+
+    yzx_array_t yzx_actual;
+    yzx_array_t yzx_reference;
+    yzx_array_t yzx_diff;
+
+    yxz_array_t yxz_actual;
+    yxz_array_t yxz_reference;
+    yxz_array_t yxz_diff;
+
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::xyz>( xyz_initial, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::xyz>( xyz_roundtrip_actual, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::xyz>( xyz_roundtrip_reference, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::xyz>( xyz_diff, nx, ny, nz ) );
+
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::xzy>( xzy_actual, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::xzy>( xzy_reference, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::xzy>( xzy_diff, nx, ny, nz ) );
+
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::zxy>( zxy_actual, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::zxy>( zxy_reference, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::zxy>( zxy_diff, nx, ny, nz ) );
+
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::zyx>( zyx_actual, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::zyx>( zyx_reference, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::zyx>( zyx_diff, nx, ny, nz ) );
+
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::yzx>( yzx_actual, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::yzx>( yzx_reference, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::yzx>( yzx_diff, nx, ny, nz ) );
+
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::yxz>( yxz_actual, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::yxz>( yxz_reference, nx, ny, nz ) );
+    SCFD_SAFE_CALL( fftm::tests::detail::init_permuted_array<perm_t::yxz>( yxz_diff, nx, ny, nz ) );
+
+    fill_unique_values_xyz<T>( xyz_initial, nx, ny, nz );
+
+    execute_verified_step<T, idx_t, perm_t::xyz, perm_t::xzy>(
+        "Step 1",
+        for_each,
+        cuda_transposer,
+        timer_begin,
+        timer_end,
+        xyz_initial,
+        xyz_initial,
+        xzy_actual,
+        xzy_reference,
+        xzy_diff
+    );
+
+    execute_verified_step<T, idx_t, perm_t::xzy, perm_t::zxy>(
+        "Step 2",
+        for_each,
+        cuda_transposer,
+        timer_begin,
+        timer_end,
+        xzy_actual,
+        xzy_reference,
+        zxy_actual,
+        zxy_reference,
+        zxy_diff
+    );
+
+    execute_verified_step<T, idx_t, perm_t::zxy, perm_t::zyx>(
+        "Step 3",
+        for_each,
+        cuda_transposer,
+        timer_begin,
+        timer_end,
+        zxy_actual,
+        zxy_reference,
+        zyx_actual,
+        zyx_reference,
+        zyx_diff
+    );
+
+    execute_verified_step<T, idx_t, perm_t::zyx, perm_t::yzx>(
+        "Step 4",
+        for_each,
+        cuda_transposer,
+        timer_begin,
+        timer_end,
+        zyx_actual,
+        zyx_reference,
+        yzx_actual,
+        yzx_reference,
+        yzx_diff
+    );
+
+    execute_verified_step<T, idx_t, perm_t::yzx, perm_t::yxz>(
+        "Step 5",
+        for_each,
+        cuda_transposer,
+        timer_begin,
+        timer_end,
+        yzx_actual,
+        yzx_reference,
+        yxz_actual,
+        yxz_reference,
+        yxz_diff
+    );
+
+    execute_verified_step<T, idx_t, perm_t::yxz, perm_t::xyz>(
+        "Step 6",
+        for_each,
+        cuda_transposer,
+        timer_begin,
+        timer_end,
+        yxz_actual,
+        yxz_reference,
+        xyz_roundtrip_actual,
+        xyz_roundtrip_reference,
+        xyz_diff
+    );
+
+    verify_arrays_equal<T, idx_t>( "Round-trip", for_each, xyz_roundtrip_actual, xyz_initial, xyz_diff );
+
+    write_pos_if_requested<perm_t::xyz, T>( write_pos_files, "step0_xyz_actual.pos", xyz_initial, nx, ny, nz );
+    write_pos_if_requested<perm_t::xzy, T>( write_pos_files, "step1_xzy_actual.pos", xzy_actual, nx, ny, nz );
+    write_pos_if_requested<perm_t::xzy, T>( write_pos_files, "step1_xzy_manual.pos", xzy_reference, nx, ny, nz );
+    write_pos_if_requested<perm_t::zxy, T>( write_pos_files, "step2_zxy_actual.pos", zxy_actual, nx, ny, nz );
+    write_pos_if_requested<perm_t::zxy, T>( write_pos_files, "step2_zxy_manual.pos", zxy_reference, nx, ny, nz );
+    write_pos_if_requested<perm_t::zyx, T>( write_pos_files, "step3_zyx_actual.pos", zyx_actual, nx, ny, nz );
+    write_pos_if_requested<perm_t::zyx, T>( write_pos_files, "step3_zyx_manual.pos", zyx_reference, nx, ny, nz );
+    write_pos_if_requested<perm_t::yzx, T>( write_pos_files, "step4_yzx_actual.pos", yzx_actual, nx, ny, nz );
+    write_pos_if_requested<perm_t::yzx, T>( write_pos_files, "step4_yzx_manual.pos", yzx_reference, nx, ny, nz );
+    write_pos_if_requested<perm_t::yxz, T>( write_pos_files, "step5_yxz_actual.pos", yxz_actual, nx, ny, nz );
+    write_pos_if_requested<perm_t::yxz, T>( write_pos_files, "step5_yxz_manual.pos", yxz_reference, nx, ny, nz );
+    write_pos_if_requested<perm_t::xyz, T>( write_pos_files, "step6_xyz_actual.pos", xyz_roundtrip_actual, nx, ny, nz );
+    write_pos_if_requested<perm_t::xyz, T>( write_pos_files, "step6_xyz_manual.pos", xyz_roundtrip_reference, nx, ny, nz );
 
     return EXIT_SUCCESS;
 }
