@@ -109,15 +109,15 @@ private:
     using idx_t      = scfd::static_vec::vec<int, dim>;
     using range_t    = scfd::static_vec::rect<int, dim>;
 
-    using real_array_t = scfd::arrays::tensor_array_nd<T, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
+    using real_array_t = scfd::arrays::tensor_array_nd<T, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
     using xyzw_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
+        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
     using xywz_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3012_t>;
+        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
     using xzwy_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_1023_t>;
+        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
     using yzwx_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3120_t>;
+        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3210_t>;
 
 public:
     struct fill_problem_functor
@@ -424,6 +424,7 @@ private:
         const long long int x_batch    = static_cast<long long int>( ny_ * nz_ * nw_half_ );
 
         const long long int w_stride = static_cast<long long int>( nx_ * ny_ * nz_ );
+        const long long int z_stride = static_cast<long long int>( nx_ * ny_ * nw_half_ );
         const long long int y_stride = static_cast<long long int>( nx_ * nz_ * nw_half_ );
 
         fft_.template add_plan_1D<fftm::direction::R2C>(
@@ -454,11 +455,11 @@ private:
             "forward_z",
             static_cast<long long int>( nz_ ),
             1,
+            z_stride,
             1,
-            static_cast<long long int>( nz_ ),
             1,
+            z_stride,
             1,
-            static_cast<long long int>( nz_ ),
             z_batch
         );
 
@@ -466,11 +467,11 @@ private:
             "inverse_z",
             static_cast<long long int>( nz_ ),
             1,
+            z_stride,
             1,
-            static_cast<long long int>( nz_ ),
             1,
+            z_stride,
             1,
-            static_cast<long long int>( nz_ ),
             z_batch
         );
 
@@ -822,10 +823,10 @@ struct transpose_debug_4d_types
     using for_each_t = typename backend_t::template for_each_nd_type<dim, int>;
     using complex_t  = typename fftm::wrap::cufft_wrap_many<T>::complex;
 
-    using xyzw_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
-    using xywz_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3012_t>;
-    using xzwy_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_1023_t>;
-    using yzwx_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3120_t>;
+    using xyzw_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
+    using xywz_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
+    using xzwy_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
+    using yzwx_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3210_t>;
 };
 
 template <class Array>

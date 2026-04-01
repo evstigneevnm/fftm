@@ -29,119 +29,170 @@ public:
     template <class ForEach, class SrcArray, class DstArray>
     void xyzw_to_xywz( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
-        copy_step_x_slabs( src, dst, stream );
+        copy_step_z_slabs( src, dst, stream );
     }
 
     template <class ForEach, class SrcArray, class DstArray>
     void xywz_to_xyzw( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
-        copy_step_x_slabs( src, dst, stream );
+        copy_step_z_slabs_inverse( src, dst, stream );
     }
 
     template <class ForEach, class SrcArray, class DstArray>
     void xywz_to_xzwy( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
-        copy_step_w_slabs( src, dst, stream );
+        copy_step_y_slabs( src, dst, stream );
     }
 
     template <class ForEach, class SrcArray, class DstArray>
     void xzwy_to_xywz( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
-        copy_step_w_slabs( src, dst, stream );
+        copy_step_y_slabs_inverse( src, dst, stream );
     }
 
     template <class ForEach, class SrcArray, class DstArray>
     void xzwy_to_yzwx( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
-        copy_step_z_slabs( src, dst, stream );
+        copy_step_full_buffer( src, dst, stream );
     }
 
     template <class ForEach, class SrcArray, class DstArray>
     void yzwx_to_xzwy( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
     {
-        copy_step_z_slabs( src, dst, stream );
+        copy_step_full_buffer( src, dst, stream );
     }
 
 private:
-    template <class SrcArray, class DstArray>
-    void copy_step_x_slabs( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
-    {
-        for ( std::size_t x = 0; x < nx_; ++x )
-        {
-            cudaMemcpy3DParms params = { 0 };
-            params.srcPos = make_cudaPos( 0, 0, 0 );
-            params.dstPos = make_cudaPos( 0, 0, 0 );
-            params.srcPtr = make_cudaPitchedPtr(
-                const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( x, 0, 0, 0 ) ),
-                nz_ * sizeof( ValueType ),
-                nz_,
-                ny_
-            );
-            params.dstPtr = make_cudaPitchedPtr(
-                dst.raw_ptr() + dst.calc_lin_index( x, 0, 0, 0 ),
-                nz_ * sizeof( ValueType ),
-                nz_,
-                ny_
-            );
-            params.extent = make_cudaExtent( nz_ * sizeof( ValueType ), ny_, nw_half_ );
-            params.kind   = cudaMemcpyDeviceToDevice;
-
-            CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
-        }
-    }
-
-    template <class SrcArray, class DstArray>
-    void copy_step_w_slabs( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
-    {
-        for ( std::size_t w = 0; w < nw_half_; ++w )
-        {
-            cudaMemcpy3DParms params = { 0 };
-            params.srcPos = make_cudaPos( 0, 0, 0 );
-            params.dstPos = make_cudaPos( 0, 0, 0 );
-            params.srcPtr = make_cudaPitchedPtr(
-                const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, 0, w, 0 ) ),
-                nz_ * sizeof( ValueType ),
-                nz_,
-                nx_
-            );
-            params.dstPtr = make_cudaPitchedPtr(
-                dst.raw_ptr() + dst.calc_lin_index( 0, 0, w, 0 ),
-                nz_ * sizeof( ValueType ),
-                nz_,
-                nx_
-            );
-            params.extent = make_cudaExtent( nz_ * sizeof( ValueType ), nx_, ny_ );
-            params.kind   = cudaMemcpyDeviceToDevice;
-
-            CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
-        }
-    }
-
     template <class SrcArray, class DstArray>
     void copy_step_z_slabs( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
     {
         for ( std::size_t z = 0; z < nz_; ++z )
         {
             cudaMemcpy3DParms params = { 0 };
+            params.srcPos = make_cudaPos( 0, z * ny_, 0 );
+            params.dstPos = make_cudaPos( 0, 0, 0 );
+            params.srcPtr = make_cudaPitchedPtr(
+                const_cast<ValueType *>( src.raw_ptr() ),
+                nx_ * sizeof( ValueType ),
+                nx_,
+                ny_ * nz_
+            );
+            params.dstPtr = make_cudaPitchedPtr(
+                dst.raw_ptr() + dst.calc_lin_index( 0, 0, 0, z ),
+                nx_ * sizeof( ValueType ),
+                nx_,
+                ny_
+            );
+            params.extent = make_cudaExtent( nx_ * sizeof( ValueType ), ny_, nw_half_ );
+            params.kind   = cudaMemcpyDeviceToDevice;
+
+            CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void copy_step_z_slabs_inverse( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
+    {
+        for ( std::size_t z = 0; z < nz_; ++z )
+        {
+            cudaMemcpy3DParms params = { 0 };
+            params.srcPos = make_cudaPos( 0, 0, 0 );
+            params.dstPos = make_cudaPos( 0, z * ny_, 0 );
+            params.srcPtr = make_cudaPitchedPtr(
+                const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, 0, 0, z ) ),
+                nx_ * sizeof( ValueType ),
+                nx_,
+                ny_
+            );
+            params.dstPtr = make_cudaPitchedPtr(
+                dst.raw_ptr(),
+                nx_ * sizeof( ValueType ),
+                nx_,
+                ny_ * nz_
+            );
+            params.extent = make_cudaExtent( nx_ * sizeof( ValueType ), ny_, nw_half_ );
+            params.kind   = cudaMemcpyDeviceToDevice;
+
+            CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void copy_step_y_slabs( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
+    {
+        for ( std::size_t y = 0; y < ny_; ++y )
+        {
+            cudaMemcpy3DParms params = { 0 };
             params.srcPos = make_cudaPos( 0, 0, 0 );
             params.dstPos = make_cudaPos( 0, 0, 0 );
             params.srcPtr = make_cudaPitchedPtr(
-                const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, z, 0, 0 ) ),
+                const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, y, 0, 0 ) ),
+                nx_ * ny_ * sizeof( ValueType ),
+                nx_,
+                nw_half_
+            );
+            params.dstPtr = make_cudaPitchedPtr(
+                dst.raw_ptr() + dst.calc_lin_index( 0, 0, 0, y ),
+                nx_ * sizeof( ValueType ),
+                nx_,
+                nw_half_
+            );
+            params.extent = make_cudaExtent( nx_ * sizeof( ValueType ), nw_half_, nz_ );
+            params.kind   = cudaMemcpyDeviceToDevice;
+
+            CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+        }
+    }
+
+    template <class SrcArray, class DstArray>
+    void copy_step_y_slabs_inverse( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
+    {
+        for ( std::size_t y = 0; y < ny_; ++y )
+        {
+            cudaMemcpy3DParms params = { 0 };
+            params.srcPos = make_cudaPos( 0, 0, 0 );
+            params.dstPos = make_cudaPos( 0, 0, 0 );
+            params.srcPtr = make_cudaPitchedPtr(
+                const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, 0, 0, y ) ),
                 nx_ * sizeof( ValueType ),
                 nx_,
                 nw_half_
             );
             params.dstPtr = make_cudaPitchedPtr(
-                dst.raw_ptr() + dst.calc_lin_index( 0, z, 0, 0 ),
-                nx_ * sizeof( ValueType ),
+                dst.raw_ptr() + dst.calc_lin_index( 0, y, 0, 0 ),
+                nx_ * ny_ * sizeof( ValueType ),
                 nx_,
                 nw_half_
             );
-            params.extent = make_cudaExtent( nx_ * sizeof( ValueType ), nw_half_, ny_ );
+            params.extent = make_cudaExtent( nx_ * sizeof( ValueType ), nw_half_, nz_ );
             params.kind   = cudaMemcpyDeviceToDevice;
 
             CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
         }
+    }
+
+    template <class SrcArray, class DstArray>
+    void copy_step_full_buffer( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
+    {
+        cudaMemcpy3DParms params = { 0 };
+        params.srcPos = make_cudaPos( 0, 0, 0 );
+        params.dstPos = make_cudaPos( 0, 0, 0 );
+        params.srcPtr = make_cudaPitchedPtr(
+            const_cast<ValueType *>( src.raw_ptr() ),
+            nx_ * sizeof( ValueType ),
+            nx_,
+            nw_half_
+        );
+        params.dstPtr = make_cudaPitchedPtr(
+            dst.raw_ptr(),
+            nx_ * sizeof( ValueType ),
+            nx_,
+            nw_half_
+        );
+        params.extent = make_cudaExtent( nx_ * sizeof( ValueType ), nw_half_, nz_ * ny_ );
+        params.kind   = cudaMemcpyDeviceToDevice;
+
+        CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
     }
 
 private:
