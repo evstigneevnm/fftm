@@ -36,5 +36,8 @@ test_2D_poisson.bin: test_2D_poisson.cu
 test_3D_poisson.bin: test_3D_poisson.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_3D_poisson.cu -L$(lib_cuda) -lcudart -lcufft -o test_3D_poisson.bin
 
+test_4D_poisson.bin: test_4D_poisson.cu
+	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_4D_poisson.cu -L$(lib_cuda) -lcudart -lcufft -o test_4D_poisson.bin
+
 test_fft_3D.bin: test_fft_3D.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_fft_3D.cu -L$(lib_cuda) -lcudart -lcufft -o test_fft_3D.bin

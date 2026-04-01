@@ -20,6 +20,18 @@ using custom_arranger_10_t = scfd::arrays::custom_index_fast_arranger<1, 0>::typ
 template <scfd::arrays::ordinal_type... Dims>
 using custom_arranger_210_t = scfd::arrays::custom_index_fast_arranger<2, 1, 0>::type<Dims...>;
 
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_0213_t = scfd::arrays::custom_index_fast_arranger<0, 2, 1, 3>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_3012_t = scfd::arrays::custom_index_fast_arranger<3, 0, 1, 2>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_1023_t = scfd::arrays::custom_index_fast_arranger<1, 0, 2, 3>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_3120_t = scfd::arrays::custom_index_fast_arranger<3, 1, 2, 0>::type<Dims...>;
+
 }
 }
 
