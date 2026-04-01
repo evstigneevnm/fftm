@@ -1,5 +1,5 @@
-#ifndef __FFTM_TESTS_DETAIL_DIRECT_TRANSPOSE_4D_H__
-#define __FFTM_TESTS_DETAIL_DIRECT_TRANSPOSE_4D_H__
+#ifndef __FFTM_DETAIL_DIRECT_TRANSPOSE_4D_H__
+#define __FFTM_DETAIL_DIRECT_TRANSPOSE_4D_H__
 
 #include <cstddef>
 #include <stdexcept>
@@ -10,8 +10,6 @@
 #include <scfd/utils/device_tag.h>
 
 namespace fftm
-{
-namespace tests
 {
 namespace detail
 {
@@ -199,23 +197,20 @@ private:
 
     template <int DstAxis0, int DstAxis1, int DstAxis2, int DstAxis3, class ForEach, class SrcArray, class DstArray>
     static void transpose(
-        const ForEach      &for_each,
-        const SrcArray     &src,
-        DstArray           &dst,
-        const dims_4d_t    &src_dims,
-        const dims_4d_t    &dst_dims,
-        const std::string  &src_name,
-        const std::string  &dst_name
+        const ForEach     &for_each,
+        const SrcArray    &src,
+        DstArray          &dst,
+        const dims_4d_t   &src_dims,
+        const dims_4d_t   &dst_dims,
+        const std::string &src_name,
+        const std::string &dst_name
     )
     {
         verify_shape( src, src_dims, src_name );
         verify_shape( dst, dst_dims, dst_name );
 
         for_each(
-            direct_transpose_4d_functor<idx_t, SrcArray, DstArray, DstAxis0, DstAxis1, DstAxis2, DstAxis3>(
-                src,
-                dst
-            ),
+            direct_transpose_4d_functor<idx_t, SrcArray, DstArray, DstAxis0, DstAxis1, DstAxis2, DstAxis3>( src, dst ),
             make_range( src_dims )
         );
         for_each.wait();
@@ -228,7 +223,6 @@ private:
 };
 
 } // namespace detail
-} // namespace tests
 } // namespace fftm
 
-#endif // __FFTM_TESTS_DETAIL_DIRECT_TRANSPOSE_4D_H__
+#endif // __FFTM_DETAIL_DIRECT_TRANSPOSE_4D_H__

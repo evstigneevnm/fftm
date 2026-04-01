@@ -1,5 +1,5 @@
-#ifndef __FFTM_TESTS_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
-#define __FFTM_TESTS_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
+#ifndef __FFTM_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
+#define __FFTM_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
 
 #include <cstddef>
 
@@ -8,8 +8,6 @@
 #include <scfd/utils/cuda_safe_call.h>
 
 namespace fftm
-{
-namespace tests
 {
 namespace detail
 {
@@ -195,7 +193,6 @@ private:
         CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
     }
 
-private:
     std::size_t nx_;
     std::size_t ny_;
     std::size_t nz_;
@@ -203,7 +200,6 @@ private:
 };
 
 } // namespace detail
-} // namespace tests
 } // namespace fftm
 
-#endif // __FFTM_TESTS_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
+#endif // __FFTM_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__

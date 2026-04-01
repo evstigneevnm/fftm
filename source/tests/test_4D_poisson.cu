@@ -9,7 +9,6 @@
 
 #include <cuda_runtime.h>
 
-#include <scfd/arrays/tensor_array_nd.h>
 #include <scfd/backend/cuda.h>
 #include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
@@ -19,49 +18,27 @@
 #include <scfd/utils/system_timer_event.h>
 
 #include <external_wrap/cufft_wrap_many.h>
+#include <ffts.hpp>
 
-#include "detail/cuda_memcpy_4d_slab_transposer.h"
-#include "detail/direct_transpose_4d.h"
-#include "detail/poisson_fft_test_common.h"
-
-enum class transpose_backend
-{
-    direct,
-    memcpy
-};
-
-const char *transpose_backend_name( transpose_backend backend )
-{
-    switch ( backend )
-    {
-        case transpose_backend::direct:
-            return "direct";
-        case transpose_backend::memcpy:
-            return "memcpy";
-    }
-
-    return "unknown";
-}
-
-template <class T>
+template <class FFTS>
 class poisson_4d_fft_case
 {
 public:
+    using T         = typename FFTS::real;
     using results_t = std::pair<std::pair<T, T>, T>;
 
     poisson_4d_fft_case(
-        std::size_t       nx,
-        std::size_t       ny,
-        std::size_t       nz,
-        std::size_t       nw,
-        transpose_backend backend
+        std::size_t             nx,
+        std::size_t             ny,
+        std::size_t             nz,
+        std::size_t             nw,
+        fftm::transpose_backend backend
     )
         : nx_( nx )
         , ny_( ny )
         , nz_( nz )
         , nw_( nw )
         , nw_half_( nw / 2 + 1 )
-        , backend_( backend )
         , hx_( domain_length() / static_cast<T>( nx_ ) )
         , hy_( domain_length() / static_cast<T>( ny_ ) )
         , hz_( domain_length() / static_cast<T>( nz_ ) )
@@ -72,16 +49,14 @@ public:
               idx_t( 0, 0, 0, 0 ),
               idx_t( to_int( ny_ ), to_int( nz_ ), to_int( nw_half_ ), to_int( nx_ ) )
           )
-        , direct_transposer_( nx_, ny_, nz_, nw_half_ )
-        , memcpy_transposer_( nx_, ny_, nz_, nw_half_ )
     {
         if ( nx_ < 2 || ny_ < 2 || nz_ < 2 || nw_ < 2 )
         {
             throw std::logic_error( "test_4D_poisson: all grid dimensions must be at least 2." );
         }
 
+        ffts_.init( nx_, ny_, nz_, nw_, fftm::ffts_init_options{ backend } );
         allocate_arrays();
-        init_fft();
         for_each_.block_size = 128;
         fill_problem_data();
     }
@@ -100,24 +75,13 @@ public:
 private:
     static constexpr int dim = 4;
 
-    using backend_t  = scfd::backend::cuda;
-    using memory_t   = typename backend_t::memory_type;
-    using for_each_t = typename backend_t::template for_each_nd_type<dim, int>;
-    using reduce_t   = typename backend_t::reduce_type;
-    using base_fft_t = fftm::wrap::cufft_wrap_many<T>;
-    using complex_t  = typename base_fft_t::complex;
-    using idx_t      = scfd::static_vec::vec<int, dim>;
-    using range_t    = scfd::static_vec::rect<int, dim>;
-
-    using real_array_t = scfd::arrays::tensor_array_nd<T, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
-    using xyzw_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
-    using xywz_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
-    using xzwy_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
-    using yzwx_complex_array_t =
-        scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3210_t>;
+    using backend_t      = scfd::backend::cuda;
+    using for_each_t     = typename backend_t::template for_each_nd_type<dim, int>;
+    using reduce_t       = typename backend_t::reduce_type;
+    using idx_t          = scfd::static_vec::vec<int, dim>;
+    using range_t        = scfd::static_vec::rect<int, dim>;
+    using real_array_t   = typename FFTS::template real_array_t<4>;
+    using complex_array_t = typename FFTS::template complex_array_t<4>;
 
 public:
     struct fill_problem_functor
@@ -164,14 +128,10 @@ public:
             const T cos_w = scfd::utils::scalar_traits<T>::cos( w );
 
             exact_solution( idx ) = T( 100 ) * gaussian * sin_x * sin_y * sin_z * sin_w;
-            exact_dx( idx ) =
-                T( 100 ) * gaussian * ( cos_x - T( 2 ) * dx * sin_x ) * sin_y * sin_z * sin_w;
-            exact_dy( idx ) =
-                T( 100 ) * gaussian * sin_x * ( cos_y - T( 2 ) * dy * sin_y ) * sin_z * sin_w;
-            exact_dz( idx ) =
-                T( 100 ) * gaussian * sin_x * sin_y * ( cos_z - T( 2 ) * dz * sin_z ) * sin_w;
-            exact_dw( idx ) =
-                T( 100 ) * gaussian * sin_x * sin_y * sin_z * ( cos_w - T( 2 ) * dw * sin_w );
+            exact_dx( idx )       = T( 100 ) * gaussian * ( cos_x - T( 2 ) * dx * sin_x ) * sin_y * sin_z * sin_w;
+            exact_dy( idx )       = T( 100 ) * gaussian * sin_x * ( cos_y - T( 2 ) * dy * sin_y ) * sin_z * sin_w;
+            exact_dz( idx )       = T( 100 ) * gaussian * sin_x * sin_y * ( cos_z - T( 2 ) * dz * sin_z ) * sin_w;
+            exact_dw( idx )       = T( 100 ) * gaussian * sin_x * sin_y * sin_z * ( cos_w - T( 2 ) * dw * sin_w );
 
             rhs( idx ) = T( 100 ) * gaussian *
                          ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy + T( 4 ) * dz * dz + T( 4 ) * dw * dw - T( 12 ) ) *
@@ -185,7 +145,7 @@ public:
 
     struct solve_fourier_functor
     {
-        yzwx_complex_array_t field_hat;
+        complex_array_t field_hat;
         int nx;
         int ny;
         int nz;
@@ -218,8 +178,8 @@ public:
 
     struct derivative_spectrum_functor
     {
-        yzwx_complex_array_t solution_hat;
-        yzwx_complex_array_t field_hat;
+        complex_array_t solution_hat;
+        complex_array_t field_hat;
         int axis;
         int nx;
         int ny;
@@ -313,84 +273,6 @@ private:
         return T( 1 ) / static_cast<T>( nx_ * ny_ * nz_ * nw_ );
     }
 
-    template <class SrcArray, class DstArray>
-    void transpose_xyzw_to_xywz( const SrcArray &src, DstArray &dst )
-    {
-        if ( backend_ == transpose_backend::direct )
-        {
-            direct_transposer_.xyzw_to_xywz( for_each_, src, dst );
-        }
-        else
-        {
-            memcpy_transposer_.xyzw_to_xywz( for_each_, src, dst );
-        }
-    }
-
-    template <class SrcArray, class DstArray>
-    void transpose_xywz_to_xzwy( const SrcArray &src, DstArray &dst )
-    {
-        if ( backend_ == transpose_backend::direct )
-        {
-            direct_transposer_.xywz_to_xzwy( for_each_, src, dst );
-        }
-        else
-        {
-            memcpy_transposer_.xywz_to_xzwy( for_each_, src, dst );
-        }
-    }
-
-    template <class SrcArray, class DstArray>
-    void transpose_xzwy_to_yzwx( const SrcArray &src, DstArray &dst )
-    {
-        if ( backend_ == transpose_backend::direct )
-        {
-            direct_transposer_.xzwy_to_yzwx( for_each_, src, dst );
-        }
-        else
-        {
-            memcpy_transposer_.xzwy_to_yzwx( for_each_, src, dst );
-        }
-    }
-
-    template <class SrcArray, class DstArray>
-    void transpose_yzwx_to_xzwy( const SrcArray &src, DstArray &dst )
-    {
-        if ( backend_ == transpose_backend::direct )
-        {
-            direct_transposer_.yzwx_to_xzwy( for_each_, src, dst );
-        }
-        else
-        {
-            memcpy_transposer_.yzwx_to_xzwy( for_each_, src, dst );
-        }
-    }
-
-    template <class SrcArray, class DstArray>
-    void transpose_xzwy_to_xywz( const SrcArray &src, DstArray &dst )
-    {
-        if ( backend_ == transpose_backend::direct )
-        {
-            direct_transposer_.xzwy_to_xywz( for_each_, src, dst );
-        }
-        else
-        {
-            memcpy_transposer_.xzwy_to_xywz( for_each_, src, dst );
-        }
-    }
-
-    template <class SrcArray, class DstArray>
-    void transpose_xywz_to_xyzw( const SrcArray &src, DstArray &dst )
-    {
-        if ( backend_ == transpose_backend::direct )
-        {
-            direct_transposer_.xywz_to_xyzw( for_each_, src, dst );
-        }
-        else
-        {
-            memcpy_transposer_.xywz_to_xyzw( for_each_, src, dst );
-        }
-    }
-
     void allocate_arrays()
     {
         rhs_.init( nx_, ny_, nz_, nw_ );
@@ -409,121 +291,9 @@ private:
         solution_error_sq_.init( nx_, ny_, nz_, nw_ );
         gradient_error_sq_.init( nx_, ny_, nz_, nw_ );
 
-        xyzw_stage_.init( nx_, ny_, nz_, nw_half_ );
-        xywz_stage_.init( nx_, ny_, nw_half_, nz_ );
-        xzwy_stage_.init( nx_, nz_, nw_half_, ny_ );
+        rhs_hat_.init( ny_, nz_, nw_half_, nx_ );
         solution_hat_.init( ny_, nz_, nw_half_, nx_ );
         work_hat_.init( ny_, nz_, nw_half_, nx_ );
-    }
-
-    void init_fft()
-    {
-        const long long int real_batch = static_cast<long long int>( nx_ * ny_ * nz_ );
-        const long long int z_batch    = static_cast<long long int>( nx_ * ny_ * nw_half_ );
-        const long long int y_batch    = static_cast<long long int>( nx_ * nz_ * nw_half_ );
-        const long long int x_batch    = static_cast<long long int>( ny_ * nz_ * nw_half_ );
-
-        const long long int w_stride = static_cast<long long int>( nx_ * ny_ * nz_ );
-        const long long int z_stride = static_cast<long long int>( nx_ * ny_ * nw_half_ );
-        const long long int y_stride = static_cast<long long int>( nx_ * nz_ * nw_half_ );
-
-        fft_.template add_plan_1D<fftm::direction::R2C>(
-            "forward_w",
-            static_cast<long long int>( nw_ ),
-            1,
-            w_stride,
-            1,
-            1,
-            w_stride,
-            1,
-            real_batch
-        );
-
-        fft_.template add_plan_1D<fftm::direction::C2R>(
-            "inverse_w",
-            static_cast<long long int>( nw_ ),
-            1,
-            w_stride,
-            1,
-            1,
-            w_stride,
-            1,
-            real_batch
-        );
-
-        fft_.template add_plan_1D<fftm::direction::C2CF>(
-            "forward_z",
-            static_cast<long long int>( nz_ ),
-            1,
-            z_stride,
-            1,
-            1,
-            z_stride,
-            1,
-            z_batch
-        );
-
-        fft_.template add_plan_1D<fftm::direction::C2CB>(
-            "inverse_z",
-            static_cast<long long int>( nz_ ),
-            1,
-            z_stride,
-            1,
-            1,
-            z_stride,
-            1,
-            z_batch
-        );
-
-        fft_.template add_plan_1D<fftm::direction::C2CF>(
-            "forward_y",
-            static_cast<long long int>( ny_ ),
-            1,
-            y_stride,
-            1,
-            1,
-            y_stride,
-            1,
-            y_batch
-        );
-
-        fft_.template add_plan_1D<fftm::direction::C2CB>(
-            "inverse_y",
-            static_cast<long long int>( ny_ ),
-            1,
-            y_stride,
-            1,
-            1,
-            y_stride,
-            1,
-            y_batch
-        );
-
-        fft_.template add_plan_1D<fftm::direction::C2CF>(
-            "forward_x",
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            x_batch
-        );
-
-        fft_.template add_plan_1D<fftm::direction::C2CB>(
-            "inverse_x",
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            x_batch
-        );
-
-        fft_.activate();
     }
 
     void fill_problem_data()
@@ -546,67 +316,19 @@ private:
         for_each_.wait();
     }
 
-    void forward_to_spectral()
-    {
-        fft_.template exec<real_array_t, xyzw_complex_array_t>( "forward_w", rhs_, xyzw_stage_ );
-        transpose_xyzw_to_xywz( xyzw_stage_, xywz_stage_ );
-
-        fft_.template exec<xywz_complex_array_t, xywz_complex_array_t>( "forward_z", xywz_stage_, xywz_stage_ );
-        transpose_xywz_to_xzwy( xywz_stage_, xzwy_stage_ );
-
-        fft_.template exec<xzwy_complex_array_t, xzwy_complex_array_t>( "forward_y", xzwy_stage_, xzwy_stage_ );
-        transpose_xzwy_to_yzwx( xzwy_stage_, solution_hat_ );
-
-        fft_.template exec<yzwx_complex_array_t, yzwx_complex_array_t>( "forward_x", solution_hat_, solution_hat_ );
-    }
-
     void solve_in_fourier_space()
     {
         for_each_(
-            solve_fourier_functor{
-                solution_hat_,
-                to_int( nx_ ),
-                to_int( ny_ ),
-                to_int( nz_ ),
-            },
+            solve_fourier_functor{ solution_hat_, to_int( nx_ ), to_int( ny_ ), to_int( nz_ ) },
             spectral_range_yzwx_
         );
         for_each_.wait();
-    }
-
-    void copy_spectral_field( const yzwx_complex_array_t &src, yzwx_complex_array_t &dst )
-    {
-        CUDA_SAFE_CALL(
-            cudaMemcpy(
-                dst.raw_ptr(),
-                src.raw_ptr(),
-                sizeof( complex_t ) * static_cast<std::size_t>( src.total_size() ),
-                cudaMemcpyDeviceToDevice
-            )
-        );
     }
 
     void scale_real_field( real_array_t &field, T scale )
     {
         for_each_( scale_real_functor{ field, scale }, real_range_ );
         for_each_.wait();
-    }
-
-    void inverse_complex_field( const yzwx_complex_array_t &field_hat, real_array_t &out_real )
-    {
-        copy_spectral_field( field_hat, work_hat_ );
-
-        fft_.template exec<yzwx_complex_array_t, yzwx_complex_array_t>( "inverse_x", work_hat_, work_hat_ );
-        transpose_yzwx_to_xzwy( work_hat_, xzwy_stage_ );
-
-        fft_.template exec<xzwy_complex_array_t, xzwy_complex_array_t>( "inverse_y", xzwy_stage_, xzwy_stage_ );
-        transpose_xzwy_to_xywz( xzwy_stage_, xywz_stage_ );
-
-        fft_.template exec<xywz_complex_array_t, xywz_complex_array_t>( "inverse_z", xywz_stage_, xywz_stage_ );
-        transpose_xywz_to_xyzw( xywz_stage_, xyzw_stage_ );
-
-        fft_.template exec<xyzw_complex_array_t, real_array_t>( "inverse_w", xyzw_stage_, out_real );
-        scale_real_field( out_real, normalization_factor() );
     }
 
     void build_derivative_spectrum( int axis )
@@ -632,9 +354,11 @@ private:
         CUDA_SAFE_CALL( cudaDeviceSynchronize() );
         t_begin.record();
 
-        forward_to_spectral();
+        ffts_.forward( rhs_, rhs_hat_ );
+        copy_spectral_field( rhs_hat_, solution_hat_ );
         solve_in_fourier_space();
-        inverse_complex_field( solution_hat_, numerical_solution_ );
+        ffts_.backward( solution_hat_, numerical_solution_ );
+        scale_real_field( numerical_solution_, normalization_factor() );
 
         CUDA_SAFE_CALL( cudaDeviceSynchronize() );
         t_end.record();
@@ -645,16 +369,21 @@ private:
     std::pair<T, T> validate()
     {
         build_derivative_spectrum( 0 );
-        inverse_complex_field( work_hat_, numerical_dx_ );
+        ffts_.backward( work_hat_, numerical_dx_ );
 
         build_derivative_spectrum( 1 );
-        inverse_complex_field( work_hat_, numerical_dy_ );
+        ffts_.backward( work_hat_, numerical_dy_ );
 
         build_derivative_spectrum( 2 );
-        inverse_complex_field( work_hat_, numerical_dz_ );
+        ffts_.backward( work_hat_, numerical_dz_ );
 
         build_derivative_spectrum( 3 );
-        inverse_complex_field( work_hat_, numerical_dw_ );
+        ffts_.backward( work_hat_, numerical_dw_ );
+
+        scale_real_field( numerical_dx_, normalization_factor() );
+        scale_real_field( numerical_dy_, normalization_factor() );
+        scale_real_field( numerical_dz_, normalization_factor() );
+        scale_real_field( numerical_dw_, normalization_factor() );
 
         for_each_(
             error_fields_functor{
@@ -675,20 +404,31 @@ private:
         );
         for_each_.wait();
 
-        const T l2_sq =
-            reduce_( solution_error_sq_.total_size(), solution_error_sq_.raw_ptr(), T( 0 ) ) * cell_volume_;
-        const T h1_sq =
-            reduce_( gradient_error_sq_.total_size(), gradient_error_sq_.raw_ptr(), T( 0 ) ) * cell_volume_;
+        const T l2_sq = reduce_( solution_error_sq_.total_size(), solution_error_sq_.raw_ptr(), T( 0 ) ) * cell_volume_;
+        const T h1_sq = reduce_( gradient_error_sq_.total_size(), gradient_error_sq_.raw_ptr(), T( 0 ) ) * cell_volume_;
 
         return { std::sqrt( l2_sq ), std::sqrt( h1_sq ) };
     }
+
+    void copy_spectral_field( const complex_array_t &src, complex_array_t &dst )
+    {
+        CUDA_SAFE_CALL(
+            cudaMemcpy(
+                dst.raw_ptr(),
+                src.raw_ptr(),
+                sizeof( typename FFTS::complex ) * static_cast<std::size_t>( src.total_size() ),
+                cudaMemcpyDeviceToDevice
+            )
+        );
+    }
+
+    FFTS ffts_;
 
     std::size_t nx_;
     std::size_t ny_;
     std::size_t nz_;
     std::size_t nw_;
     std::size_t nw_half_;
-    transpose_backend backend_;
 
     T hx_;
     T hy_;
@@ -700,10 +440,7 @@ private:
     range_t spectral_range_yzwx_;
 
     for_each_t for_each_;
-    reduce_t   reduce_;
-    base_fft_t fft_;
-    fftm::tests::detail::direct_transpose_4d              direct_transposer_;
-    fftm::tests::detail::cuda_memcpy_4d_slab_transposer<complex_t> memcpy_transposer_;
+    reduce_t reduce_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
@@ -721,20 +458,17 @@ private:
     real_array_t solution_error_sq_;
     real_array_t gradient_error_sq_;
 
-    xyzw_complex_array_t xyzw_stage_;
-    xywz_complex_array_t xywz_stage_;
-    xzwy_complex_array_t xzwy_stage_;
-    yzwx_complex_array_t solution_hat_;
-    yzwx_complex_array_t work_hat_;
+    complex_array_t rhs_hat_;
+    complex_array_t solution_hat_;
+    complex_array_t work_hat_;
 };
 
-template <class T>
-using results_4d_t = std::pair<std::pair<T, T>, T>;
+template <class FFTS>
+using results_4d_t = typename poisson_4d_fft_case<FFTS>::results_t;
 
 struct test_options_4d
 {
-    transpose_backend backend = transpose_backend::direct;
-    bool debug_transpose = false;
+    fftm::transpose_backend backend = fftm::transpose_backend::direct;
     std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> grids;
 };
 
@@ -746,13 +480,6 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     while ( arg_i < argc )
     {
         const std::string arg = argv[arg_i];
-        if ( arg == "--debug-transpose" )
-        {
-            options.debug_transpose = true;
-            ++arg_i;
-            continue;
-        }
-
         if ( arg != "--transpose" )
         {
             break;
@@ -760,43 +487,38 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
 
         if ( arg_i + 1 >= argc )
         {
-            throw std::logic_error(
-                "USAGE: test_4D_poisson.bin [--debug-transpose] [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
-            );
+            throw std::logic_error( "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]" );
         }
 
         const std::string backend_name = argv[arg_i + 1];
         if ( backend_name == "direct" )
         {
-            options.backend = transpose_backend::direct;
+            options.backend = fftm::transpose_backend::direct;
         }
         else if ( backend_name == "memcpy" )
         {
-            options.backend = transpose_backend::memcpy;
+            options.backend = fftm::transpose_backend::memcpy;
         }
         else
         {
-            throw std::logic_error( "Unknown transpose backend: " + backend_name );
+            throw std::logic_error( "Unknown transpose backend '" + backend_name + "'. Use direct or memcpy." );
         }
-
         arg_i += 2;
     }
 
     if ( arg_i == argc )
     {
         options.grids = {
-            { 8, 8, 8, 8 },
             { 16, 16, 16, 16 },
             { 32, 32, 32, 32 },
+            { 64, 64, 64, 64 },
         };
         return options;
     }
 
     if ( ( ( argc - arg_i ) % 4 ) != 0 )
     {
-        throw std::logic_error(
-            "USAGE: test_4D_poisson.bin [--debug-transpose] [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]"
-        );
+        throw std::logic_error( "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]" );
     }
 
     options.grids.reserve( ( argc - arg_i ) / 4 );
@@ -813,365 +535,50 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     return options;
 }
 
-template <class T>
-struct transpose_debug_4d_types
-{
-    static constexpr int dim = 4;
-
-    using backend_t  = scfd::backend::cuda;
-    using memory_t   = typename backend_t::memory_type;
-    using for_each_t = typename backend_t::template for_each_nd_type<dim, int>;
-    using complex_t  = typename fftm::wrap::cufft_wrap_many<T>::complex;
-
-    using xyzw_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
-    using xywz_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0123_t>;
-    using xzwy_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_0213_t>;
-    using yzwx_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_3210_t>;
-};
-
-template <class Array>
-void fill_unique_values_xyzw(
-    Array       &array,
-    std::size_t  nx,
-    std::size_t  ny,
-    std::size_t  nz,
-    std::size_t  nw_half
-)
-{
-    using value_t = typename Array::value_type;
-    using view_t  = typename Array::view_type;
-
-    view_t view( array );
-
-    for ( std::size_t x = 0; x < nx; ++x )
-    {
-        for ( std::size_t y = 0; y < ny; ++y )
-        {
-            for ( std::size_t z = 0; z < nz; ++z )
-            {
-                for ( std::size_t w = 0; w < nw_half; ++w )
-                {
-                    const double real_part =
-                        static_cast<double>( 1 + x + nx * ( y + ny * ( z + nz * w ) ) );
-                    const double imag_part = -static_cast<double>( 1 + w + nw_half * ( z + nz * ( y + ny * x ) ) );
-                    view( x, y, z, w ) = value_t{ real_part, imag_part };
-                }
-            }
-        }
-    }
-
-    view.release( true );
-}
-
-template <class ArrayLhs, class ArrayRhs>
-std::size_t count_mismatches_4d(
-    const ArrayLhs &lhs,
-    const ArrayRhs &rhs,
-    std::size_t    &first_i,
-    std::size_t    &first_j,
-    std::size_t    &first_k,
-    std::size_t    &first_l,
-    double         &lhs_real,
-    double         &lhs_imag,
-    double         &rhs_real,
-    double         &rhs_imag
-)
-{
-    using lhs_view_t = typename ArrayLhs::view_type;
-    using rhs_view_t = typename ArrayRhs::view_type;
-
-    lhs_view_t lhs_view( lhs );
-    rhs_view_t rhs_view( rhs );
-
-    const auto sz = lhs.size_nd();
-
-    std::size_t mismatches = 0;
-    first_i = first_j = first_k = first_l = 0;
-    lhs_real = lhs_imag = rhs_real = rhs_imag = 0.0;
-
-    for ( std::size_t i = 0; i < static_cast<std::size_t>( sz[0] ); ++i )
-    {
-        for ( std::size_t j = 0; j < static_cast<std::size_t>( sz[1] ); ++j )
-        {
-            for ( std::size_t k = 0; k < static_cast<std::size_t>( sz[2] ); ++k )
-            {
-                for ( std::size_t l = 0; l < static_cast<std::size_t>( sz[3] ); ++l )
-                {
-                    const auto lhs_value = lhs_view( i, j, k, l );
-                    const auto rhs_value = rhs_view( i, j, k, l );
-
-                    if ( ( lhs_value.x != rhs_value.x ) || ( lhs_value.y != rhs_value.y ) )
-                    {
-                        if ( mismatches == 0 )
-                        {
-                            first_i  = i;
-                            first_j  = j;
-                            first_k  = k;
-                            first_l  = l;
-                            lhs_real = lhs_value.x;
-                            lhs_imag = lhs_value.y;
-                            rhs_real = rhs_value.x;
-                            rhs_imag = rhs_value.y;
-                        }
-                        ++mismatches;
-                    }
-                }
-            }
-        }
-    }
-
-    lhs_view.release( false );
-    rhs_view.release( false );
-
-    return mismatches;
-}
-
-template <class ArrayActual, class ArrayReference>
-void verify_debug_step_4d(
-    scfd::utils::log_std &log,
-    const std::string    &label,
-    const ArrayActual    &actual,
-    const ArrayReference &reference
-)
-{
-    std::size_t first_i;
-    std::size_t first_j;
-    std::size_t first_k;
-    std::size_t first_l;
-    double      lhs_real;
-    double      lhs_imag;
-    double      rhs_real;
-    double      rhs_imag;
-
-    const std::size_t mismatches = count_mismatches_4d(
-        actual,
-        reference,
-        first_i,
-        first_j,
-        first_k,
-        first_l,
-        lhs_real,
-        lhs_imag,
-        rhs_real,
-        rhs_imag
-    );
-
-    if ( mismatches == 0 )
-    {
-        log.info_f( "%s: exact match", label.c_str() );
-        return;
-    }
-
-    log.error_f(
-        "%s: mismatches=%zu, first=(%zu,%zu,%zu,%zu), actual=(%.17e, %.17e), reference=(%.17e, %.17e)",
-        label.c_str(),
-        mismatches,
-        first_i,
-        first_j,
-        first_k,
-        first_l,
-        lhs_real,
-        lhs_imag,
-        rhs_real,
-        rhs_imag
-    );
-    throw std::runtime_error( label + " failed" );
-}
-
-template <class T>
-void debug_transpose_chain_4d(
-    std::size_t        nx,
-    std::size_t        ny,
-    std::size_t        nz,
-    std::size_t        nw,
-    transpose_backend  backend,
-    scfd::utils::log_std &log
-)
-{
-    using types_t             = transpose_debug_4d_types<T>;
-    using xyzw_array_t        = typename types_t::xyzw_array_t;
-    using xywz_array_t        = typename types_t::xywz_array_t;
-    using xzwy_array_t        = typename types_t::xzwy_array_t;
-    using yzwx_array_t        = typename types_t::yzwx_array_t;
-    using memcpy_transposer_t = fftm::tests::detail::cuda_memcpy_4d_slab_transposer<typename types_t::complex_t>;
-    using direct_transposer_t = fftm::tests::detail::direct_transpose_4d;
-
-    const std::size_t nw_half = nw / 2 + 1;
-
-    typename types_t::for_each_t for_each;
-    for_each.block_size = 128;
-
-    direct_transposer_t direct_transposer( nx, ny, nz, nw_half );
-    memcpy_transposer_t memcpy_transposer( nx, ny, nz, nw_half );
-
-    xyzw_array_t xyzw_initial;
-    xyzw_array_t xyzw_actual_back;
-    xyzw_array_t xyzw_reference_back;
-    xywz_array_t xywz_actual;
-    xywz_array_t xywz_reference;
-    xzwy_array_t xzwy_actual;
-    xzwy_array_t xzwy_reference;
-    yzwx_array_t yzwx_actual;
-    yzwx_array_t yzwx_reference;
-
-    xyzw_initial.init( nx, ny, nz, nw_half );
-    xyzw_actual_back.init( nx, ny, nz, nw_half );
-    xyzw_reference_back.init( nx, ny, nz, nw_half );
-    xywz_actual.init( nx, ny, nw_half, nz );
-    xywz_reference.init( nx, ny, nw_half, nz );
-    xzwy_actual.init( nx, nz, nw_half, ny );
-    xzwy_reference.init( nx, nz, nw_half, ny );
-    yzwx_actual.init( ny, nz, nw_half, nx );
-    yzwx_reference.init( ny, nz, nw_half, nx );
-
-    fill_unique_values_xyzw( xyzw_initial, nx, ny, nz, nw_half );
-
-    direct_transposer.xyzw_to_xywz( for_each, xyzw_initial, xywz_reference );
-    if ( backend == transpose_backend::direct )
-    {
-        direct_transposer.xyzw_to_xywz( for_each, xyzw_initial, xywz_actual );
-    }
-    else
-    {
-        memcpy_transposer.xyzw_to_xywz( for_each, xyzw_initial, xywz_actual );
-    }
-    verify_debug_step_4d( log, "transpose step 1: xyzw -> xywz", xywz_actual, xywz_reference );
-
-    direct_transposer.xywz_to_xzwy( for_each, xywz_reference, xzwy_reference );
-    if ( backend == transpose_backend::direct )
-    {
-        direct_transposer.xywz_to_xzwy( for_each, xywz_actual, xzwy_actual );
-    }
-    else
-    {
-        memcpy_transposer.xywz_to_xzwy( for_each, xywz_actual, xzwy_actual );
-    }
-    verify_debug_step_4d( log, "transpose step 2: xywz -> xzwy", xzwy_actual, xzwy_reference );
-
-    direct_transposer.xzwy_to_yzwx( for_each, xzwy_reference, yzwx_reference );
-    if ( backend == transpose_backend::direct )
-    {
-        direct_transposer.xzwy_to_yzwx( for_each, xzwy_actual, yzwx_actual );
-    }
-    else
-    {
-        memcpy_transposer.xzwy_to_yzwx( for_each, xzwy_actual, yzwx_actual );
-    }
-    verify_debug_step_4d( log, "transpose step 3: xzwy -> yzwx", yzwx_actual, yzwx_reference );
-
-    direct_transposer.yzwx_to_xzwy( for_each, yzwx_reference, xzwy_reference );
-    if ( backend == transpose_backend::direct )
-    {
-        direct_transposer.yzwx_to_xzwy( for_each, yzwx_actual, xzwy_actual );
-    }
-    else
-    {
-        memcpy_transposer.yzwx_to_xzwy( for_each, yzwx_actual, xzwy_actual );
-    }
-    verify_debug_step_4d( log, "transpose step 4: yzwx -> xzwy", xzwy_actual, xzwy_reference );
-
-    direct_transposer.xzwy_to_xywz( for_each, xzwy_reference, xywz_reference );
-    if ( backend == transpose_backend::direct )
-    {
-        direct_transposer.xzwy_to_xywz( for_each, xzwy_actual, xywz_actual );
-    }
-    else
-    {
-        memcpy_transposer.xzwy_to_xywz( for_each, xzwy_actual, xywz_actual );
-    }
-    verify_debug_step_4d( log, "transpose step 5: xzwy -> xywz", xywz_actual, xywz_reference );
-
-    direct_transposer.xywz_to_xyzw( for_each, xywz_reference, xyzw_reference_back );
-    if ( backend == transpose_backend::direct )
-    {
-        direct_transposer.xywz_to_xyzw( for_each, xywz_actual, xyzw_actual_back );
-    }
-    else
-    {
-        memcpy_transposer.xywz_to_xyzw( for_each, xywz_actual, xyzw_actual_back );
-    }
-    verify_debug_step_4d( log, "transpose step 6: xywz -> xyzw", xyzw_actual_back, xyzw_reference_back );
-    verify_debug_step_4d( log, "transpose round-trip", xyzw_actual_back, xyzw_initial );
-}
-
-template <class T>
-std::vector<std::pair<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>, results_4d_t<T>>> run_cases_4d(
-    const std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> &grids,
-    transpose_backend                                                                    backend,
-    scfd::utils::log_std                                                               &log
-)
-{
-    using grid_t = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
-    using run_t  = std::pair<grid_t, results_4d_t<T>>;
-
-    std::vector<run_t> runs;
-    runs.reserve( grids.size() );
-
-    for ( const auto &grid : grids )
-    {
-        const auto nx = std::get<0>( grid );
-        const auto ny = std::get<1>( grid );
-        const auto nz = std::get<2>( grid );
-        const auto nw = std::get<3>( grid );
-
-        poisson_4d_fft_case<T> poisson_case( nx, ny, nz, nw, backend );
-        const T                rhs_mean = poisson_case.rhs_mean();
-
-        if ( std::abs( rhs_mean ) > T( 1.0e-12 ) )
-        {
-            log.warning_f(
-                "rhs_mean = %.8e for Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the zero Fourier mode,"
-                " so the manufactured rhs should have zero mean.",
-                rhs_mean,
-                nx,
-                ny,
-                nz,
-                nw
-            );
-        }
-
-        runs.push_back( { grid, poisson_case.run() } );
-    }
-
-    return runs;
-}
-
 int main( int argc, char *argv[] )
 {
     scfd::utils::log_std log;
 
     try
     {
-        using T      = double;
-        using grid_t = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
-        using run_t  = std::pair<grid_t, results_4d_t<T>>;
+        using base_fft_t = fftm::wrap::cufft_wrap_many<double>;
+        using ffts_t     = fftm::ffts<base_fft_t, scfd::backend::cuda>;
+        using grid_t     = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
+        using run_t      = std::pair<grid_t, results_4d_t<ffts_t>>;
 
         scfd::utils::init_cuda_persistent( log, 0 );
 
         const auto options = parse_options_4d( argc, argv );
-        log.info_f( "transpose_backend = %s", transpose_backend_name( options.backend ) );
+        log.info_f( "transpose_backend = %s", fftm::transpose_backend_name( options.backend ) );
 
-        if ( options.debug_transpose )
+        std::vector<run_t> runs;
+        runs.reserve( options.grids.size() );
+
+        for ( const auto &grid : options.grids )
         {
-            const auto &grid = options.grids.front();
-            log.info_f(
-                "debug_transpose grid = (%zu, %zu, %zu, %zu)",
-                std::get<0>( grid ),
-                std::get<1>( grid ),
-                std::get<2>( grid ),
-                std::get<3>( grid )
-            );
-            debug_transpose_chain_4d<T>(
-                std::get<0>( grid ),
-                std::get<1>( grid ),
-                std::get<2>( grid ),
-                std::get<3>( grid ),
-                options.backend,
-                log
-            );
-        }
+            const auto nx = std::get<0>( grid );
+            const auto ny = std::get<1>( grid );
+            const auto nz = std::get<2>( grid );
+            const auto nw = std::get<3>( grid );
 
-        std::vector<run_t> runs = run_cases_4d<T>( options.grids, options.backend, log );
+            poisson_4d_fft_case<ffts_t> poisson_case( nx, ny, nz, nw, options.backend );
+            const double                rhs_mean = poisson_case.rhs_mean();
+
+            if ( std::abs( rhs_mean ) > 1.0e-12 )
+            {
+                log.warning_f(
+                    "rhs_mean = %.8e for Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the zero Fourier mode,"
+                    " so the manufactured rhs should have zero mean.",
+                    rhs_mean,
+                    nx,
+                    ny,
+                    nz,
+                    nw
+                );
+            }
+
+            runs.push_back( { grid, poisson_case.run() } );
+        }
 
         for ( const auto &run : runs )
         {

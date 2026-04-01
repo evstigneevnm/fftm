@@ -8,7 +8,6 @@
 
 #include <cuda_runtime.h>
 
-#include <scfd/arrays/tensor_array_nd.h>
 #include <scfd/backend/cuda.h>
 #include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
@@ -18,31 +17,34 @@
 #include <scfd/utils/system_timer_event.h>
 
 #include <external_wrap/cufft_wrap_many.h>
+#include <ffts.hpp>
+
 #include "detail/poisson_fft_test_common.h"
 
-template <class T>
+template <class FFTS>
 class poisson_2d_fft_case
 {
 public:
+    using T         = typename FFTS::real;
     using results_t = std::pair<std::pair<T, T>, T>;
 
     explicit poisson_2d_fft_case( std::size_t nx, std::size_t ny )
-        : nx_( nx ),
-          ny_( ny ),
-          ny_c_( ny / 2 + 1 ),
-          hx_( domain_length() / static_cast<T>( nx_ ) ),
-          hy_( domain_length() / static_cast<T>( ny_ ) ),
-          cell_area_( hx_ * hy_ ),
-          real_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ) ) ),
-          spectral_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_c_ ) ) )
+        : nx_( nx )
+        , ny_( ny )
+        , ny_c_( ny / 2 + 1 )
+        , hx_( domain_length() / static_cast<T>( nx_ ) )
+        , hy_( domain_length() / static_cast<T>( ny_ ) )
+        , cell_area_( hx_ * hy_ )
+        , real_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ) ) )
+        , spectral_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_c_ ) ) )
     {
         if ( nx_ < 2 || ny_ < 2 )
         {
             throw std::logic_error( "test_2D_poisson: both grid dimensions must be at least 2." );
         }
 
+        ffts_.init( nx_, ny_ );
         allocate_arrays();
-        init_fft();
         for_each_.block_size = 128;
         fill_problem_data();
     }
@@ -61,12 +63,7 @@ public:
     void write_gmsh_outputs( const std::string &prefix ) const
     {
         io::write_out_pos_file_scal_2D_quad( prefix + "_rhs.pos", rhs_, domain_length(), domain_length() );
-        io::write_out_pos_file_scal_2D_quad(
-            prefix + "_solution.pos",
-            numerical_solution_,
-            domain_length(),
-            domain_length()
-        );
+        io::write_out_pos_file_scal_2D_quad( prefix + "_solution.pos", numerical_solution_, domain_length(), domain_length() );
         io::write_out_pos_file_scal_2D_quad( prefix + "_exact.pos", exact_solution_, domain_length(), domain_length() );
     }
 
@@ -74,16 +71,12 @@ private:
     static constexpr int dim = 2;
 
     using backend_t      = scfd::backend::cuda;
-    using memory_t       = typename backend_t::memory_type;
     using for_each_t     = typename backend_t::template for_each_nd_type<dim, int>;
     using reduce_t       = typename backend_t::reduce_type;
-    using base_fft_t     = fftm::wrap::cufft_wrap_many<T>;
-    using complex_t      = typename base_fft_t::complex;
     using idx_t          = scfd::static_vec::vec<int, dim>;
     using range_t        = scfd::static_vec::rect<int, dim>;
-    // CUFFT plans below assume row-major storage, so the last index must be contiguous.
-    using real_array_t   = scfd::arrays::tensor_array_nd<T, dim, memory_t, scfd::arrays::custom_arranger_10_t>;
-    using complex_array_t = scfd::arrays::tensor_array_nd<complex_t, dim, memory_t, scfd::arrays::custom_arranger_10_t>;
+    using real_array_t   = typename FFTS::template real_array_t<2>;
+    using complex_array_t = typename FFTS::template complex_array_t<2>;
 
 public:
     struct fill_problem_functor
@@ -97,9 +90,8 @@ public:
 
         __device__ __host__ void operator()( const idx_t &idx )
         {
-            // Physical coordinates on [0, 2*pi)^2.
-            const T x = hx * static_cast<T>( idx[0] );
-            const T y = hy * static_cast<T>( idx[1] );
+            const T x  = hx * static_cast<T>( idx[0] );
+            const T y  = hy * static_cast<T>( idx[1] );
             const T pi = scfd::utils::scalar_traits<T>::pi();
 
             const T dx = x - pi;
@@ -252,52 +244,10 @@ private:
         dy_hat_.init( nx_, ny_c_ );
     }
 
-    void init_fft()
-    {
-        fft_.template add_plan_2D<fftm::direction::R2C>(
-            "forward",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_c_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_c_ ),
-            1
-        );
-
-        fft_.template add_plan_2D<fftm::direction::C2R>(
-            "inverse",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_c_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_c_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ ),
-            1
-        );
-
-        fft_.activate();
-    }
-
     void fill_problem_data()
     {
         for_each_(
-            fill_problem_functor{
-                rhs_,
-                exact_solution_,
-                exact_dx_,
-                exact_dy_,
-                hx_,
-                hy_,
-            },
+            fill_problem_functor{ rhs_, exact_solution_, exact_dx_, exact_dy_, hx_, hy_ },
             real_range_
         );
         for_each_.wait();
@@ -306,11 +256,7 @@ private:
     void solve_in_fourier_space()
     {
         for_each_(
-            solve_fourier_functor{
-                rhs_hat_,
-                solution_hat_,
-                to_int( nx_ ),
-            },
+            solve_fourier_functor{ rhs_hat_, solution_hat_, to_int( nx_ ) },
             spectral_range_
         );
         for_each_.wait();
@@ -319,12 +265,7 @@ private:
     void build_derivative_spectra()
     {
         for_each_(
-            derivative_spectra_functor{
-                solution_hat_,
-                dx_hat_,
-                dy_hat_,
-                to_int( nx_ ),
-            },
+            derivative_spectra_functor{ solution_hat_, dx_hat_, dy_hat_, to_int( nx_ ) },
             spectral_range_
         );
         for_each_.wait();
@@ -343,9 +284,9 @@ private:
         CUDA_SAFE_CALL( cudaDeviceSynchronize() );
         t_begin.record();
 
-        fft_.template exec<real_array_t, complex_array_t>( "forward", rhs_, rhs_hat_ );
+        ffts_.forward( rhs_, rhs_hat_ );
         solve_in_fourier_space();
-        fft_.template exec<complex_array_t, real_array_t>( "inverse", solution_hat_, numerical_solution_ );
+        ffts_.backward( solution_hat_, numerical_solution_ );
         scale_real_field( numerical_solution_, normalization_factor() );
 
         CUDA_SAFE_CALL( cudaDeviceSynchronize() );
@@ -358,8 +299,8 @@ private:
     {
         build_derivative_spectra();
 
-        fft_.template exec<complex_array_t, real_array_t>( "inverse", dx_hat_, numerical_dx_ );
-        fft_.template exec<complex_array_t, real_array_t>( "inverse", dy_hat_, numerical_dy_ );
+        ffts_.backward( dx_hat_, numerical_dx_ );
+        ffts_.backward( dy_hat_, numerical_dy_ );
 
         scale_real_field( numerical_dx_, normalization_factor() );
         scale_real_field( numerical_dy_, normalization_factor() );
@@ -385,6 +326,8 @@ private:
         return { std::sqrt( l2_sq ), std::sqrt( h1_sq ) };
     }
 
+    FFTS ffts_;
+
     std::size_t nx_;
     std::size_t ny_;
     std::size_t ny_c_;
@@ -398,7 +341,6 @@ private:
 
     for_each_t for_each_;
     reduce_t reduce_;
-    base_fft_t fft_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
@@ -418,8 +360,8 @@ private:
     complex_array_t dy_hat_;
 };
 
-template <class T>
-using results_t = typename poisson_2d_fft_case<T>::results_t;
+template <class FFTS>
+using results_t = typename poisson_2d_fft_case<FFTS>::results_t;
 
 std::vector<std::pair<std::size_t, std::size_t>> parse_grids( int argc, char *argv[] )
 {
@@ -456,9 +398,10 @@ int main( int argc, char *argv[] )
 
     try
     {
-        using T = double;
-        using grid_t = std::pair<std::size_t, std::size_t>;
-        using run_t  = std::pair<grid_t, results_t<T>>;
+        using base_fft_t = fftm::wrap::cufft_wrap_many<double>;
+        using ffts_t     = fftm::ffts<base_fft_t, scfd::backend::cuda>;
+        using grid_t     = std::pair<std::size_t, std::size_t>;
+        using run_t      = std::pair<grid_t, results_t<ffts_t>>;
 
         scfd::utils::init_cuda_persistent( log, 0 );
 
@@ -469,10 +412,10 @@ int main( int argc, char *argv[] )
 
         for ( const auto &grid : grids )
         {
-            poisson_2d_fft_case<T> poisson_case( grid.first, grid.second );
-            const T                rhs_mean = poisson_case.rhs_mean();
+            poisson_2d_fft_case<ffts_t> poisson_case( grid.first, grid.second );
+            const double                rhs_mean = poisson_case.rhs_mean();
 
-            if ( std::abs( rhs_mean ) > T( 1.0e-12 ) )
+            if ( std::abs( rhs_mean ) > 1.0e-12 )
             {
                 log.warning_f(
                     "rhs_mean = %.8e for Nx=%zu, Ny=%zu; the periodic FFT solve removes the zero Fourier mode,"
@@ -484,9 +427,7 @@ int main( int argc, char *argv[] )
             }
 
             runs.push_back( { grid, poisson_case.run() } );
-            poisson_case.write_gmsh_outputs(
-                "poisson_2d_" + std::to_string( grid.first ) + "x" + std::to_string( grid.second )
-            );
+            poisson_case.write_gmsh_outputs( "poisson_2d_" + std::to_string( grid.first ) + "x" + std::to_string( grid.second ) );
         }
 
         for ( const auto &run : runs )
