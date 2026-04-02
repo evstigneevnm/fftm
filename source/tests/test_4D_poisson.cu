@@ -467,6 +467,7 @@ struct test_options_4d
         pencil_direct,
         pencil_memcpy,
         slab_direct,
+        slab_memcpy,
         all
     };
 
@@ -490,7 +491,7 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
         if ( arg_i + 1 >= argc )
         {
             throw std::logic_error(
-                "USAGE: test_4D_poisson.bin [--strategy pencil-direct|pencil-memcpy|slab-direct|all] "
+                "USAGE: test_4D_poisson.bin [--strategy pencil-direct|pencil-memcpy|slab-direct|slab-memcpy|all] "
                 "[Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]]"
             );
         }
@@ -508,6 +509,10 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
         {
             options.strategy = test_options_4d::strategy_selector::slab_direct;
         }
+        else if ( strategy_name == "slab-memcpy" )
+        {
+            options.strategy = test_options_4d::strategy_selector::slab_memcpy;
+        }
         else if ( strategy_name == "all" )
         {
             options.strategy = test_options_4d::strategy_selector::all;
@@ -524,7 +529,7 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
         {
             throw std::logic_error(
                 "Unknown 4D strategy '" + strategy_name +
-                "'. Use pencil-direct, pencil-memcpy, slab-direct, or all."
+                "'. Use pencil-direct, pencil-memcpy, slab-direct, slab-memcpy, or all."
             );
         }
         arg_i += 2;
@@ -543,7 +548,7 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     if ( ( ( argc - arg_i ) % 4 ) != 0 )
     {
         throw std::logic_error(
-            "USAGE: test_4D_poisson.bin [--strategy pencil-direct|pencil-memcpy|slab-direct|all] "
+            "USAGE: test_4D_poisson.bin [--strategy pencil-direct|pencil-memcpy|slab-direct|slab-memcpy|all] "
             "[Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]]"
         );
     }
@@ -572,6 +577,13 @@ void run_strategy_4d(
     using run_t  = std::pair<grid_t, results_4d_t<FFTS>>;
 
     log.info_f( "strategy = %s", FFTS::strategy_name() );
+    if ( FFTS::strategy_family_4d == fftm::transform_strategy_4d::slab_slab &&
+         FFTS::transpose_backend_4d == fftm::transpose_backend::memcpy )
+    {
+        log.warning(
+            "slab-slab-memcpy currently reuses the direct slab transpose implementation as a symmetric placeholder."
+        );
+    }
 
     std::vector<run_t> runs;
     runs.reserve( grids.size() );
@@ -635,6 +647,8 @@ int main( int argc, char *argv[] )
             fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::memcpy>>;
         using slab_direct_ffts_t =
             fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_slab_slab<fftm::transpose_backend::direct>>;
+        using slab_memcpy_ffts_t =
+            fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_slab_slab<fftm::transpose_backend::memcpy>>;
 
         scfd::utils::init_cuda_persistent( log, 0 );
 
@@ -651,10 +665,14 @@ int main( int argc, char *argv[] )
             case test_options_4d::strategy_selector::slab_direct:
                 run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
                 break;
+            case test_options_4d::strategy_selector::slab_memcpy:
+                run_strategy_4d<slab_memcpy_ffts_t>( log, options.grids );
+                break;
             case test_options_4d::strategy_selector::all:
                 run_strategy_4d<pencil_direct_ffts_t>( log, options.grids );
                 run_strategy_4d<pencil_memcpy_ffts_t>( log, options.grids );
                 run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
+                run_strategy_4d<slab_memcpy_ffts_t>( log, options.grids );
                 break;
         }
 

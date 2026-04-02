@@ -80,17 +80,12 @@ struct ffts_4d_strategy_traits<strategy_4d_pencil_pencil<Backend>>
 template <transpose_backend Backend>
 struct ffts_4d_strategy_traits<strategy_4d_slab_slab<Backend>>
 {
-    static_assert(
-        Backend == transpose_backend::direct,
-        "4D slab-slab strategy currently supports direct transpose only."
-    );
-
     static constexpr transform_strategy_4d family  = transform_strategy_4d::slab_slab;
     static constexpr transpose_backend     backend = Backend;
 
     static const char *name()
     {
-        return "slab-slab-direct";
+        return backend == transpose_backend::direct ? "slab-slab-direct" : "slab-slab-memcpy";
     }
 };
 
