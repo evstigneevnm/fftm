@@ -577,14 +577,6 @@ void run_strategy_4d(
     using run_t  = std::pair<grid_t, results_4d_t<FFTS>>;
 
     log.info_f( "strategy = %s", FFTS::strategy_name() );
-    if ( FFTS::strategy_family_4d == fftm::transform_strategy_4d::slab_slab &&
-         FFTS::transpose_backend_4d == fftm::transpose_backend::memcpy )
-    {
-        log.warning(
-            "slab-slab-memcpy currently reuses the direct slab transpose implementation as a symmetric placeholder."
-        );
-    }
-
     std::vector<run_t> runs;
     runs.reserve( grids.size() );
 

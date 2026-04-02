@@ -32,6 +32,12 @@ using custom_arranger_3120_t = scfd::arrays::custom_index_fast_arranger<3, 1, 2,
 template <scfd::arrays::ordinal_type... Dims>
 using custom_arranger_3210_t = scfd::arrays::custom_index_fast_arranger<3, 2, 1, 0>::type<Dims...>;
 
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_1032_t = scfd::arrays::custom_index_fast_arranger<1, 0, 3, 2>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_2103_t = scfd::arrays::custom_index_fast_arranger<2, 1, 0, 3>::type<Dims...>;
+
 }
 }
 

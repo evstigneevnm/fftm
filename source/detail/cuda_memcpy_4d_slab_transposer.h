@@ -60,6 +60,30 @@ public:
         copy_step_full_buffer( src, dst, stream );
     }
 
+    template <class ForEach, class SrcArray, class DstArray>
+    void xyzw_to_zwxy( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    {
+        copy_async_full_buffer( src, dst, stream );
+    }
+
+    template <class ForEach, class SrcArray, class DstArray>
+    void zwxy_to_xyzw( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    {
+        copy_async_full_buffer( src, dst, stream );
+    }
+
+    template <class ForEach, class SrcArray, class DstArray>
+    void zwxy_to_yzwx( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    {
+        copy_async_full_buffer( src, dst, stream );
+    }
+
+    template <class ForEach, class SrcArray, class DstArray>
+    void yzwx_to_zwxy( const ForEach &, const SrcArray &src, DstArray &dst, cudaStream_t stream = 0 ) const
+    {
+        copy_async_full_buffer( src, dst, stream );
+    }
+
 private:
     template <class SrcArray, class DstArray>
     void copy_step_z_slabs( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
@@ -191,6 +215,20 @@ private:
         params.kind   = cudaMemcpyDeviceToDevice;
 
         CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+    }
+
+    template <class SrcArray, class DstArray>
+    void copy_async_full_buffer( const SrcArray &src, DstArray &dst, cudaStream_t stream ) const
+    {
+        CUDA_SAFE_CALL(
+            cudaMemcpyAsync(
+                dst.raw_ptr(),
+                src.raw_ptr(),
+                sizeof( ValueType ) * static_cast<std::size_t>( src.total_size() ),
+                cudaMemcpyDeviceToDevice,
+                stream
+            )
+        );
     }
 
     std::size_t nx_;

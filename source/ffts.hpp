@@ -131,8 +131,8 @@ struct ffts_array_traits<Real, Complex, Memory, 4, strategy_4d_slab_slab<Backend
 {
     using real_array_t         = scfd::arrays::tensor_array_nd<Real, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
     using xyzw_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
-    using zwxy_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
-    using yzwx_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
+    using zwxy_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_1032_t>;
+    using yzwx_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_2103_t>;
     using stage0_complex_array_t = xyzw_complex_array_t;
     using stage1_complex_array_t = zwxy_complex_array_t;
     using stage2_complex_array_t = zwxy_complex_array_t;
@@ -508,6 +508,7 @@ private:
     {
         const long long int zw_batch = static_cast<long long int>( nx_ * ny_ );
         const long long int xy_batch = static_cast<long long int>( nz_ * nw_half_ );
+        const long long int xy_stride = static_cast<long long int>( nz_ * nw_half_ );
 
         base_fft_.template add_plan_2D<fftm::direction::R2C>(
             "forward_zw",
@@ -545,12 +546,12 @@ private:
             static_cast<long long int>( ny_ ),
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
+            xy_stride,
             1,
-            static_cast<long long int>( nx_ * ny_ ),
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
+            xy_stride,
             1,
-            static_cast<long long int>( nx_ * ny_ ),
             xy_batch
         );
 
@@ -560,12 +561,12 @@ private:
             static_cast<long long int>( ny_ ),
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
+            xy_stride,
             1,
-            static_cast<long long int>( nx_ * ny_ ),
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
+            xy_stride,
             1,
-            static_cast<long long int>( nx_ * ny_ ),
             xy_batch
         );
     }
@@ -582,6 +583,7 @@ private:
     {
         stage1_.init( nz_, nw_half_, nx_, ny_ );
         direct_transposer_.reset( new detail::direct_transpose_4d( nx_, ny_, nz_, nw_half_ ) );
+        init_memcpy_transposer_( transpose_backend_tag() );
     }
 
     void init_memcpy_transposer_( std::integral_constant<transpose_backend, transpose_backend::direct> )
@@ -774,6 +776,86 @@ private:
     }
 
     template <class SrcArray, class DstArray>
+    void transpose_xyzw_to_zwxy_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::direct>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        direct_transposer_->xyzw_to_zwxy( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_xyzw_to_zwxy_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        memcpy_transposer_->xyzw_to_zwxy( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_zwxy_to_xyzw_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::direct>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        direct_transposer_->zwxy_to_xyzw( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_zwxy_to_xyzw_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        memcpy_transposer_->zwxy_to_xyzw( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_zwxy_to_yzwx_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::direct>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        direct_transposer_->zwxy_to_yzwx( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_zwxy_to_yzwx_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        memcpy_transposer_->zwxy_to_yzwx( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_yzwx_to_zwxy_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::direct>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        direct_transposer_->yzwx_to_zwxy( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
+    void transpose_yzwx_to_zwxy_backend_(
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
+        const SrcArray &src,
+        DstArray &dst
+    )
+    {
+        memcpy_transposer_->yzwx_to_zwxy( for_each_4d_, src, dst );
+    }
+
+    template <class SrcArray, class DstArray>
     void transpose_xyzw_to_xywz_( const SrcArray &src, DstArray &dst )
     {
         transpose_xyzw_to_xywz_backend_( transpose_backend_tag(), src, dst );
@@ -812,25 +894,25 @@ private:
     template <class SrcArray, class DstArray>
     void transpose_xyzw_to_zwxy_( const SrcArray &src, DstArray &dst )
     {
-        direct_transposer_->xyzw_to_zwxy( for_each_4d_, src, dst );
+        transpose_xyzw_to_zwxy_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_xyzw_( const SrcArray &src, DstArray &dst )
     {
-        direct_transposer_->zwxy_to_xyzw( for_each_4d_, src, dst );
+        transpose_zwxy_to_xyzw_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_yzwx_( const SrcArray &src, DstArray &dst )
     {
-        direct_transposer_->zwxy_to_yzwx( for_each_4d_, src, dst );
+        transpose_zwxy_to_yzwx_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_yzwx_to_zwxy_( const SrcArray &src, DstArray &dst )
     {
-        direct_transposer_->yzwx_to_zwxy( for_each_4d_, src, dst );
+        transpose_yzwx_to_zwxy_backend_( transpose_backend_tag(), src, dst );
     }
 
     void copy_spectral_field_( const complex_array_t<4> &src, complex_array_t<4> &dst )
