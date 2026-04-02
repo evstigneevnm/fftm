@@ -93,7 +93,7 @@ public:
         T hy;
         T hz;
 
-        __device__ __host__ void operator()( const idx_t &idx )
+        __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
             const T x  = hx * static_cast<T>( idx[0] );
             const T y  = hy * static_cast<T>( idx[1] );
@@ -140,7 +140,7 @@ public:
         int nx;
         int ny;
 
-        __device__ __host__ void operator()( const idx_t &idx )
+        __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
             const int kx = idx[0] <= nx / 2 ? idx[0] : idx[0] - nx;
             const int ky = idx[1] <= ny / 2 ? idx[1] : idx[1] - ny;
@@ -173,7 +173,7 @@ public:
         int nx;
         int ny;
 
-        __device__ __host__ void operator()( const idx_t &idx )
+        __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
             const int kx = idx[0] <= nx / 2 ? idx[0] : idx[0] - nx;
             const int ky = idx[1] <= ny / 2 ? idx[1] : idx[1] - ny;
@@ -202,7 +202,7 @@ public:
         real_array_t field;
         T scale;
 
-        __device__ __host__ void operator()( const idx_t &idx )
+        __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
             field( idx ) *= scale;
         }
@@ -221,7 +221,7 @@ public:
         real_array_t solution_error_sq;
         real_array_t gradient_error_sq;
 
-        __device__ __host__ void operator()( const idx_t &idx )
+        __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
             const T solution_diff = numerical_solution( idx ) - exact_solution( idx );
             const T dx_diff       = numerical_dx( idx ) - exact_dx( idx );
