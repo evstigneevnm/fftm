@@ -101,6 +101,62 @@ public:
     }
 
     template <class ForEach, class SrcArray, class DstArray>
+    void xyzw_to_zwxy( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
+    {
+        transpose<2, 3, 0, 1>(
+            for_each,
+            src,
+            dst,
+            dims_xyzw(),
+            dims_zwxy(),
+            "xyzw_to_zwxy source",
+            "xyzw_to_zwxy destination"
+        );
+    }
+
+    template <class ForEach, class SrcArray, class DstArray>
+    void zwxy_to_xyzw( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
+    {
+        transpose<2, 3, 0, 1>(
+            for_each,
+            src,
+            dst,
+            dims_zwxy(),
+            dims_xyzw(),
+            "zwxy_to_xyzw source",
+            "zwxy_to_xyzw destination"
+        );
+    }
+
+    template <class ForEach, class SrcArray, class DstArray>
+    void zwxy_to_yzwx( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
+    {
+        transpose<3, 0, 1, 2>(
+            for_each,
+            src,
+            dst,
+            dims_zwxy(),
+            dims_yzwx(),
+            "zwxy_to_yzwx source",
+            "zwxy_to_yzwx destination"
+        );
+    }
+
+    template <class ForEach, class SrcArray, class DstArray>
+    void yzwx_to_zwxy( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
+    {
+        transpose<1, 2, 3, 0>(
+            for_each,
+            src,
+            dst,
+            dims_yzwx(),
+            dims_zwxy(),
+            "yzwx_to_zwxy source",
+            "yzwx_to_zwxy destination"
+        );
+    }
+
+    template <class ForEach, class SrcArray, class DstArray>
     void xzwy_to_yzwx( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<3, 1, 2, 0>(
@@ -153,6 +209,11 @@ private:
     dims_4d_t dims_xzwy() const
     {
         return { nx_, nz_, nw_half_, ny_ };
+    }
+
+    dims_4d_t dims_zwxy() const
+    {
+        return { nz_, nw_half_, nx_, ny_ };
     }
 
     dims_4d_t dims_yzwx() const

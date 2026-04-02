@@ -31,8 +31,7 @@ public:
         std::size_t             nx,
         std::size_t             ny,
         std::size_t             nz,
-        std::size_t             nw,
-        fftm::transpose_backend backend
+        std::size_t             nw
     )
         : nx_( nx )
         , ny_( ny )
@@ -55,7 +54,7 @@ public:
             throw std::logic_error( "test_4D_poisson: all grid dimensions must be at least 2." );
         }
 
-        ffts_.init( nx_, ny_, nz_, nw_, fftm::ffts_init_options{ backend } );
+        ffts_.init( nx_, ny_, nz_, nw_ );
         allocate_arrays();
         for_each_.block_size = 128;
         fill_problem_data();
@@ -463,7 +462,15 @@ using results_4d_t = typename poisson_4d_fft_case<FFTS>::results_t;
 
 struct test_options_4d
 {
-    fftm::transpose_backend backend = fftm::transpose_backend::direct;
+    enum class strategy_selector
+    {
+        pencil_direct,
+        pencil_memcpy,
+        slab_direct,
+        all
+    };
+
+    strategy_selector strategy = strategy_selector::pencil_direct;
     std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> grids;
 };
 
@@ -475,28 +482,50 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     while ( arg_i < argc )
     {
         const std::string arg = argv[arg_i];
-        if ( arg != "--transpose" )
+        if ( arg != "--strategy" && arg != "--transpose" )
         {
             break;
         }
 
         if ( arg_i + 1 >= argc )
         {
-            throw std::logic_error( "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]" );
+            throw std::logic_error(
+                "USAGE: test_4D_poisson.bin [--strategy pencil-direct|pencil-memcpy|slab-direct|all] "
+                "[Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]]"
+            );
         }
 
-        const std::string backend_name = argv[arg_i + 1];
-        if ( backend_name == "direct" )
+        const std::string strategy_name = argv[arg_i + 1];
+        if ( strategy_name == "pencil-direct" )
         {
-            options.backend = fftm::transpose_backend::direct;
+            options.strategy = test_options_4d::strategy_selector::pencil_direct;
         }
-        else if ( backend_name == "memcpy" )
+        else if ( strategy_name == "pencil-memcpy" )
         {
-            options.backend = fftm::transpose_backend::memcpy;
+            options.strategy = test_options_4d::strategy_selector::pencil_memcpy;
+        }
+        else if ( strategy_name == "slab-direct" )
+        {
+            options.strategy = test_options_4d::strategy_selector::slab_direct;
+        }
+        else if ( strategy_name == "all" )
+        {
+            options.strategy = test_options_4d::strategy_selector::all;
+        }
+        else if ( arg == "--transpose" && strategy_name == "direct" )
+        {
+            options.strategy = test_options_4d::strategy_selector::pencil_direct;
+        }
+        else if ( arg == "--transpose" && strategy_name == "memcpy" )
+        {
+            options.strategy = test_options_4d::strategy_selector::pencil_memcpy;
         }
         else
         {
-            throw std::logic_error( "Unknown transpose backend '" + backend_name + "'. Use direct or memcpy." );
+            throw std::logic_error(
+                "Unknown 4D strategy '" + strategy_name +
+                "'. Use pencil-direct, pencil-memcpy, slab-direct, or all."
+            );
         }
         arg_i += 2;
     }
@@ -513,7 +542,10 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
 
     if ( ( ( argc - arg_i ) % 4 ) != 0 )
     {
-        throw std::logic_error( "USAGE: test_4D_poisson.bin [--transpose direct|memcpy] Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]" );
+        throw std::logic_error(
+            "USAGE: test_4D_poisson.bin [--strategy pencil-direct|pencil-memcpy|slab-direct|all] "
+            "[Nx1 Ny1 Nz1 Nw1 [Nx2 Ny2 Nz2 Nw2 ...]]"
+        );
     }
 
     options.grids.reserve( ( argc - arg_i ) / 4 );
@@ -530,6 +562,66 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
     return options;
 }
 
+template <class FFTS>
+void run_strategy_4d(
+    scfd::utils::log_std &log,
+    const std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> &grids
+)
+{
+    using grid_t = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
+    using run_t  = std::pair<grid_t, results_4d_t<FFTS>>;
+
+    log.info_f( "strategy = %s", FFTS::strategy_name() );
+
+    std::vector<run_t> runs;
+    runs.reserve( grids.size() );
+
+    for ( const auto &grid : grids )
+    {
+        const auto nx = std::get<0>( grid );
+        const auto ny = std::get<1>( grid );
+        const auto nz = std::get<2>( grid );
+        const auto nw = std::get<3>( grid );
+
+        poisson_4d_fft_case<FFTS> poisson_case( nx, ny, nz, nw );
+        const double              rhs_mean = poisson_case.rhs_mean();
+
+        if ( std::abs( rhs_mean ) > 1.0e-12 )
+        {
+            log.warning_f(
+                "rhs_mean = %.8e for strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the zero Fourier mode,"
+                " so the manufactured rhs should have zero mean.",
+                rhs_mean,
+                FFTS::strategy_name(),
+                nx,
+                ny,
+                nz,
+                nw
+            );
+        }
+
+        runs.push_back( { grid, poisson_case.run() } );
+    }
+
+    for ( const auto &run : runs )
+    {
+        const auto &grid = run.first;
+        const auto &res  = run.second;
+
+        log.info_f(
+            "strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
+            FFTS::strategy_name(),
+            std::get<0>( grid ),
+            std::get<1>( grid ),
+            std::get<2>( grid ),
+            std::get<3>( grid ),
+            res.first.first,
+            res.first.second,
+            res.second
+        );
+    }
+}
+
 int main( int argc, char *argv[] )
 {
     scfd::utils::log_std log;
@@ -537,59 +629,33 @@ int main( int argc, char *argv[] )
     try
     {
         using base_fft_t = fftm::wrap::cufft_wrap_many<double>;
-        using ffts_t     = fftm::ffts<base_fft_t, scfd::backend::cuda>;
-        using grid_t     = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
-        using run_t      = std::pair<grid_t, results_4d_t<ffts_t>>;
+        using pencil_direct_ffts_t =
+            fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::direct>>;
+        using pencil_memcpy_ffts_t =
+            fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::memcpy>>;
+        using slab_direct_ffts_t =
+            fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_slab_slab<fftm::transpose_backend::direct>>;
 
         scfd::utils::init_cuda_persistent( log, 0 );
 
         const auto options = parse_options_4d( argc, argv );
-        log.info_f( "transpose_backend = %s", fftm::transpose_backend_name( options.backend ) );
 
-        std::vector<run_t> runs;
-        runs.reserve( options.grids.size() );
-
-        for ( const auto &grid : options.grids )
+        switch ( options.strategy )
         {
-            const auto nx = std::get<0>( grid );
-            const auto ny = std::get<1>( grid );
-            const auto nz = std::get<2>( grid );
-            const auto nw = std::get<3>( grid );
-
-            poisson_4d_fft_case<ffts_t> poisson_case( nx, ny, nz, nw, options.backend );
-            const double                rhs_mean = poisson_case.rhs_mean();
-
-            if ( std::abs( rhs_mean ) > 1.0e-12 )
-            {
-                log.warning_f(
-                    "rhs_mean = %.8e for Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the zero Fourier mode,"
-                    " so the manufactured rhs should have zero mean.",
-                    rhs_mean,
-                    nx,
-                    ny,
-                    nz,
-                    nw
-                );
-            }
-
-            runs.push_back( { grid, poisson_case.run() } );
-        }
-
-        for ( const auto &run : runs )
-        {
-            const auto &grid = run.first;
-            const auto &res  = run.second;
-
-            log.info_f(
-                "Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
-                std::get<0>( grid ),
-                std::get<1>( grid ),
-                std::get<2>( grid ),
-                std::get<3>( grid ),
-                res.first.first,
-                res.first.second,
-                res.second
-            );
+            case test_options_4d::strategy_selector::pencil_direct:
+                run_strategy_4d<pencil_direct_ffts_t>( log, options.grids );
+                break;
+            case test_options_4d::strategy_selector::pencil_memcpy:
+                run_strategy_4d<pencil_memcpy_ffts_t>( log, options.grids );
+                break;
+            case test_options_4d::strategy_selector::slab_direct:
+                run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
+                break;
+            case test_options_4d::strategy_selector::all:
+                run_strategy_4d<pencil_direct_ffts_t>( log, options.grids );
+                run_strategy_4d<pencil_memcpy_ffts_t>( log, options.grids );
+                run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
+                break;
         }
 
         return 0;
