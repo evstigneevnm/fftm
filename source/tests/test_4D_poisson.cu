@@ -111,12 +111,7 @@ public:
             const T dw = w - pi;
             const T exponent = -( dx * dx + dy * dy + dz * dz + dw * dw );
 
-            T gaussian;
-#ifndef __CUDA_ARCH__
-            gaussian = std::exp( exponent );
-#else
-            gaussian = ::exp( exponent );
-#endif
+            const T gaussian = scfd::utils::scalar_traits<T>::exp( exponent );
 
             const T sin_x = scfd::utils::scalar_traits<T>::sin( x );
             const T cos_x = scfd::utils::scalar_traits<T>::cos( x );
