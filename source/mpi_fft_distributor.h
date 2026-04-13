@@ -194,8 +194,8 @@ public:
             comm_order2_.push_back((myid_i+i)%process_grid_.p1);
         }
 
-        send_req.resize(std::max(process_grid_.p1, process_grid_.p2), MPI_REQUEST_NULL);
-        recv_req.resize(std::max(process_grid_.p1, process_grid_.p2), MPI_REQUEST_NULL);
+        send_req.resize(std::max(process_grid_.p1, process_grid_.p2), scfd::communication::detail::mpi_request());
+        recv_req.resize(std::max(process_grid_.p1, process_grid_.p2), scfd::communication::detail::mpi_request());
 
         domainsize_ = std::max(input_dim.size_x[myid_i]*input_dim.size_y[myid_j]*(input_dim.size_z[0]/2+1), 
         transposed1_dim.size_x[myid_i]*transposed1_dim.size_y[0]*transposed1_dim.size_z[myid_j]);
@@ -225,7 +225,6 @@ public:
         for (std::size_t i = 0; i < comm_order1_.size(); i++)
         {
             auto p_j = comm_order1_[i];
-            std::cout << "p_j = " << p_j << ", recv_req[p_j]: " << recv_req[p_j] << std::endl;
             // Start non-blocking MPI recv
             std::size_t islice = transposed1_dim.size_x[myid_i]*input_dim.start_y[p_j]*transposed1_dim.size_z[myid_j];
             std::size_t isize = transposed1_dim.size_x[myid_i]*input_dim.size_y[p_j]*transposed1_dim.size_z[myid_j];
@@ -233,15 +232,19 @@ public:
             std::size_t osize = transposed1_dim.size_z[p_j]*input_dim.size_y[myid_j]*input_dim.size_x[myid_i];
 
             //int MPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Request *request)            
-            SCFD_MPI_SAFE_CALL( MPI_Irecv(&buf_->buf()[islice],
-                sizeof(Tout)*isize, MPI_BYTE,
-                p_j, p_j, comm1_->comm(), &recv_req[p_j]) );
+            scfd::communication::detail::irecv(
+                &buf_->buf()[islice], sizeof(Tout)*isize,
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
+                p_j, p_j, comm1_->comm(), &recv_req[p_j]
+            );
 
 
             // int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm, MPI_Request *request)
-            SCFD_MPI_SAFE_CALL( MPI_Isend(&in_ptr[oslice], 
-                sizeof(Tin)*osize, MPI_BYTE,
-                p_j, myid_j, comm1_->comm(), &send_req[p_j]) );
+            scfd::communication::detail::isend(
+                &in_ptr[oslice], sizeof(Tin)*osize,
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
+                p_j, myid_j, comm1_->comm(), &send_req[p_j]
+            );
 
         }
         
@@ -259,8 +262,7 @@ public:
         int p = 0,count=0;
         do
         {
-            //int MPI_Waitany(int count, MPI_Request array_of_requests[], int *index, MPI_Status *status)
-            SCFD_MPI_SAFE_CALL( MPI_Waitany(process_grid_.p2, recv_req.data(), &p, MPI_STATUSES_IGNORE) );
+            p = scfd::communication::detail::waitany(process_grid_.p2, recv_req.data());
             if (p == MPI_UNDEFINED)
             {
                 break;
@@ -273,13 +275,23 @@ public:
 
 
 
-        SCFD_MPI_SAFE_CALL(MPI_Waitall(process_grid_.p2, send_req.data(), MPI_STATUSES_IGNORE) );
+        scfd::communication::detail::waitall(process_grid_.p2, send_req.data());
         for (std::size_t i = 0; i < comm_order1_.size(); i++)
         {
             auto p_j = comm_order1_[i];
             int flag_recv, flag_send;
-            SCFD_MPI_SAFE_CALL( MPI_Test(&recv_req[p_j], &flag_recv, MPI_STATUSES_IGNORE) );
-            SCFD_MPI_SAFE_CALL( MPI_Test(&send_req[p_j], &flag_send, MPI_STATUSES_IGNORE) );
+            SCFD_MPI_SAFE_CALL(
+                MPI_Test(
+                    recv_req[p_j].native_ptr(), &flag_recv,
+                    scfd::communication::detail::raw_status( static_cast<scfd::communication::detail::mpi_status *>( nullptr ) )
+                )
+            );
+            SCFD_MPI_SAFE_CALL(
+                MPI_Test(
+                    send_req[p_j].native_ptr(), &flag_send,
+                    scfd::communication::detail::raw_status( static_cast<scfd::communication::detail::mpi_status *>( nullptr ) )
+                )
+            );
             std::cout << "myid  = " << mpi_.myid << ", flag_recv: " << flag_recv << ", flag_send: " << flag_send << std::endl;
         }
 
@@ -300,8 +312,8 @@ private:
     std::vector<int> comm_order1_;
     std::vector<int> comm_order2_;
     int myid_i, myid_j, myid_k;
-    std::vector<MPI_Request> send_req;
-    std::vector<MPI_Request> recv_req;
+    std::vector<scfd::communication::detail::mpi_request> send_req;
+    std::vector<scfd::communication::detail::mpi_request> recv_req;
     local_sizes_t input_dim, transposed1_dim, transposed2_dim;
     std::size_t domainsize_;
     processor_grid process_grid_;
