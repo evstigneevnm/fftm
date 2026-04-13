@@ -79,8 +79,13 @@ public:
             throw std::logic_error( "mpi_transpose_3d_same_z communicator size does not match X partition count" );
         }
 
-        send_buffer_.init( nx_local_ * ny_global_ * nz_local_ );
-        recv_buffer_.init( nx_local_ * ny_global_ * nz_local_ );
+        const std::size_t total_send_elems =
+            std::max( nx_local_ * ny_global_ * nz_local_, nx_global_ * ny_local_ * nz_local_ );
+        const std::size_t total_recv_elems =
+            std::max( nx_local_ * ny_global_ * nz_local_, nx_global_ * ny_local_ * nz_local_ );
+
+        send_buffer_.init( total_send_elems );
+        recv_buffer_.init( total_recv_elems );
 
         send_requests_.assign( line_comm_info_.num_procs, MPI_REQUEST_NULL );
         recv_requests_.assign( line_comm_info_.num_procs, MPI_REQUEST_NULL );
@@ -212,6 +217,11 @@ private:
         return input_dim_.start_x[source_i] * ny_local_;
     }
 
+    std::size_t forward_recv_pack_offset_elems_( int source_i ) const
+    {
+        return forward_recv_offsets_[source_i];
+    }
+
     std::size_t backward_send_offset_elems_( int target_i ) const
     {
         return input_dim_.start_x[target_i] * ny_local_;
@@ -230,6 +240,7 @@ private:
     void init_forward_layout_()
     {
         const int comm_size = line_comm_info_.num_procs;
+        forward_recv_offsets_.resize( comm_size );
         forward_send_offsets_.resize( comm_size );
         forward_sendcounts_.resize( comm_size );
         forward_sdispls_.resize( comm_size );
@@ -245,6 +256,13 @@ private:
             packed_offset += forward_chunk_elems_( p );
         }
 
+        packed_offset = 0;
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            forward_recv_offsets_[p] = packed_offset;
+            packed_offset += input_dim_.size_x[p] * ny_local_ * nz_local_;
+        }
+
         for ( int p = 0; p < comm_size; ++p )
         {
             forward_sendcounts_[p] = detail::mpi_int_cast( bytes_from_elems_( forward_chunk_elems_( p ) ), "same_z forward sendcounts" );
@@ -254,7 +272,7 @@ private:
                 "same_z forward recvcounts"
             );
             forward_rdispls_[p]    = detail::mpi_int_cast(
-                bytes_from_elems_( forward_recv_offset_elems_( p ) ),
+                bytes_from_elems_( forward_recv_pack_offset_elems_( p ) ),
                 "same_z forward rdispls"
             );
         }
@@ -263,6 +281,7 @@ private:
     void init_backward_layout_()
     {
         const int comm_size = line_comm_info_.num_procs;
+        backward_send_offsets_.resize( comm_size );
         backward_recv_offsets_.resize( comm_size );
         backward_sendcounts_.resize( comm_size );
         backward_sdispls_.resize( comm_size );
@@ -272,6 +291,13 @@ private:
         backward_recvtypes_w_.assign( comm_size, MPI_BYTE );
 
         std::size_t packed_offset = 0;
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            backward_send_offsets_[p] = packed_offset;
+            packed_offset += input_dim_.size_x[p] * ny_local_ * nz_local_;
+        }
+
+        packed_offset = 0;
         for ( int p = 0; p < comm_size; ++p )
         {
             backward_recv_offsets_[p] = packed_offset;
@@ -285,7 +311,7 @@ private:
                 "same_z backward sendcounts"
             );
             backward_sdispls_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_offset_elems_( p ) ),
+                bytes_from_elems_( backward_send_offsets_[p] ),
                 "same_z backward sdispls"
             );
             backward_recvcounts_[p] = detail::mpi_int_cast( bytes_from_elems_( backward_chunk_elems_( p ) ), "same_z backward recvcounts" );
@@ -332,6 +358,34 @@ private:
         CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
     }
 
+    void unpack_forward_chunk_async_(
+        const value_type *src_ptr,
+        std::size_t       packed_x_size,
+        std::size_t       dst_x_offset,
+        value_type       *dst_ptr,
+        cudaStream_t      stream
+    ) const
+    {
+        cudaMemcpy3DParms params = {};
+        params.srcPos            = make_cudaPos( 0, 0, 0 );
+        params.srcPtr            = make_cudaPitchedPtr(
+            const_cast<value_type *>( src_ptr ),
+            ny_local_ * sizeof( value_type ),
+            ny_local_,
+            packed_x_size
+        );
+        params.dstPos = make_cudaPos( 0, dst_x_offset, 0 );
+        params.dstPtr = make_cudaPitchedPtr(
+            dst_ptr,
+            ny_local_ * sizeof( value_type ),
+            ny_local_,
+            nx_global_
+        );
+        params.extent = make_cudaExtent( ny_local_ * sizeof( value_type ), packed_x_size, nz_local_ );
+        params.kind   = cudaMemcpyDeviceToDevice;
+        CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+    }
+
     void unpack_backward_chunk_async_(
         const value_type *src_ptr,
         std::size_t       packed_y_size,
@@ -360,6 +414,34 @@ private:
         CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
     }
 
+    void pack_backward_chunk_async_(
+        const value_type *src_ptr,
+        std::size_t       src_x_offset,
+        std::size_t       packed_x_size,
+        value_type       *dst_ptr,
+        cudaStream_t      stream
+    ) const
+    {
+        cudaMemcpy3DParms params = {};
+        params.srcPos            = make_cudaPos( 0, src_x_offset, 0 );
+        params.srcPtr            = make_cudaPitchedPtr(
+            const_cast<value_type *>( src_ptr ),
+            ny_local_ * sizeof( value_type ),
+            ny_local_,
+            nx_global_
+        );
+        params.dstPos = make_cudaPos( 0, 0, 0 );
+        params.dstPtr = make_cudaPitchedPtr(
+            dst_ptr,
+            ny_local_ * sizeof( value_type ),
+            ny_local_,
+            packed_x_size
+        );
+        params.extent = make_cudaExtent( ny_local_ * sizeof( value_type ), packed_x_size, nz_local_ );
+        params.kind   = cudaMemcpyDeviceToDevice;
+        CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+    }
+
     template <class ArrayIn>
     void pack_forward_( const ArrayIn &in )
     {
@@ -376,15 +458,15 @@ private:
         synchronize_streams_();
     }
 
-    template <class ArrayIn, class ArrayOut>
-    void copy_backward_self_chunk_async_( const ArrayIn &in, ArrayOut &out )
+    template <class ArrayOut>
+    void unpack_forward_chunk_async_( int source_i, ArrayOut &out )
     {
-        unpack_backward_chunk_async_(
-            in.raw_ptr() + backward_send_offset_elems_( myid_i_ ),
-            ny_local_,
-            output_dim_.start_y[myid_i_],
+        unpack_forward_chunk_async_(
+            recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( source_i ),
+            input_dim_.size_x[source_i],
+            input_dim_.start_x[source_i],
             out.raw_ptr(),
-            streams_[myid_i_].stream()
+            streams_[source_i].stream()
         );
     }
 
@@ -400,6 +482,22 @@ private:
         );
     }
 
+    template <class ArrayIn>
+    void pack_backward_( const ArrayIn &in )
+    {
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            pack_backward_chunk_async_(
+                in.raw_ptr(),
+                input_dim_.start_x[p],
+                input_dim_.size_x[p],
+                send_buffer_.raw_ptr() + backward_send_offsets_[p],
+                streams_[p].stream()
+            );
+        }
+        synchronize_streams_();
+    }
+
     template <class ArrayOut>
     void forward_p2p_waitall_( ArrayOut &out )
     {
@@ -412,7 +510,7 @@ private:
             if ( p == myid_i_ )
                 continue;
             line_comm_info_.irecv(
-                out.raw_ptr() + forward_recv_offset_elems_( p ),
+                recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p ),
                 detail::mpi_int_cast( bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), "same_z forward recv count" ),
                 MPI_BYTE,
                 p,
@@ -430,13 +528,19 @@ private:
         }
 
         CUDA_SAFE_CALL( cudaMemcpyAsync(
-            out.raw_ptr() + forward_recv_offset_elems_( myid_i_ ),
+            recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( myid_i_ ),
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
             bytes_from_elems_( forward_chunk_elems_( myid_i_ ) ),
-            cudaMemcpyDeviceToDevice
+            cudaMemcpyDeviceToDevice,
+            streams_[myid_i_].stream()
         ) );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            unpack_forward_chunk_async_( p, out );
+        }
+        synchronize_streams_();
         line_comm_info_.waitall( comm_size, send_requests_.data() );
 #endif
     }
@@ -453,7 +557,7 @@ private:
             if ( p == myid_i_ )
                 continue;
             line_comm_info_.irecv(
-                out.raw_ptr() + forward_recv_offset_elems_( p ),
+                recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p ),
                 detail::mpi_int_cast( bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), "same_z forward recv count" ),
                 MPI_BYTE,
                 p,
@@ -471,11 +575,14 @@ private:
         }
 
         CUDA_SAFE_CALL( cudaMemcpyAsync(
-            out.raw_ptr() + forward_recv_offset_elems_( myid_i_ ),
+            recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( myid_i_ ),
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
             bytes_from_elems_( forward_chunk_elems_( myid_i_ ) ),
-            cudaMemcpyDeviceToDevice
+            cudaMemcpyDeviceToDevice,
+            streams_[myid_i_].stream()
         ) );
+
+        unpack_forward_chunk_async_( myid_i_, out );
 
         int completed = 0;
         while ( completed < comm_size - 1 )
@@ -483,9 +590,11 @@ private:
             const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
             if ( p == MPI_UNDEFINED )
                 break;
+            unpack_forward_chunk_async_( p, out );
             completed++;
         }
 
+        synchronize_streams_();
         line_comm_info_.waitall( comm_size, send_requests_.data() );
 #endif
     }
@@ -501,11 +610,17 @@ private:
             forward_sendcounts_.data(),
             forward_sdispls_.data(),
             MPI_BYTE,
-            static_cast<void *>( out.raw_ptr() ),
+            static_cast<void *>( recv_buffer_.raw_ptr() ),
             forward_recvcounts_.data(),
             forward_rdispls_.data(),
             MPI_BYTE
         );
+
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            unpack_forward_chunk_async_( p, out );
+        }
+        synchronize_streams_();
 #endif
     }
 
@@ -520,11 +635,17 @@ private:
             forward_sendcounts_.data(),
             forward_sdispls_.data(),
             forward_sendtypes_w_.data(),
-            static_cast<void *>( out.raw_ptr() ),
+            static_cast<void *>( recv_buffer_.raw_ptr() ),
             forward_recvcounts_.data(),
             forward_rdispls_.data(),
             forward_recvtypes_w_.data()
         );
+
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            unpack_forward_chunk_async_( p, out );
+        }
+        synchronize_streams_();
 #endif
     }
 
@@ -535,7 +656,7 @@ private:
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         const int comm_size = line_comm_info_.num_procs;
-        copy_backward_self_chunk_async_( in, out );
+        pack_backward_( in );
 
         for ( int p = 0; p < comm_size; ++p )
         {
@@ -550,7 +671,7 @@ private:
                 recv_requests_[p]
             );
             line_comm_info_.isend(
-                in.raw_ptr() + backward_send_offset_elems_( p ),
+                send_buffer_.raw_ptr() + backward_send_offsets_[p],
                 detail::mpi_int_cast( bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), "same_z backward send count" ),
                 MPI_BYTE,
                 p,
@@ -559,11 +680,18 @@ private:
             );
         }
 
+        CUDA_SAFE_CALL( cudaMemcpyAsync(
+            recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
+            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+            bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
+            cudaMemcpyDeviceToDevice,
+            streams_[myid_i_].stream()
+        ) );
+
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
         for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p != myid_i_ )
-                unpack_backward_chunk_async_( p, out );
+            unpack_backward_chunk_async_( p, out );
         }
         synchronize_streams_();
         line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -577,7 +705,7 @@ private:
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         const int comm_size = line_comm_info_.num_procs;
-        copy_backward_self_chunk_async_( in, out );
+        pack_backward_( in );
 
         for ( int p = 0; p < comm_size; ++p )
         {
@@ -592,7 +720,7 @@ private:
                 recv_requests_[p]
             );
             line_comm_info_.isend(
-                in.raw_ptr() + backward_send_offset_elems_( p ),
+                send_buffer_.raw_ptr() + backward_send_offsets_[p],
                 detail::mpi_int_cast( bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), "same_z backward send count" ),
                 MPI_BYTE,
                 p,
@@ -600,6 +728,16 @@ private:
                 send_requests_[p]
             );
         }
+
+        CUDA_SAFE_CALL( cudaMemcpyAsync(
+            recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
+            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+            bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
+            cudaMemcpyDeviceToDevice,
+            streams_[myid_i_].stream()
+        ) );
+
+        unpack_backward_chunk_async_( myid_i_, out );
 
         int completed = 0;
         while ( completed < comm_size - 1 )
@@ -622,8 +760,10 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        pack_backward_( in );
+
         line_comm_info_.alltoallv(
-            static_cast<const void *>( in.raw_ptr() ),
+            static_cast<const void *>( send_buffer_.raw_ptr() ),
             backward_sendcounts_.data(),
             backward_sdispls_.data(),
             MPI_BYTE,
@@ -633,11 +773,9 @@ private:
             MPI_BYTE
         );
 
-        copy_backward_self_chunk_async_( in, out );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
-            if ( p != myid_i_ )
-                unpack_backward_chunk_async_( p, out );
+            unpack_backward_chunk_async_( p, out );
         }
         synchronize_streams_();
 #endif
@@ -649,8 +787,10 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        pack_backward_( in );
+
         line_comm_info_.alltoallw(
-            static_cast<const void *>( in.raw_ptr() ),
+            static_cast<const void *>( send_buffer_.raw_ptr() ),
             backward_sendcounts_.data(),
             backward_sdispls_.data(),
             backward_sendtypes_w_.data(),
@@ -660,11 +800,9 @@ private:
             backward_recvtypes_w_.data()
         );
 
-        copy_backward_self_chunk_async_( in, out );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
-            if ( p != myid_i_ )
-                unpack_backward_chunk_async_( p, out );
+            unpack_backward_chunk_async_( p, out );
         }
         synchronize_streams_();
 #endif
@@ -696,6 +834,7 @@ private:
     std::vector<scfd::utils::cuda_stream_wrap> streams_;
 
     std::vector<std::size_t> forward_send_offsets_;
+    std::vector<std::size_t> forward_recv_offsets_;
     std::vector<int>         forward_sendcounts_;
     std::vector<int>         forward_sdispls_;
     std::vector<int>         forward_recvcounts_;
@@ -703,6 +842,7 @@ private:
     std::vector<MPI_Datatype> forward_sendtypes_w_;
     std::vector<MPI_Datatype> forward_recvtypes_w_;
 
+    std::vector<std::size_t> backward_send_offsets_;
     std::vector<std::size_t> backward_recv_offsets_;
     std::vector<int>         backward_sendcounts_;
     std::vector<int>         backward_sdispls_;
