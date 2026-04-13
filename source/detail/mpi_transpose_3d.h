@@ -633,10 +633,10 @@ private:
 
         for ( int p = 0; p < row_size; ++p )
         {
+            pack_backward_chunk_async_( p, in );
+
             if ( p == myid_j_ )
                 continue;
-
-            pack_backward_chunk_async_( p, in );
 
             row_comm_info_.irecv(
                 out.raw_ptr() + backward_recv_offset_elems_( p ),
@@ -689,10 +689,10 @@ private:
 
         for ( int p = 0; p < row_size; ++p )
         {
+            pack_backward_chunk_async_( p, in );
+
             if ( p == myid_j_ )
                 continue;
-
-            pack_backward_chunk_async_( p, in );
 
             row_comm_info_.irecv(
                 out.raw_ptr() + backward_recv_offset_elems_( p ),
