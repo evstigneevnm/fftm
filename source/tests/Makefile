@@ -36,6 +36,10 @@ test_3D_poisson_mpi.bin: test_3D_poisson_mpi.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_3D_poisson_mpi.cu -c -o test_3D_poisson_mpi.o
 	mpicxx -g test_3D_poisson_mpi.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_3D_poisson_mpi.bin
 
+test_3D_poisson_mpi_tutorial.bin: test_3D_poisson_mpi_tutorial.cu
+	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_3D_poisson_mpi_tutorial.cu -c -o test_3D_poisson_mpi_tutorial.o
+	mpicxx -g test_3D_poisson_mpi_tutorial.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_3D_poisson_mpi_tutorial.bin
+
 test:
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_cudaMemcpy3DAsync_1.cu -o test_cudaMemcpy3DAsync_1.bin
 

@@ -60,6 +60,44 @@ struct poisson_3d_problem
 };
 
 template <class T, class Idx, class RealArray>
+struct fill_poisson_3d_rhs_functor
+{
+    RealArray rhs;
+    T         hx;
+    T         hy;
+    T         hz;
+    T         x0;
+    T         y0;
+    T         z0;
+
+    __DEVICE_TAG__ void operator()( const Idx &idx ) const
+    {
+        const T x = x0 + hx * static_cast<T>( idx[0] );
+        const T y = y0 + hy * static_cast<T>( idx[1] );
+        const T z = z0 + hz * static_cast<T>( idx[2] );
+
+        T rhs_value = T( 0 );
+        T exact_value = T( 0 );
+        T exact_dx_value = T( 0 );
+        T exact_dy_value = T( 0 );
+        T exact_dz_value = T( 0 );
+
+        poisson_3d_problem<T>::evaluate(
+            x,
+            y,
+            z,
+            rhs_value,
+            exact_value,
+            exact_dx_value,
+            exact_dy_value,
+            exact_dz_value
+        );
+
+        rhs( idx ) = rhs_value;
+    }
+};
+
+template <class T, class Idx, class RealArray>
 struct fill_poisson_3d_problem_functor
 {
     RealArray rhs;
