@@ -669,11 +669,13 @@ private:
             out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
             send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
             bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice
+            cudaMemcpyDeviceToDevice,
+            streams_[myid_j_].stream()
         ) );
 
         row_comm_info_.waitall( row_size, recv_requests_.data() );
         row_comm_info_.waitall( row_size, send_requests_.data() );
+        synchronize_streams_();
 #endif
     }
 
@@ -722,7 +724,8 @@ private:
             out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
             send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
             bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice
+            cudaMemcpyDeviceToDevice,
+            streams_[myid_j_].stream()
         ) );
 
         int completed = 0;
@@ -735,6 +738,7 @@ private:
         }
 
         row_comm_info_.waitall( row_size, send_requests_.data() );
+        synchronize_streams_();
 #endif
     }
 
