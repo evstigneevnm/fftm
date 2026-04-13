@@ -219,13 +219,12 @@ public:
 
         transpose1.size_x = input_dim.size_x;
         transpose1.size_y = input_dim.size_y;
-        input_dim.size_z.resize(1, g_sizes_.Nz);
+        transpose1.size_z.resize(1, g_sizes_.Nz);
         transpose1.size_w.resize(p_grid_.p3, (g_sizes_.Nw/2+1)/p_grid_.p3);
         for (std::size_t k = 0; k < (g_sizes_.Nw/2+1)%p_grid_.p3; k++)
             transpose1.size_w[k]++;
         transpose1.compute_offsets(g_sizes_._4D);
-        transpose1.debug_plot(mpi_, {myid_i, myid_j, myid_k});
-        
+
         transpose2.size_x = transpose1.size_x;
         transpose2.size_y.resize(1, g_sizes_.Ny);
         transpose2.size_z.resize(p_grid_.p2, (g_sizes_.Nz)/p_grid_.p2);
@@ -233,7 +232,6 @@ public:
             transpose2.size_z[k]++;     
         transpose2.size_w = transpose1.size_w;          
         transpose2.compute_offsets(g_sizes_._4D);
-        transpose2.debug_plot(mpi_, {myid_i, myid_j, myid_k});
 
         transpose3.size_x.resize(1, g_sizes_.Nx);
         transpose3.size_y.resize(p_grid_.p1, g_sizes_.Ny/p_grid_.p1);
@@ -242,7 +240,6 @@ public:
         transpose3.size_z = transpose2.size_z;
         transpose3.size_w = transpose2.size_w;   
         transpose3.compute_offsets(g_sizes_._4D);
-        transpose3.debug_plot(mpi_, {myid_i, myid_j, myid_k});            
     }
 
 

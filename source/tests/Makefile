@@ -28,6 +28,10 @@ test_mpi_transpose_3D.bin: test_mpi_transpose_3D.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_mpi_transpose_3D.cu -c -o test_mpi_transpose_3D.o
 	mpicxx -g test_mpi_transpose_3D.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lmpi -o test_mpi_transpose_3D.bin
 
+test_mpi_transpose_4D.bin: test_mpi_transpose_4D.cu
+	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_mpi_transpose_4D.cu -c -o test_mpi_transpose_4D.o
+	mpicxx -g test_mpi_transpose_4D.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lmpi -o test_mpi_transpose_4D.bin
+
 test_fftm_3D_compare.bin: test_fftm_3D_compare.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_fftm_3D_compare.cu -c -o test_fftm_3D_compare.o
 	mpicxx -g test_fftm_3D_compare.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_fftm_3D_compare.bin
