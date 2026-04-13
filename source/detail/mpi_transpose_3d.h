@@ -660,7 +660,7 @@ private:
                 detail::mpi_int_cast( bytes_from_elems_( backward_send_chunk_elems_( p ) ), "backward p2p send count" ),
                 scfd::communication::detail::mpi_data_type<char>::mpi_type(),
                 p,
-                myid_j_,
+                p,
                 send_requests_[p]
             );
         }
@@ -713,7 +713,7 @@ private:
                 detail::mpi_int_cast( bytes_from_elems_( backward_send_chunk_elems_( p ) ), "backward p2p send count" ),
                 scfd::communication::detail::mpi_data_type<char>::mpi_type(),
                 p,
-                myid_j_,
+                p,
                 send_requests_[p]
             );
         }
