@@ -24,6 +24,10 @@ test_init.bin test_init.cu:
 test_cudaMemcpy3DAsync.bin test_cudaMemcpy3DAsync.cu:
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_cudaMemcpy3DAsync.cu -o test_cudaMemcpy3DAsync.bin
 
+test_mpi_transpose_3D.bin: test_mpi_transpose_3D.cu
+	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_mpi_transpose_3D.cu -c -o test_mpi_transpose_3D.o
+	mpicxx -g test_mpi_transpose_3D.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lmpi -o test_mpi_transpose_3D.bin
+
 test:
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_cudaMemcpy3DAsync_1.cu -o test_cudaMemcpy3DAsync_1.bin
 

@@ -9,7 +9,22 @@ namespace arrays
 {
 
 template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_012_t = scfd::arrays::custom_index_fast_arranger<0, 1, 2>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_021_t = scfd::arrays::custom_index_fast_arranger<0, 2, 1>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
 using custom_arranger_10_t = scfd::arrays::custom_index_fast_arranger<1, 0>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_102_t = scfd::arrays::custom_index_fast_arranger<1, 0, 2>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_120_t = scfd::arrays::custom_index_fast_arranger<1, 2, 0>::type<Dims...>;
+
+template <scfd::arrays::ordinal_type... Dims>
+using custom_arranger_201_t = scfd::arrays::custom_index_fast_arranger<2, 0, 1>::type<Dims...>;
 
 template <scfd::arrays::ordinal_type... Dims>
 using custom_arranger_210_t = scfd::arrays::custom_index_fast_arranger<2, 1, 0>::type<Dims...>;
