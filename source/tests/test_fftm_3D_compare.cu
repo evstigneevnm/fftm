@@ -226,6 +226,29 @@ struct compare_output_functor
     }
 };
 
+template <class LocalArray, class RefArray, class ErrorArray>
+struct compare_real_output_functor
+{
+    LocalArray local;
+    RefArray   reference;
+    ErrorArray diff_sq;
+    ErrorArray ref_sq;
+    int        x_start;
+    int        y_start;
+    int        z_start;
+
+    __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+    {
+        const T actual   = local( idx );
+        const T expected = reference( x_start + idx[0], y_start + idx[1], z_start + idx[2] );
+
+        const T diff = actual - expected;
+
+        diff_sq( idx ) = diff * diff;
+        ref_sq( idx )  = expected * expected;
+    }
+};
+
 template <class Strategy>
 int run_compare(
     scfd::utils::log_mpi                        &log,
@@ -238,7 +261,8 @@ int run_compare(
     using local_hat_t  = typename fftm_t::template complex_array_t<3>;
     using ref_real_t   = typename ref_ffts_t::template real_array_t<3>;
     using ref_hat_t    = typename ref_ffts_t::template complex_array_t<3>;
-    using err_array_t  = scfd::arrays::array_nd<T, 3, memory_t, scfd::arrays::custom_arranger_201_t>;
+    using err_hat_array_t  = scfd::arrays::array_nd<T, 3, memory_t, scfd::arrays::custom_arranger_201_t>;
+    using err_real_array_t = scfd::arrays::array_nd<T, 3, memory_t, scfd::arrays::custom_arranger_102_t>;
 
     fftm::processor_grid grid;
     grid.init( options.p1, options.p2 );
@@ -258,16 +282,20 @@ int run_compare(
     reference_fft.init( options.nx, options.ny, options.nz );
 
     local_real_t local_in;
+    local_real_t local_back;
     local_hat_t  local_out;
     ref_real_t   ref_in;
+    ref_real_t   ref_back;
     ref_hat_t    ref_out;
 
     const auto local_in_sizes  = distributed_fft.get_local_input_sizes();
     const auto local_out_sizes = distributed_fft.get_local_output_sizes();
 
     local_in.init( std::get<0>( local_in_sizes ), std::get<1>( local_in_sizes ), std::get<2>( local_in_sizes ) );
+    local_back.init( std::get<0>( local_in_sizes ), std::get<1>( local_in_sizes ), std::get<2>( local_in_sizes ) );
     local_out.init( std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes ) );
     ref_in.init( options.nx, options.ny, options.nz );
+    ref_back.init( options.nx, options.ny, options.nz );
     ref_out.init( options.nx, options.ny, options.nz / 2 + 1 );
 
     const T lx = T( 2 ) * scfd::utils::scalar_traits<T>::pi();
@@ -299,18 +327,18 @@ int run_compare(
     reference_fft.forward( ref_in, ref_out );
     distributed_fft.forward( local_in, local_out );
 
-    err_array_t diff_sq;
-    err_array_t ref_sq;
-    diff_sq.init( std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes ) );
-    ref_sq.init( std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes ) );
+    err_hat_array_t forward_diff_sq;
+    err_hat_array_t forward_ref_sq;
+    forward_diff_sq.init( std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes ) );
+    forward_ref_sq.init( std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes ) );
 
     const auto &output_part = distributed_fft.output_partition();
     for_each(
-        compare_output_functor<local_hat_t, ref_hat_t, err_array_t>{
+        compare_output_functor<local_hat_t, ref_hat_t, err_hat_array_t>{
             local_out,
             ref_out,
-            diff_sq,
-            ref_sq,
+            forward_diff_sq,
+            forward_ref_sq,
             static_cast<int>( output_part.start_y[myid_i] ),
             static_cast<int>( output_part.start_z[myid_j] )
         },
@@ -318,16 +346,44 @@ int run_compare(
     );
     for_each.wait();
 
-    const T local_diff_sq = reduce( diff_sq.size(), diff_sq.raw_ptr(), T( 0 ) );
-    const T local_ref_sq  = reduce( ref_sq.size(), ref_sq.raw_ptr(), T( 0 ) );
-    const T global_diff_sq = comm_info.all_reduce_sum( local_diff_sq );
-    const T global_ref_sq  = comm_info.all_reduce_sum( local_ref_sq );
-    const T relative_error = std::sqrt( global_diff_sq / global_ref_sq );
+    const T local_forward_diff_sq = reduce( forward_diff_sq.size(), forward_diff_sq.raw_ptr(), T( 0 ) );
+    const T local_forward_ref_sq  = reduce( forward_ref_sq.size(), forward_ref_sq.raw_ptr(), T( 0 ) );
+    const T global_forward_diff_sq = comm_info.all_reduce_sum( local_forward_diff_sq );
+    const T global_forward_ref_sq  = comm_info.all_reduce_sum( local_forward_ref_sq );
+    const T forward_relative_error = std::sqrt( global_forward_diff_sq / global_forward_ref_sq );
+
+    reference_fft.backward( ref_out, ref_back );
+    distributed_fft.backward( local_out, local_back );
+
+    err_real_array_t backward_diff_sq;
+    err_real_array_t backward_ref_sq;
+    backward_diff_sq.init( std::get<0>( local_in_sizes ), std::get<1>( local_in_sizes ), std::get<2>( local_in_sizes ) );
+    backward_ref_sq.init( std::get<0>( local_in_sizes ), std::get<1>( local_in_sizes ), std::get<2>( local_in_sizes ) );
+
+    for_each(
+        compare_real_output_functor<local_real_t, ref_real_t, err_real_array_t>{
+            local_back,
+            ref_back,
+            backward_diff_sq,
+            backward_ref_sq,
+            static_cast<int>( input_part.start_x[myid_i] ),
+            static_cast<int>( input_part.start_y[myid_j] ),
+            static_cast<int>( input_part.start_z[myid_k] )
+        },
+        make_range( local_back )
+    );
+    for_each.wait();
+
+    const T local_backward_diff_sq = reduce( backward_diff_sq.size(), backward_diff_sq.raw_ptr(), T( 0 ) );
+    const T local_backward_ref_sq  = reduce( backward_ref_sq.size(), backward_ref_sq.raw_ptr(), T( 0 ) );
+    const T global_backward_diff_sq = comm_info.all_reduce_sum( local_backward_diff_sq );
+    const T global_backward_ref_sq  = comm_info.all_reduce_sum( local_backward_ref_sq );
+    const T backward_relative_error = std::sqrt( global_backward_diff_sq / global_backward_ref_sq );
 
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "strategy=%s, mode=%s, grid=(%zu,%zu), sizes=(%zu,%zu,%zu), rel_l2=%.8e",
+            "strategy=%s, mode=%s, grid=(%zu,%zu), sizes=(%zu,%zu,%zu), forward_rel_l2=%.8e, backward_rel_l2=%.8e",
             fftm_t::strategy_name(),
             fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ),
             options.p1,
@@ -335,11 +391,12 @@ int run_compare(
             options.nx,
             options.ny,
             options.nz,
-            relative_error
+            forward_relative_error,
+            backward_relative_error
         );
     }
 
-    return ( relative_error <= options.threshold ) ? 0 : 1;
+    return ( forward_relative_error <= options.threshold && backward_relative_error <= options.threshold ) ? 0 : 1;
 }
 
 template <fftm::mpi_transpose_3d_mode Mode>
