@@ -326,7 +326,7 @@ private:
 
     void add_2d_plans_()
     {
-        base_fft_.template add_plan_2D<fftm::direction::R2C>(
+        base_fft_.template add_plan_2D<::fftm::direction::R2C>(
             "forward_2d",
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
@@ -341,7 +341,7 @@ private:
             1
         );
 
-        base_fft_.template add_plan_2D<fftm::direction::C2R>(
+        base_fft_.template add_plan_2D<::fftm::direction::C2R>(
             "inverse_2d",
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
@@ -359,7 +359,7 @@ private:
 
     void add_3d_plans_()
     {
-        base_fft_.template add_plan_3D<fftm::direction::R2C>(
+        base_fft_.template add_plan_3D<::fftm::direction::R2C>(
             "forward_3d",
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
@@ -377,7 +377,7 @@ private:
             1
         );
 
-        base_fft_.template add_plan_3D<fftm::direction::C2R>(
+        base_fft_.template add_plan_3D<::fftm::direction::C2R>(
             "inverse_3d",
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
@@ -407,7 +407,7 @@ private:
         const long long int z_stride = static_cast<long long int>( nx_ * ny_ * nw_half_ );
         const long long int y_stride = static_cast<long long int>( nx_ * nz_ * nw_half_ );
 
-        base_fft_.template add_plan_1D<fftm::direction::R2C>(
+        base_fft_.template add_plan_1D<::fftm::direction::R2C>(
             "forward_w",
             static_cast<long long int>( nw_ ),
             1,
@@ -419,7 +419,7 @@ private:
             real_batch
         );
 
-        base_fft_.template add_plan_1D<fftm::direction::C2R>(
+        base_fft_.template add_plan_1D<::fftm::direction::C2R>(
             "inverse_w",
             static_cast<long long int>( nw_ ),
             1,
@@ -431,7 +431,7 @@ private:
             real_batch
         );
 
-        base_fft_.template add_plan_1D<fftm::direction::C2CF>(
+        base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
             "forward_z",
             static_cast<long long int>( nz_ ),
             1,
@@ -443,7 +443,7 @@ private:
             z_batch
         );
 
-        base_fft_.template add_plan_1D<fftm::direction::C2CB>(
+        base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
             "inverse_z",
             static_cast<long long int>( nz_ ),
             1,
@@ -455,7 +455,7 @@ private:
             z_batch
         );
 
-        base_fft_.template add_plan_1D<fftm::direction::C2CF>(
+        base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
             "forward_y",
             static_cast<long long int>( ny_ ),
             1,
@@ -467,7 +467,7 @@ private:
             y_batch
         );
 
-        base_fft_.template add_plan_1D<fftm::direction::C2CB>(
+        base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
             "inverse_y",
             static_cast<long long int>( ny_ ),
             1,
@@ -479,7 +479,7 @@ private:
             y_batch
         );
 
-        base_fft_.template add_plan_1D<fftm::direction::C2CF>(
+        base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
             "forward_x",
             static_cast<long long int>( nx_ ),
             1,
@@ -491,7 +491,7 @@ private:
             x_batch
         );
 
-        base_fft_.template add_plan_1D<fftm::direction::C2CB>(
+        base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
             "inverse_x",
             static_cast<long long int>( nx_ ),
             1,
@@ -510,7 +510,7 @@ private:
         const long long int xy_batch = static_cast<long long int>( nz_ * nw_half_ );
         const long long int xy_stride = static_cast<long long int>( nz_ * nw_half_ );
 
-        base_fft_.template add_plan_2D<fftm::direction::R2C>(
+        base_fft_.template add_plan_2D<::fftm::direction::R2C>(
             "forward_zw",
             static_cast<long long int>( nz_ ),
             static_cast<long long int>( nw_ ),
@@ -525,7 +525,7 @@ private:
             zw_batch
         );
 
-        base_fft_.template add_plan_2D<fftm::direction::C2R>(
+        base_fft_.template add_plan_2D<::fftm::direction::C2R>(
             "inverse_zw",
             static_cast<long long int>( nz_ ),
             static_cast<long long int>( nw_ ),
@@ -540,7 +540,7 @@ private:
             zw_batch
         );
 
-        base_fft_.template add_plan_2D<fftm::direction::C2CF>(
+        base_fft_.template add_plan_2D<::fftm::direction::C2CF>(
             "forward_xy",
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),
@@ -555,7 +555,7 @@ private:
             xy_batch
         );
 
-        base_fft_.template add_plan_2D<fftm::direction::C2CB>(
+        base_fft_.template add_plan_2D<::fftm::direction::C2CB>(
             "inverse_xy",
             static_cast<long long int>( nx_ ),
             static_cast<long long int>( ny_ ),

@@ -20,6 +20,7 @@
 #include <ffts.hpp>
 
 #include "detail/poisson_fft_test_common.h"
+#include "detail/poisson_3d_problem.h"
 
 template <class FFTS>
 class poisson_3d_fft_case
@@ -82,51 +83,7 @@ private:
     using complex_array_t = typename FFTS::template complex_array_t<3>;
 
 public:
-    struct fill_problem_functor
-    {
-        real_array_t rhs;
-        real_array_t exact_solution;
-        real_array_t exact_dx;
-        real_array_t exact_dy;
-        real_array_t exact_dz;
-        T hx;
-        T hy;
-        T hz;
-
-        __DEVICE_TAG__ void operator()( const idx_t &idx )
-        {
-            const T x  = hx * static_cast<T>( idx[0] );
-            const T y  = hy * static_cast<T>( idx[1] );
-            const T z  = hz * static_cast<T>( idx[2] );
-            const T pi = scfd::utils::scalar_traits<T>::pi();
-
-            const T dx = x - pi;
-            const T dy = y - pi;
-            const T dz = z - pi;
-            const T exponent = -( dx * dx + dy * dy + dz * dz );
-
-            const T gaussian = scfd::utils::scalar_traits<T>::exp( exponent );
-
-            const T sin_x = scfd::utils::scalar_traits<T>::sin( x );
-            const T cos_x = scfd::utils::scalar_traits<T>::cos( x );
-            const T sin_y = scfd::utils::scalar_traits<T>::sin( y );
-            const T cos_y = scfd::utils::scalar_traits<T>::cos( y );
-            const T sin_z = scfd::utils::scalar_traits<T>::sin( z );
-            const T cos_z = scfd::utils::scalar_traits<T>::cos( z );
-
-            exact_solution( idx ) = T( 100 ) * gaussian * sin_x * sin_y * sin_z;
-            exact_dx( idx )       = T( 100 ) * gaussian * ( cos_x - T( 2 ) * dx * sin_x ) * sin_y * sin_z;
-            exact_dy( idx )       = T( 100 ) * gaussian * sin_x * ( cos_y - T( 2 ) * dy * sin_y ) * sin_z;
-            exact_dz( idx )       = T( 100 ) * gaussian * sin_x * sin_y * ( cos_z - T( 2 ) * dz * sin_z );
-
-            rhs( idx ) = T( 100 ) * gaussian *
-                         ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy + T( 4 ) * dz * dz - T( 9 ) ) *
-                               sin_x * sin_y * sin_z -
-                           T( 4 ) * dx * cos_x * sin_y * sin_z -
-                           T( 4 ) * dy * sin_x * cos_y * sin_z -
-                           T( 4 ) * dz * sin_x * sin_y * cos_z );
-        }
-    };
+    using fill_problem_functor = fftm::test::detail::fill_poisson_3d_problem_functor<T, idx_t, real_array_t>;
 
     struct solve_fourier_functor
     {
@@ -203,35 +160,12 @@ public:
         }
     };
 
-    struct error_fields_functor
-    {
-        real_array_t numerical_solution;
-        real_array_t numerical_dx;
-        real_array_t numerical_dy;
-        real_array_t numerical_dz;
-        real_array_t exact_solution;
-        real_array_t exact_dx;
-        real_array_t exact_dy;
-        real_array_t exact_dz;
-        real_array_t solution_error_sq;
-        real_array_t gradient_error_sq;
-
-        __DEVICE_TAG__ void operator()( const idx_t &idx )
-        {
-            const T solution_diff = numerical_solution( idx ) - exact_solution( idx );
-            const T dx_diff       = numerical_dx( idx ) - exact_dx( idx );
-            const T dy_diff       = numerical_dy( idx ) - exact_dy( idx );
-            const T dz_diff       = numerical_dz( idx ) - exact_dz( idx );
-
-            solution_error_sq( idx ) = solution_diff * solution_diff;
-            gradient_error_sq( idx ) = dx_diff * dx_diff + dy_diff * dy_diff + dz_diff * dz_diff;
-        }
-    };
+    using error_fields_functor = fftm::test::detail::poisson_3d_error_fields_functor<T, idx_t, real_array_t>;
 
 private:
     static T domain_length()
     {
-        return T( 2 ) * scfd::utils::scalar_traits<T>::pi();
+        return fftm::test::detail::poisson_3d_problem<T>::domain_length();
     }
 
     static int to_int( std::size_t value )
@@ -270,7 +204,7 @@ private:
     void fill_problem_data()
     {
         for_each_(
-            fill_problem_functor{ rhs_, exact_solution_, exact_dx_, exact_dy_, exact_dz_, hx_, hy_, hz_ },
+            fill_problem_functor{ rhs_, exact_solution_, exact_dx_, exact_dy_, exact_dz_, hx_, hy_, hz_, T( 0 ), T( 0 ), T( 0 ) },
             real_range_
         );
         for_each_.wait();

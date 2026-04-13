@@ -53,6 +53,10 @@ struct partition
 {
     void compute_offsets(bool use_4D) 
     {
+        start_x.clear();
+        start_y.clear();
+        start_z.clear();
+        start_w.clear();
         computeStart(size_x, start_x);
         computeStart(size_y, start_y);
         computeStart(size_z, start_z);

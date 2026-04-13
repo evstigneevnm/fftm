@@ -1,195 +1,546 @@
 #ifndef __FFTM_FFTM_HPP__
 #define __FFTM_FFTM_HPP__
 
-#include <iostream>
-#include <memory>
-#include <utility>
+#include <array>
+#include <cstddef>
+#include <stdexcept>
+#include <tuple>
+#include <type_traits>
+
+#include <scfd/arrays/tensor_array_nd.h>
+#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/log_mpi.h>
-#include <scfd/utils/safe_call.h>
+
+#include "detail/array_arrangers.h"
+#include "detail/mpi_transpose_3d.h"
+#include "detail/mpi_transpose_3d_same_z.h"
+#include "fft_direction.h"
 #include "fft_partitioning.h"
-#include "mpi_fft_distributor.h"
 
 namespace fftm
 {
 
-template <class BaseFFT, class MPIComm, class Backend, class Log = scfd::utils::log_mpi>
-class fftm
+enum class transform_strategy_3d
 {
-    using T = typename BaseFFT::real;
-    using C = typename BaseFFT::complex;
-    using memory_t = typename Backend::memory_type;
-    using for_each_t = typename Backend::for_each_type<std::size_t>;
-    using for_each_nd3_t = typename Backend::for_each_nd_type<3, std::size_t>;
-    using reduce_type = typename Backend::reduce_type;
-    using partitioning_t = fft_partitioning<MPIComm>;
-    using distributor_t  = communication::mpi_fft_distributor<T, C, MPIComm, Log, memory_t, for_each_t>; 
-
-
-public:
-    fftm(std::shared_ptr<BaseFFT> &base_fft, const MPIComm& mpi, const Log& log = scfd::utils::log_mpi() ):
-    base_fft_(base_fft),
-    mpi_(mpi),
-    log_(log), 
-    init_done(false)
-    {
-        #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        log_.info("no gpu aware mpi.");
-        #else
-        log_.info("using gpu aware mpi.");
-        #endif 
-        partitioning_ = std::make_shared<partitioning_t>(mpi_);
-        distributor_ = std::make_shared<distributor_t>(mpi_, log_);
-    }
-    ~fftm()
-    {}
-
-    auto get_local_input_sizes() 
-    {
-        if (!init_done)
-        {
-            throw std::logic_error("Call init() first");
-        }
-        auto szs = std::get<0>( partitioning_->get_partitioning_3D() );
-        using sz_t = std::size_t;
-        return std::tuple< sz_t,sz_t,sz_t >(szs.size_x[myid_i_], szs.size_y[myid_j_], szs.size_z[0]);
-    }
-    auto get_local_output_sizes() 
-        {
-        if (!init_done)
-        {
-            throw std::logic_error("Call init() first");
-        }        
-        auto szs = std::get<2>( partitioning_->get_partitioning_3D() );
-        using sz_t = std::size_t;
-        return  std::tuple< sz_t,sz_t,sz_t >( szs.size_x[0], szs.size_y[myid_i_], szs.size_z[myid_j_] );
-    }
-
-    void init(const processor_grid& pg, const global_sizes& gs)
-    {
-        partitioning_->init(pg, gs);
-        std::tie(myid_i_, myid_j_, myid_k_) = partitioning_->get_my_grid();
-        bool _4D = gs.is_4D();
-        if(_4D)
-        {
-
-        }
-        else
-        {
-
-            distributor_->init(partitioning_);
-
-            auto part = partitioning_->get_partitioning_3D();
-            auto input_dim = std::get<0>(part);
-            auto transpose1 = std::get<1>(part);
-            auto transpose2 = std::get<2>(part);
-
-            long long int batch[3] = {static_cast<long long int>(input_dim.size_y[myid_j_]*input_dim.size_x[myid_i_]), 
-            static_cast<long long int>(transpose1.size_z[myid_j_]*transpose1.size_x[myid_i_]), 
-            static_cast<long long int>(transpose2.size_z[myid_j_]*transpose2.size_y[myid_i_])};
-            long long int n[3] = {static_cast<long long int>(transpose2.size_x[0]), static_cast<long long int>(transpose1.size_y[0]), 
-                static_cast<long long int>(input_dim.size_z[0])};
-            long long int inembed[3] = {1, 1, 1};
-            long long int onembed[3] = {static_cast<long long int>(transpose2.size_z[myid_j_]*transpose2.size_y[myid_i_]), 
-                static_cast<long long int>(transpose1.size_z[myid_j_]*transpose1.size_x[myid_i_]),
-                static_cast<long long int>(input_dim.size_y[myid_j_]*input_dim.size_x[myid_i_])};
-            long long int idist[3] = {static_cast<long long int>(transpose2.size_x[0]), 
-                static_cast<long long int>(transpose1.size_y[0]), 
-                static_cast<long long int>(input_dim.size_z[0])};
-            long long int odist[3] = {1, 1, 1};   
-
-/*            
-            base_fft_->add_plan_1D("R2C_1_direct", n[2], inembed[2], inembed[2], idist[2], onembed[2], onembed[2], odist[2], direction::R2C, batch[0]);
-            base_fft_->add_plan_1D("C2R_1_inverse",n[2], onembed[2], onembed[2], odist[2], inembed[2], inembed[2], idist[2], direction::C2R, batch[0]);
-
-            base_fft_->add_plan_1D("C2C_2_direct", n[1], inembed[1], inembed[1], idist[1], onembed[1], onembed[1], odist[1], direction::C2C, batch[1]);
-            base_fft_->add_plan_1D("C2C_2_inverse", n[1], onembed[1], onembed[1], odist[1], inembed[1], inembed[1], idist[1], direction::C2C, batch[1]);
-
-            base_fft_->add_plan_1D("C2C_3_direct", n[0], inembed[0], inembed[0], idist[0], onembed[0], onembed[0], odist[0], direction::C2C, batch[0]);
-            base_fft_->add_plan_1D("C2C_3_inverse", n[0], onembed[0], onembed[0], odist[0], inembed[0], inembed[0], idist[0], direction::C2C, batch[0]);
-            
-            base_fft_->activate();
-*/
-
-            init_done = true;
-        }
-        
-    }
-
-    template<class ArrayIn, class ArrayOut>
-    void forwardR(const ArrayIn& in, ArrayOut& out)
-    {
-        // void (*func_ptr)(void*);
-        // func_ptr = (void (*)(void*)) distributor_->template first_transpose< ArrayIn, ArrayOut>;
-        // SCFD_SAFE_CALL( func_ptr(in, out, true) );
-
-        SCFD_SAFE_CALL( (distributor_->template first_transpose< ArrayIn, ArrayOut>( in, out, true )) );
-        
-    }
-
-
-    void init_test()
-    {
-        
-// pidx:1, pidx_i:0, pidx_j:1, batch[0]:175104, batch[1]:87552, batch[2]:87552
-// pidx:1, pidx_i:0, pidx_j:1, n[0]:1024, n[1]:1024, n[2]:1024
-// pidx:1, pidx_i:0, pidx_j:1, inembed[0]:1, inembed[1]:1, inembed[2]:1
-// pidx:1, pidx_i:0, pidx_j:1, onembed[0]:87552, onembed[1]:87552, onembed[2]:175104
-// pidx:1, pidx_i:0, pidx_j:1, idist[0]:1024, idist[1]:1024, idist[2]:1024
-// pidx:1, pidx_i:0, pidx_j:1, odist[0]:1, odist[1]:1, odist[2]:1
-
-// cufftMakePlanMany64(planR2C, 1, &n[2], //plan, rank, *n
-            // &inembed[2], inembed[2], idist[2], //*inembed, istride, idist
-            // &onembed[2], onembed[2], odist[2], //*onembed, ostride, odist
-            // cuFFT<T>::R2Ctype, batch[0], &ws_r2c)
-
-        long long int n = 1024;
-        long long int inembed = 1;
-        long long int istride = 1;
-        long long int idist = 1024;
-        long long int onembed = 87552;
-        long long int ostride = 87552;
-        long long int odist = 1; 
-        long long int batch = 175104;
-
-        base_fft_->add_plan_1D("test_R2C",n, inembed, istride, idist, onembed, ostride, odist, direction::R2C, batch );
-        base_fft_->add_plan_1D("test_C2R",n, inembed, istride, idist, onembed, ostride, odist, direction::C2R, batch );
-        base_fft_->add_plan_1D("test_C2C",n, inembed, istride, idist, onembed, ostride, odist, direction::C2C, batch );
-        base_fft_->activate();
-
-        try
-        {
-            base_fft_->add_plan_1D("test_R2C",n, inembed, istride, idist, onembed, ostride, odist, direction::R2C, batch );
-        }
-        catch(const std::logic_error& e)
-        {
-            std::cout << "test logic 1: " << e.what() << std::endl;
-        }
-        try
-        {
-            base_fft_->activate();
-        }
-        catch(const std::logic_error& e)
-        {
-            std::cout << "test logic 2: " << e.what() << std::endl;
-        }
-        auto wsize = base_fft_->get_work_size();
-        std::cout << "work_size: " << wsize*1.0e-9 << "GB." << std::endl;
-
-    }
-    
-private:
-    std::shared_ptr<BaseFFT> base_fft_;
-    Log log_;
-    MPIComm mpi_;
-    std::shared_ptr<partitioning_t> partitioning_;
-    int myid_i_, myid_j_, myid_k_;
-    std::shared_ptr<distributor_t> distributor_;
-    bool init_done;
-
+    slab_pencil,
+    pencil_slab,
+    pencil_pencil
 };
 
+template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
+struct strategy_3d_slab_pencil
+{
+};
 
+template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
+struct strategy_3d_pencil_slab
+{
+};
 
-}
+template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
+struct strategy_3d_pencil_pencil
+{
+};
+
+struct fftm_init_options
+{
+};
+
+namespace detail
+{
+
+template <class Strategy3D>
+struct fftm_3d_strategy_traits;
+
+template <mpi_transpose_3d_mode Mode>
+struct fftm_3d_strategy_traits<strategy_3d_slab_pencil<Mode>>
+{
+    static constexpr transform_strategy_3d family = transform_strategy_3d::slab_pencil;
+    static constexpr mpi_transpose_3d_mode mode   = Mode;
+
+    static const char *name()
+    {
+        return "slab-pencil";
+    }
+};
+
+template <mpi_transpose_3d_mode Mode>
+struct fftm_3d_strategy_traits<strategy_3d_pencil_slab<Mode>>
+{
+    static constexpr transform_strategy_3d family = transform_strategy_3d::pencil_slab;
+    static constexpr mpi_transpose_3d_mode mode   = Mode;
+
+    static const char *name()
+    {
+        return "pencil-slab";
+    }
+};
+
+template <mpi_transpose_3d_mode Mode>
+struct fftm_3d_strategy_traits<strategy_3d_pencil_pencil<Mode>>
+{
+    static constexpr transform_strategy_3d family = transform_strategy_3d::pencil_pencil;
+    static constexpr mpi_transpose_3d_mode mode   = Mode;
+
+    static const char *name()
+    {
+        return "pencil-pencil";
+    }
+};
+
+template <class Real, class Complex, class Memory, class Strategy3D>
+struct fftm_3d_array_traits;
+
+template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
+struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_slab_pencil<Mode>>
+{
+    using real_array_t           = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using stage0_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+    using stage1_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+    using complex_array_t        = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+};
+
+template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
+struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_slab<Mode>>
+{
+    using real_array_t           = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using stage0_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using stage1_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+    using complex_array_t        = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+};
+
+template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
+struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_pencil<Mode>>
+{
+    using real_array_t           = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using stage0_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using stage1_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+    using complex_array_t        = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+};
+
+} // namespace detail
+
+template <
+    class BaseFFT,
+    class MPIComm,
+    class Backend,
+    class Strategy3D = strategy_3d_pencil_pencil<mpi_transpose_3d_mode::alltoallv>,
+    class Log        = scfd::utils::log_mpi
+>
+class fftm
+{
+public:
+    using real       = typename BaseFFT::real;
+    using complex    = typename BaseFFT::complex;
+    using memory_t   = typename Backend::memory_type;
+    using partition_t = ::fftm::partition;
+    using strategy_3d_t = Strategy3D;
+
+    template <std::size_t Dim>
+    using real_array_t = typename std::conditional<
+        Dim == 3,
+        typename detail::fftm_3d_array_traits<real, complex, memory_t, Strategy3D>::real_array_t,
+        void
+    >::type;
+
+    template <std::size_t Dim>
+    using complex_array_t = typename std::conditional<
+        Dim == 3,
+        typename detail::fftm_3d_array_traits<real, complex, memory_t, Strategy3D>::complex_array_t,
+        void
+    >::type;
+
+    static constexpr transform_strategy_3d strategy_family_3d = detail::fftm_3d_strategy_traits<Strategy3D>::family;
+    static constexpr mpi_transpose_3d_mode transpose_mode_3d  = detail::fftm_3d_strategy_traits<Strategy3D>::mode;
+
+    static const char *strategy_name()
+    {
+        return detail::fftm_3d_strategy_traits<Strategy3D>::name();
+    }
+
+    explicit fftm( const MPIComm &mpi, const Log &log = Log() )
+        : mpi_( mpi )
+        , log_( log )
+        , partitioning_( mpi )
+        , same_x_( mpi, log )
+        , same_z_( mpi, log )
+    {
+    }
+
+    template <std::size_t Dim>
+    void init( const processor_grid &pg, const global_sizes &gs, const fftm_init_options &options = fftm_init_options() )
+    {
+        static_assert( Dim == 3, "fftm currently implements only the 3D path." );
+        (void)options;
+        ensure_can_init_();
+        if ( gs.is_4D() )
+        {
+            throw std::logic_error( "fftm currently implements only the 3D path." );
+        }
+
+        partitioning_.init( pg, gs );
+        std::tie( myid_i_, myid_j_, myid_k_ ) = partitioning_.get_my_grid();
+        std::tie( input_dim_, transpose1_dim_, transpose2_dim_ ) = partitioning_.get_partitioning_3D();
+
+        nx_      = gs.Nx;
+        ny_      = gs.Ny;
+        nz_      = gs.Nz;
+        nz_half_ = nz_ / 2 + 1;
+
+        half_input_dim_           = input_dim_;
+        half_input_dim_.size_z[0] = nz_half_;
+        half_input_dim_.start_z.clear();
+        half_input_dim_.compute_offsets( false );
+
+        init_strategy_( strategy_family_tag() );
+        add_plans_( strategy_family_tag() );
+        base_fft_.activate();
+        init_done_ = true;
+    }
+
+    bool is_initialized() const
+    {
+        return init_done_;
+    }
+
+    std::tuple<std::size_t, std::size_t, std::size_t> get_local_input_sizes() const
+    {
+        ensure_initialized_();
+        return std::make_tuple(
+            input_dim_.size_x[myid_i_],
+            input_dim_.size_y[myid_j_],
+            input_dim_.size_z[0]
+        );
+    }
+
+    std::tuple<std::size_t, std::size_t, std::size_t> get_local_output_sizes() const
+    {
+        ensure_initialized_();
+        return std::make_tuple(
+            output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_],
+            output_dim_.size_y[myid_i_]
+        );
+    }
+
+    const partition_t &input_partition() const
+    {
+        ensure_initialized_();
+        return input_dim_;
+    }
+
+    const partition_t &output_partition() const
+    {
+        ensure_initialized_();
+        return output_dim_;
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void forward( const ArrayIn &in, ArrayOut &out )
+    {
+        ensure_initialized_();
+        forward_3d_( strategy_family_tag(), in, out );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void backward( const ArrayIn &in, ArrayOut &out )
+    {
+        ensure_initialized_();
+        backward_3d_( strategy_family_tag(), in, out );
+    }
+
+private:
+    using strategy_family_tag = std::integral_constant<transform_strategy_3d, strategy_family_3d>;
+    using traits_3d_t         = detail::fftm_3d_array_traits<real, complex, memory_t, Strategy3D>;
+
+    using real_array3_t       = typename traits_3d_t::real_array_t;
+    using stage0_complex_t    = typename traits_3d_t::stage0_complex_array_t;
+    using complex_array3_t    = typename traits_3d_t::complex_array_t;
+    using stage1_complex_t    = typename std::conditional<
+        strategy_family_3d == transform_strategy_3d::pencil_pencil,
+        typename traits_3d_t::stage1_complex_array_t,
+        complex_array3_t
+    >::type;
+
+    using partitioning_t      = fft_partitioning<MPIComm>;
+    using same_x_t            = ::fftm::mpi_transpose_3d<complex, Backend, MPIComm, Log>;
+    using same_z_t            = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log>;
+
+    void ensure_can_init_() const
+    {
+        if ( init_done_ )
+            throw std::logic_error( "fftm::init can only be called once per instance." );
+    }
+
+    void ensure_initialized_() const
+    {
+        if ( !init_done_ )
+            throw std::logic_error( "fftm: call init() before using the transform." );
+    }
+
+    void require_grid_p1_is_one_() const
+    {
+        if ( partitioning_.get_process_grid().p1 != 1 )
+        {
+            throw std::logic_error( "This 3D strategy currently requires p1 == 1." );
+        }
+    }
+
+    void require_grid_p2_is_one_() const
+    {
+        if ( partitioning_.get_process_grid().p2 != 1 )
+        {
+            throw std::logic_error( "This 3D strategy currently requires p2 == 1." );
+        }
+    }
+
+    void add_plan_z_r2c_( const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int y_size )
+    {
+        const long long int stride = x_size * y_size;
+        const long long int batch  = x_size * y_size;
+
+        base_fft_.template add_plan_1D<::fftm::direction::R2C>(
+            forward_name,
+            static_cast<long long int>( nz_ ),
+            1,
+            stride,
+            1,
+            1,
+            x_size * y_size,
+            1,
+            batch
+        );
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2R>(
+            inverse_name,
+            static_cast<long long int>( nz_ ),
+            1,
+            stride,
+            1,
+            1,
+            x_size * y_size,
+            1,
+            batch
+        );
+    }
+
+    void add_plan_y_c2c_( const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int z_size )
+    {
+        const long long int batch = x_size * z_size;
+        const long long int idist = static_cast<long long int>( ny_ );
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
+            forward_name,
+            static_cast<long long int>( ny_ ),
+            1,
+            1,
+            idist,
+            1,
+            1,
+            idist,
+            batch
+        );
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
+            inverse_name,
+            static_cast<long long int>( ny_ ),
+            1,
+            1,
+            idist,
+            1,
+            1,
+            idist,
+            batch
+        );
+    }
+
+    void add_plan_x_c2c_( const std::string &forward_name, const std::string &inverse_name, long long int y_size, long long int z_size )
+    {
+        const long long int batch = y_size * z_size;
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
+            forward_name,
+            static_cast<long long int>( nx_ ),
+            1,
+            static_cast<long long int>( y_size ),
+            1,
+            1,
+            static_cast<long long int>( y_size ),
+            1,
+            batch
+        );
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
+            inverse_name,
+            static_cast<long long int>( nx_ ),
+            1,
+            static_cast<long long int>( y_size ),
+            1,
+            1,
+            static_cast<long long int>( y_size ),
+            1,
+            batch
+        );
+    }
+
+    void init_strategy_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil> )
+    {
+        require_grid_p2_is_one_();
+
+        output_dim_ = transpose2_dim_;
+
+        stage0_.init( input_dim_.size_x[myid_i_], nz_half_, ny_ );
+        work_hat_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
+        same_z_.init( half_input_dim_, output_dim_, myid_i_, 0 );
+    }
+
+    void init_strategy_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab> )
+    {
+        require_grid_p1_is_one_();
+
+        output_dim_ = transpose2_dim_;
+
+        stage0_.init( input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_ );
+        work_hat_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
+        same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ );
+    }
+
+    void init_strategy_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil> )
+    {
+        output_dim_ = transpose2_dim_;
+
+        stage0_.init( input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_ );
+        stage1_.init( input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_ );
+        work_hat_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
+
+        same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ );
+        same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ );
+    }
+
+    void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil> )
+    {
+        add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], ny_ );
+        add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], nz_half_ );
+        add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], nz_half_ );
+    }
+
+    void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab> )
+    {
+        add_plan_z_r2c_( "forward_z", "inverse_z", nx_, input_dim_.size_y[myid_j_] );
+        add_plan_y_c2c_( "forward_y", "inverse_y", nx_, output_dim_.size_z[myid_j_] );
+        add_plan_x_c2c_( "forward_x", "inverse_x", ny_, output_dim_.size_z[myid_j_] );
+    }
+
+    void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil> )
+    {
+        add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_] );
+        add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_] );
+        add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_] );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void forward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil>, const ArrayIn &in, ArrayOut &out )
+    {
+        base_fft_.template exec<ArrayIn, stage0_complex_t>( "forward_z", in, stage0_ );
+        base_fft_.template exec<stage0_complex_t, stage0_complex_t>( "forward_y", stage0_, stage0_ );
+        same_z_.transpose_x_to_y( stage0_, out, transpose_mode_3d );
+        base_fft_.template exec<ArrayOut, ArrayOut>( "forward_x", out, out );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void backward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil>, const ArrayIn &in, ArrayOut &out )
+    {
+        CUDA_SAFE_CALL( cudaMemcpy(
+            work_hat_.raw_ptr(),
+            in.raw_ptr(),
+            in.size() * sizeof( complex ),
+            cudaMemcpyDeviceToDevice
+        ) );
+        base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_x", work_hat_, work_hat_ );
+        same_z_.transpose_y_to_x( work_hat_, stage0_, transpose_mode_3d );
+        base_fft_.template exec<stage0_complex_t, stage0_complex_t>( "inverse_y", stage0_, stage0_ );
+        base_fft_.template exec<stage0_complex_t, ArrayOut>( "inverse_z", stage0_, out );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void forward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab>, const ArrayIn &in, ArrayOut &out )
+    {
+        base_fft_.template exec<ArrayIn, stage0_complex_t>( "forward_z", in, stage0_ );
+        same_x_.transpose_xyz_to_xzy( stage0_, out, transpose_mode_3d );
+        base_fft_.template exec<ArrayOut, ArrayOut>( "forward_y", out, out );
+        base_fft_.template exec<ArrayOut, ArrayOut>( "forward_x", out, out );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void backward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab>, const ArrayIn &in, ArrayOut &out )
+    {
+        CUDA_SAFE_CALL( cudaMemcpy(
+            work_hat_.raw_ptr(),
+            in.raw_ptr(),
+            in.size() * sizeof( complex ),
+            cudaMemcpyDeviceToDevice
+        ) );
+        base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_x", work_hat_, work_hat_ );
+        base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_y", work_hat_, work_hat_ );
+        same_x_.transpose_xzy_to_xyz( work_hat_, stage0_, transpose_mode_3d );
+        base_fft_.template exec<stage0_complex_t, ArrayOut>( "inverse_z", stage0_, out );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void forward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil>, const ArrayIn &in, ArrayOut &out )
+    {
+        base_fft_.template exec<ArrayIn, stage0_complex_t>( "forward_z", in, stage0_ );
+        same_x_.transpose_xyz_to_xzy( stage0_, stage1_, transpose_mode_3d );
+        base_fft_.template exec<stage1_complex_t, stage1_complex_t>( "forward_y", stage1_, stage1_ );
+        same_z_.transpose_x_to_y( stage1_, out, transpose_mode_3d );
+        base_fft_.template exec<ArrayOut, ArrayOut>( "forward_x", out, out );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void backward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil>, const ArrayIn &in, ArrayOut &out )
+    {
+        CUDA_SAFE_CALL( cudaMemcpy(
+            work_hat_.raw_ptr(),
+            in.raw_ptr(),
+            in.size() * sizeof( complex ),
+            cudaMemcpyDeviceToDevice
+        ) );
+        base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_x", work_hat_, work_hat_ );
+        same_z_.transpose_y_to_x( work_hat_, stage1_, transpose_mode_3d );
+        base_fft_.template exec<stage1_complex_t, stage1_complex_t>( "inverse_y", stage1_, stage1_ );
+        same_x_.transpose_xzy_to_xyz( stage1_, stage0_, transpose_mode_3d );
+        base_fft_.template exec<stage0_complex_t, ArrayOut>( "inverse_z", stage0_, out );
+    }
+
+private:
+    BaseFFT         base_fft_;
+    MPIComm         mpi_;
+    Log             log_;
+    partitioning_t  partitioning_;
+    same_x_t        same_x_;
+    same_z_t        same_z_;
+
+    bool            init_done_ = false;
+    int             myid_i_    = 0;
+    int             myid_j_    = 0;
+    int             myid_k_    = 0;
+
+    std::size_t     nx_        = 0;
+    std::size_t     ny_        = 0;
+    std::size_t     nz_        = 0;
+    std::size_t     nz_half_   = 0;
+
+    partition_t     input_dim_;
+    partition_t     half_input_dim_;
+    partition_t     transpose1_dim_;
+    partition_t     transpose2_dim_;
+    partition_t     output_dim_;
+
+    stage0_complex_t stage0_;
+    stage1_complex_t stage1_;
+    complex_array3_t work_hat_;
+};
+
+} // namespace fftm
 
 #endif // __FFTM_FFTM_HPP__
