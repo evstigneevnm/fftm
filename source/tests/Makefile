@@ -74,3 +74,5 @@ test_4D_poisson.bin: test_4D_poisson.cu
 
 test_fft_3D.bin: test_fft_3D.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_fft_3D.cu -L$(lib_cuda) -lcudart -lcufft -o test_fft_3D.bin
+
+all: test_init.bin test_fft_2D.bin test_2D_poisson.bin test_3D_poisson.bin test_4D_poisson.bin test_fft_3D.bin test_mpi_transpose_3D.bin test_mpi_transpose_4D.bin test_fftm_3D_compare.bin test_fftm_4D_compare.bin test_3D_poisson_mpi.bin test_3D_poisson_mpi_tutorial.bin test_4D_poisson_mpi.bin test_4D_poisson_mpi_tutorial.bin 
