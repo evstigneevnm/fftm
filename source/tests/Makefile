@@ -17,11 +17,11 @@ NVCCFLAGS_NO_DEVICE_DEBUG = $(filter-out -G,$(NVCCFLAGS))
 
 
 
-test_init.bin test_init.cu:
+test_init.bin: test_init.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_init.cu -c -o test_init.o
 	mpicxx -g test_init.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_init.bin
 
-test_cudaMemcpy3DAsync.bin test_cudaMemcpy3DAsync.cu:
+test_cudaMemcpy3DAsync.bin: test_cudaMemcpy3DAsync.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_cudaMemcpy3DAsync.cu -o test_cudaMemcpy3DAsync.bin
 
 test_mpi_transpose_3D.bin: test_mpi_transpose_3D.cu

@@ -4,9 +4,8 @@
 #include <scfd/communication/mpi_comm.h>
 #include <scfd/communication/mpi_comm_info.h>
 #include <scfd/backend/cuda.h>
-#include <scfd/backend/omp.h>
 
-#include <scfd/arrays/array_nd.h>
+#include <scfd/utils/log_mpi.h>
 
 #include <fftm.hpp>
 
@@ -18,21 +17,32 @@ int main(int argc, char *argv[])
     using C = std::complex<T>;
     using comm_info_type = scfd::communication::mpi_comm_info;
     using base_fft_t = fftm::wrap::cufft_wrap_many<T>;
-    // using backend_t = scfd::backend::cuda;
-    using backend_t = scfd::backend::omp;
-    using fftm_t = fftm::fftm<base_fft_t, comm_info_type, backend_t>;
+    using backend_t = scfd::backend::cuda;
+    using fftm_t = fftm::fftm<
+        base_fft_t,
+        comm_info_type,
+        backend_t,
+        fftm::strategy_3d_pencil_pencil<fftm::mpi_transpose_3d_mode::alltoallv>,
+        scfd::utils::log_mpi>;
 
-    using array_R_type = scfd::arrays::array_nd<T ,3, backend_t::memory_type>;
-    using array_C_type = scfd::arrays::array_nd<C ,3, backend_t::memory_type>;
+    using array_R_type = typename fftm_t::template real_array_t<3>;
+    using array_C_type = typename fftm_t::template complex_array_t<3>;
 
     scfd::communication::mpi_wrap mpi(argc, argv);
     comm_info_type comm_info = mpi.comm_world();
+    scfd::utils::log_mpi log;
 
-    auto base_fft = std::make_shared<base_fft_t>();
-    auto fftm = std::make_shared<fftm_t>(base_fft, comm_info);
-    fftm->init({3,3},{128,128,128});
-    auto input_size = fftm->get_local_input_sizes();
-    auto output_size = fftm->get_local_output_sizes();
+    fftm_t distributed_fft(comm_info, log);
+
+    fftm::processor_grid grid;
+    grid.init(3, 3);
+
+    fftm::global_sizes sizes;
+    sizes.init(128, 128, 128);
+
+    distributed_fft.template init<3>(grid, sizes);
+    auto input_size = distributed_fft.get_local_input_sizes();
+    auto output_size = distributed_fft.get_local_output_sizes();
 
     std::cout << comm_info.myid << " (input): "  << std::get<0>(input_size) << " " << std::get<1>(input_size) << " " <<  std::get<2>(input_size)  << std::endl;
     std::cout << comm_info.myid << " (output): "  << std::get<0>(output_size) << " " << std::get<1>(output_size) << " " <<  std::get<2>(output_size)  << std::endl;
@@ -41,10 +51,7 @@ int main(int argc, char *argv[])
     in.init( std::get<0>(input_size), std::get<1>(input_size), std::get<2>(input_size) );
     out.init( std::get<0>(output_size), std::get<1>(output_size), std::get<2>(output_size) );
 
-    // fftm->init_test();
-
-
-    fftm->forwardR(in, out);
+    distributed_fft.forward(in, out);
     
     return 0;
 }
