@@ -22,6 +22,8 @@
 #include <fftm.hpp>
 #include <ffts.hpp>
 
+#include "detail/fftm_4d_test_options.h"
+
 namespace
 {
 
@@ -31,157 +33,10 @@ using backend_t  = scfd::backend::cuda;
 using memory_t   = backend_t::memory_type;
 using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::template for_each_nd_type<4, int>;
-using idx_t      = scfd::static_vec::vec<int, 4>;
-using rect_t     = scfd::static_vec::rect<int, 4>;
-
-enum class strategy_kind
-{
-    pencil_pencil,
-    slab_slab
-};
-
-struct test_options
-{
-    strategy_kind            strategy  = strategy_kind::pencil_pencil;
-    bool                     run_all   = false;
-    fftm::mpi_transpose_3d_mode mode   = fftm::mpi_transpose_3d_mode::alltoallv;
-    std::size_t              nx        = 12;
-    std::size_t              ny        = 10;
-    std::size_t              nz        = 8;
-    std::size_t              nw        = 10;
-    std::size_t              p1        = 0;
-    std::size_t              p2        = 0;
-    std::size_t              p3        = 0;
-    T                        threshold = T( 1.0e-11 );
-};
-
-std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid( std::size_t num_procs )
-{
-    std::size_t best_p1 = 1;
-    std::size_t best_p2 = 1;
-    std::size_t best_p3 = num_procs;
-    std::size_t best_span = best_p3 - best_p1;
-
-    for ( std::size_t p1 = 1; p1 <= num_procs; ++p1 )
-    {
-        if ( num_procs % p1 != 0 )
-            continue;
-        const std::size_t rem1 = num_procs / p1;
-        for ( std::size_t p2 = 1; p2 <= rem1; ++p2 )
-        {
-            if ( rem1 % p2 != 0 )
-                continue;
-            const std::size_t p3 = rem1 / p2;
-            const std::size_t max_dim = std::max( p1, std::max( p2, p3 ) );
-            const std::size_t min_dim = std::min( p1, std::min( p2, p3 ) );
-            const std::size_t span = max_dim - min_dim;
-            if ( span < best_span )
-            {
-                best_span = span;
-                best_p1 = p1;
-                best_p2 = p2;
-                best_p3 = p3;
-            }
-        }
-    }
-
-    return std::make_tuple( best_p1, best_p2, best_p3 );
-}
-
-std::tuple<std::size_t, std::size_t, std::size_t> choose_grid( const test_options &options, strategy_kind strategy, int num_procs )
-{
-    if ( options.p1 != 0 && options.p2 != 0 && options.p3 != 0 )
-        return std::make_tuple( options.p1, options.p2, options.p3 );
-
-    if ( strategy == strategy_kind::slab_slab )
-        return std::make_tuple( 1u, static_cast<std::size_t>( num_procs ), 1u );
-
-    return choose_balanced_grid( static_cast<std::size_t>( num_procs ) );
-}
-
-test_options parse_options( int argc, char *argv[] )
-{
-    test_options options;
-    int          argi = 1;
-
-    while ( argi < argc )
-    {
-        const std::string arg = argv[argi];
-
-        if ( arg == "--strategy" )
-        {
-            if ( argi + 1 >= argc )
-                throw std::logic_error( "Missing value for --strategy" );
-            const std::string value = argv[argi + 1];
-            if ( value == "pencil-pencil" )
-                options.strategy = strategy_kind::pencil_pencil;
-            else if ( value == "slab-slab" )
-                options.strategy = strategy_kind::slab_slab;
-            else if ( value == "all" )
-                options.run_all = true;
-            else
-                throw std::logic_error( "Unknown strategy '" + value + "'" );
-            argi += 2;
-        }
-        else if ( arg == "--mode" )
-        {
-            if ( argi + 1 >= argc )
-                throw std::logic_error( "Missing value for --mode" );
-            const std::string value = argv[argi + 1];
-            if ( value == "p2p-waitall" )
-                options.mode = fftm::mpi_transpose_3d_mode::p2p_waitall;
-            else if ( value == "p2p-waitany" )
-                options.mode = fftm::mpi_transpose_3d_mode::p2p_waitany;
-            else if ( value == "alltoallv" )
-                options.mode = fftm::mpi_transpose_3d_mode::alltoallv;
-            else if ( value == "alltoallw" )
-                options.mode = fftm::mpi_transpose_3d_mode::alltoallw;
-            else
-                throw std::logic_error( "Unknown mode '" + value + "'" );
-            argi += 2;
-        }
-        else if ( arg == "--grid" )
-        {
-            if ( argi + 3 >= argc )
-                throw std::logic_error( "Missing values for --grid P1 P2 P3" );
-            options.p1 = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
-            options.p2 = static_cast<std::size_t>( std::strtoull( argv[argi + 2], NULL, 10 ) );
-            options.p3 = static_cast<std::size_t>( std::strtoull( argv[argi + 3], NULL, 10 ) );
-            argi += 4;
-        }
-        else if ( arg == "--threshold" )
-        {
-            if ( argi + 1 >= argc )
-                throw std::logic_error( "Missing value for --threshold" );
-            options.threshold = static_cast<T>( std::atof( argv[argi + 1] ) );
-            argi += 2;
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    if ( argc - argi == 4 )
-    {
-        options.nx = static_cast<std::size_t>( std::strtoull( argv[argi], NULL, 10 ) );
-        options.ny = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
-        options.nz = static_cast<std::size_t>( std::strtoull( argv[argi + 2], NULL, 10 ) );
-        options.nw = static_cast<std::size_t>( std::strtoull( argv[argi + 3], NULL, 10 ) );
-    }
-    else if ( argc != argi )
-    {
-        throw std::logic_error(
-            "USAGE: test_fftm_4D_compare.bin [--strategy pencil-pencil|slab-slab|all] "
-            "[--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2 P3] [--threshold eps] [Nx Ny Nz Nw]"
-        );
-    }
-
-    if ( options.nw % 2 != 0 )
-        throw std::logic_error( "Nw must be even for the 4D comparison test." );
-
-    return options;
-}
+using idx_t       = scfd::static_vec::vec<int, 4>;
+using rect_t      = scfd::static_vec::rect<int, 4>;
+using strategy_kind = fftm::test::detail::fftm_4d_strategy_kind;
+using test_options  = fftm::test::detail::fftm_4d_test_options;
 
 template <class Array>
 rect_t make_range( const Array &array )
@@ -307,7 +162,7 @@ int run_compare(
     using error_array_t = scfd::arrays::array_nd<T, 1, memory_t>;
 
     std::size_t p1 = 0, p2 = 0, p3 = 0;
-    std::tie( p1, p2, p3 ) = choose_grid( options, strategy, comm_info.num_procs );
+    std::tie( p1, p2, p3 ) = fftm::test::detail::choose_grid_4d( options, strategy, comm_info.num_procs );
 
     if ( p1 * p2 * p3 != static_cast<std::size_t>( comm_info.num_procs ) )
         throw std::logic_error( "P1*P2*P3 must equal the number of MPI processes." );
@@ -532,7 +387,13 @@ int main( int argc, char *argv[] )
     {
         scfd::utils::init_cuda_mpi( log, comm_info );
 
-        const test_options options = parse_options( argc, argv );
+        const test_options options = fftm::test::detail::parse_fftm_4d_test_options(
+            argc,
+            argv,
+            "test_fftm_4D_compare.bin",
+            true,
+            true
+        );
 
         int failed = 0;
         if ( options.run_all )
