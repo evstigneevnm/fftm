@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
-
+#define SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 #include <scfd/backend/cuda.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>

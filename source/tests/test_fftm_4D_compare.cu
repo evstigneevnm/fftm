@@ -4,6 +4,8 @@
 #include <string>
 #include <tuple>
 
+#define SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+
 #include <cuda_runtime.h>
 
 #include <scfd/backend/cuda.h>

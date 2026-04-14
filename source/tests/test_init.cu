@@ -1,4 +1,7 @@
 #include <memory>
+
+#define SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+
 #include <external_wrap/cufft_wrap_many.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/communication/mpi_comm.h>
