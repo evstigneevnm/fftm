@@ -392,7 +392,8 @@ int main( int argc, char *argv[] )
             argv,
             "test_fftm_4D_compare.bin",
             true,
-            true
+            true,
+            false
         );
 
         int failed = 0;

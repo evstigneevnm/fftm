@@ -35,6 +35,7 @@ struct fftm_4d_test_options
     std::size_t              p2        = 0;
     std::size_t              p3        = 0;
     double                   threshold = 1.0e-11;
+    int                      times     = 1;
 };
 
 inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d( std::size_t num_procs )
@@ -91,7 +92,8 @@ inline std::tuple<std::size_t, std::size_t, std::size_t> choose_grid_4d(
 inline std::string usage_fftm_4d_test(
     const std::string &binary_name,
     bool               allow_strategy_all,
-    bool               allow_threshold
+    bool               allow_threshold,
+    bool               allow_times
 )
 {
     std::string usage = "USAGE: " + binary_name + " [--strategy pencil-pencil|slab-slab";
@@ -100,6 +102,8 @@ inline std::string usage_fftm_4d_test(
     usage += "] [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2 P3]";
     if ( allow_threshold )
         usage += " [--threshold eps]";
+    if ( allow_times )
+        usage += " [--times repeats]";
     usage += " [Nx Ny Nz Nw]";
     return usage;
 }
@@ -110,6 +114,7 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
     const std::string                 &binary_name,
     bool                               allow_strategy_all,
     bool                               allow_threshold,
+    bool                               allow_times,
     const fftm_4d_test_options        &defaults = fftm_4d_test_options()
 )
 {
@@ -176,6 +181,18 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.threshold = std::atof( argv[argi + 1] );
             argi += 2;
         }
+        else if ( arg == "--times" )
+        {
+            if ( !allow_times )
+                throw std::logic_error( "Unknown option '--times'" );
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --times" );
+
+            options.times = std::atoi( argv[argi + 1] );
+            if ( options.times < 1 )
+                throw std::logic_error( "--times must be at least 1" );
+            argi += 2;
+        }
         else
         {
             break;
@@ -191,7 +208,7 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
     }
     else if ( argc != argi )
     {
-        throw std::logic_error( usage_fftm_4d_test( binary_name, allow_strategy_all, allow_threshold ) );
+        throw std::logic_error( usage_fftm_4d_test( binary_name, allow_strategy_all, allow_threshold, allow_times ) );
     }
 
     if ( options.nw % 2 != 0 )

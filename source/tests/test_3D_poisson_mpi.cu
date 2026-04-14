@@ -21,6 +21,8 @@
 #include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 
+#include "detail/fftm_3d_test_options.h"
+#include "detail/poisson_3d_fft_common.h"
 #include "detail/poisson_3d_problem.h"
 
 namespace
@@ -34,212 +36,8 @@ using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::template for_each_nd_type<3, int>;
 using idx_t      = scfd::static_vec::vec<int, 3>;
 using rect_t     = scfd::static_vec::rect<int, 3>;
-
-enum class strategy_kind
-{
-    slab_pencil,
-    pencil_slab,
-    pencil_pencil
-};
-
-struct test_options
-{
-    strategy_kind             strategy = strategy_kind::pencil_pencil;
-    bool                      run_all  = false;
-    fftm::mpi_transpose_3d_mode mode   = fftm::mpi_transpose_3d_mode::alltoallv;
-    std::size_t               nx       = 16;
-    std::size_t               ny       = 16;
-    std::size_t               nz       = 16;
-    std::size_t               p1       = 0;
-    std::size_t               p2       = 0;
-};
-
-std::pair<std::size_t, std::size_t> choose_pencil_grid( std::size_t num_procs )
-{
-    std::size_t p1 = 1;
-    for ( std::size_t d = 1; d * d <= num_procs; ++d )
-    {
-        if ( num_procs % d == 0 )
-            p1 = d;
-    }
-    return std::make_pair( p1, num_procs / p1 );
-}
-
-test_options parse_options( int argc, char *argv[], int num_procs )
-{
-    test_options options;
-    int          argi = 1;
-
-    while ( argi < argc )
-    {
-        const std::string arg = argv[argi];
-        if ( arg == "--strategy" )
-        {
-            if ( argi + 1 >= argc )
-                throw std::logic_error( "Missing value for --strategy" );
-            const std::string value = argv[argi + 1];
-            if ( value == "slab-pencil" )
-                options.strategy = strategy_kind::slab_pencil;
-            else if ( value == "pencil-slab" )
-                options.strategy = strategy_kind::pencil_slab;
-            else if ( value == "pencil-pencil" )
-                options.strategy = strategy_kind::pencil_pencil;
-            else if ( value == "all" )
-                options.run_all = true;
-            else
-                throw std::logic_error( "Unknown strategy '" + value + "'" );
-            argi += 2;
-        }
-        else if ( arg == "--mode" )
-        {
-            if ( argi + 1 >= argc )
-                throw std::logic_error( "Missing value for --mode" );
-            const std::string value = argv[argi + 1];
-            if ( value == "p2p-waitall" )
-                options.mode = fftm::mpi_transpose_3d_mode::p2p_waitall;
-            else if ( value == "p2p-waitany" )
-                options.mode = fftm::mpi_transpose_3d_mode::p2p_waitany;
-            else if ( value == "alltoallv" )
-                options.mode = fftm::mpi_transpose_3d_mode::alltoallv;
-            else if ( value == "alltoallw" )
-                options.mode = fftm::mpi_transpose_3d_mode::alltoallw;
-            else
-                throw std::logic_error( "Unknown mode '" + value + "'" );
-            argi += 2;
-        }
-        else if ( arg == "--grid" )
-        {
-            if ( argi + 2 >= argc )
-                throw std::logic_error( "Missing values for --grid P1 P2" );
-            options.p1 = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
-            options.p2 = static_cast<std::size_t>( std::strtoull( argv[argi + 2], NULL, 10 ) );
-            argi += 3;
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    if ( argc - argi == 3 )
-    {
-        options.nx = static_cast<std::size_t>( std::strtoull( argv[argi], NULL, 10 ) );
-        options.ny = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
-        options.nz = static_cast<std::size_t>( std::strtoull( argv[argi + 2], NULL, 10 ) );
-    }
-    else if ( argc != argi )
-    {
-        throw std::logic_error(
-            "USAGE: test_3D_poisson_mpi.bin [--strategy slab-pencil|pencil-slab|pencil-pencil|all] "
-            "[--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2] [Nx Ny Nz]"
-        );
-    }
-
-    if ( options.p1 == 0 || options.p2 == 0 )
-    {
-        const auto pencil_grid = choose_pencil_grid( static_cast<std::size_t>( num_procs ) );
-        if ( options.strategy == strategy_kind::slab_pencil )
-        {
-            options.p1 = static_cast<std::size_t>( num_procs );
-            options.p2 = 1;
-        }
-        else if ( options.strategy == strategy_kind::pencil_slab )
-        {
-            options.p1 = 1;
-            options.p2 = static_cast<std::size_t>( num_procs );
-        }
-        else
-        {
-            options.p1 = pencil_grid.first;
-            options.p2 = pencil_grid.second;
-        }
-    }
-
-    return options;
-}
-
-template <class Array>
-rect_t make_range( const Array &array )
-{
-    const auto sz = array.size_nd();
-    return rect_t( idx_t( 0, 0, 0 ), idx_t( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) ) );
-}
-
-template <class ComplexArray>
-struct solve_fourier_functor
-{
-    ComplexArray rhs_hat;
-    ComplexArray solution_hat;
-    int          nx;
-    int          ny;
-    int          y_start;
-    int          z_start;
-
-    __DEVICE_TAG__ void operator()( const idx_t &idx ) const
-    {
-        const int kx = idx[0] <= nx / 2 ? idx[0] : idx[0] - nx;
-        const int gy = y_start + idx[2];
-        const int ky = gy <= ny / 2 ? gy : gy - ny;
-        const int kz = z_start + idx[1];
-
-        const T k2 = static_cast<T>( kx * kx + ky * ky + kz * kz );
-        if ( k2 == T( 0 ) )
-        {
-            solution_hat( idx ).x = T( 0 );
-            solution_hat( idx ).y = T( 0 );
-            return;
-        }
-
-        const T scale = -T( 1 ) / k2;
-        solution_hat( idx ).x = scale * rhs_hat( idx ).x;
-        solution_hat( idx ).y = scale * rhs_hat( idx ).y;
-    }
-};
-
-template <class ComplexArray>
-struct derivative_spectra_functor
-{
-    ComplexArray solution_hat;
-    ComplexArray dx_hat;
-    ComplexArray dy_hat;
-    ComplexArray dz_hat;
-    int          nx;
-    int          ny;
-    int          y_start;
-    int          z_start;
-
-    __DEVICE_TAG__ void operator()( const idx_t &idx ) const
-    {
-        const int kx = idx[0] <= nx / 2 ? idx[0] : idx[0] - nx;
-        const int gy = y_start + idx[2];
-        const int ky = gy <= ny / 2 ? gy : gy - ny;
-        const int kz = z_start + idx[1];
-
-        const T real_part = solution_hat( idx ).x;
-        const T imag_part = solution_hat( idx ).y;
-
-        dx_hat( idx ).x = -static_cast<T>( kx ) * imag_part;
-        dx_hat( idx ).y =  static_cast<T>( kx ) * real_part;
-
-        dy_hat( idx ).x = -static_cast<T>( ky ) * imag_part;
-        dy_hat( idx ).y =  static_cast<T>( ky ) * real_part;
-
-        dz_hat( idx ).x = -static_cast<T>( kz ) * imag_part;
-        dz_hat( idx ).y =  static_cast<T>( kz ) * real_part;
-    }
-};
-
-template <class RealArray>
-struct scale_real_functor
-{
-    RealArray field;
-    T         scale;
-
-    __DEVICE_TAG__ void operator()( const idx_t &idx ) const
-    {
-        field( idx ) *= scale;
-    }
-};
+using strategy_kind = fftm::test::detail::fftm_3d_strategy_kind;
+using test_options  = fftm::test::detail::fftm_3d_test_options;
 
 template <class Strategy>
 int run_poisson(
@@ -332,7 +130,7 @@ int run_poisson(
             hy * static_cast<T>( input_part.start_y[myid_j] ),
             T( 0 )
         },
-        make_range( rhs )
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs )
     );
     for_each.wait();
 
@@ -349,7 +147,7 @@ int run_poisson(
 
     distributed_fft.forward( rhs, rhs_hat );
     for_each(
-        solve_fourier_functor<hat_array_t>{
+        fftm::test::detail::solve_poisson_3d_functor<T, idx_t, hat_array_t>{
             rhs_hat,
             solution_hat,
             static_cast<int>( options.nx ),
@@ -357,11 +155,14 @@ int run_poisson(
             static_cast<int>( output_part.start_y[myid_i] ),
             static_cast<int>( output_part.start_z[myid_j] )
         },
-        make_range( rhs_hat )
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs_hat )
     );
     for_each.wait();
     distributed_fft.backward( solution_hat, numerical_solution );
-    for_each( scale_real_functor<real_array_t>{ numerical_solution, normalization }, make_range( numerical_solution ) );
+    for_each(
+        fftm::test::detail::scale_real_3d_functor<T, idx_t, real_array_t>{ numerical_solution, normalization },
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( numerical_solution )
+    );
     for_each.wait();
 
     CUDA_SAFE_CALL( cudaDeviceSynchronize() );
@@ -369,7 +170,7 @@ int run_poisson(
     const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
 
     for_each(
-        derivative_spectra_functor<hat_array_t>{
+        fftm::test::detail::poisson_3d_derivative_spectra_functor<T, idx_t, hat_array_t>{
             solution_hat,
             dx_hat,
             dy_hat,
@@ -379,16 +180,25 @@ int run_poisson(
             static_cast<int>( output_part.start_y[myid_i] ),
             static_cast<int>( output_part.start_z[myid_j] )
         },
-        make_range( solution_hat )
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( solution_hat )
     );
     for_each.wait();
 
     distributed_fft.backward( dx_hat, numerical_dx );
     distributed_fft.backward( dy_hat, numerical_dy );
     distributed_fft.backward( dz_hat, numerical_dz );
-    for_each( scale_real_functor<real_array_t>{ numerical_dx, normalization }, make_range( numerical_dx ) );
-    for_each( scale_real_functor<real_array_t>{ numerical_dy, normalization }, make_range( numerical_dy ) );
-    for_each( scale_real_functor<real_array_t>{ numerical_dz, normalization }, make_range( numerical_dz ) );
+    for_each(
+        fftm::test::detail::scale_real_3d_functor<T, idx_t, real_array_t>{ numerical_dx, normalization },
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( numerical_dx )
+    );
+    for_each(
+        fftm::test::detail::scale_real_3d_functor<T, idx_t, real_array_t>{ numerical_dy, normalization },
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( numerical_dy )
+    );
+    for_each(
+        fftm::test::detail::scale_real_3d_functor<T, idx_t, real_array_t>{ numerical_dz, normalization },
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( numerical_dz )
+    );
     for_each.wait();
 
     for_each(
@@ -404,7 +214,7 @@ int run_poisson(
             solution_error_sq,
             gradient_error_sq
         },
-        make_range( rhs )
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs )
     );
     for_each.wait();
 
@@ -484,7 +294,14 @@ int main( int argc, char *argv[] )
     {
         scfd::utils::init_cuda_mpi( log, comm_info );
 
-        const test_options options = parse_options( argc, argv, comm_info.num_procs );
+        const test_options options = fftm::test::detail::parse_fftm_3d_test_options(
+            argc,
+            argv,
+            comm_info.num_procs,
+            "test_3D_poisson_mpi.bin",
+            true,
+            false
+        );
         if ( options.p1 * options.p2 != static_cast<std::size_t>( comm_info.num_procs ) )
             throw std::logic_error( "P1*P2 must equal the number of MPI processes" );
 

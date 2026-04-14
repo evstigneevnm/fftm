@@ -122,39 +122,62 @@ int run_tutorial_case(
     if ( comm_info.myid == 0 && std::abs( rhs_mean ) > T( 1.0e-12 ) )
         log.warning_f( "rhs_mean = %.8e", rhs_mean );
 
-    scfd::utils::system_timer_event t0, t1;
-    CUDA_SAFE_CALL( cudaDeviceSynchronize() );
-    t0.record();
+    T wall_ms_acc = T( 0 );
+    for ( int iter = 0; iter < options.times; ++iter )
+    {
+        // Refill the RHS so each iteration solves the same problem without storing an extra copy.
+        for_each(
+            fftm::test::detail::fill_poisson_4d_rhs_functor<T, idx_t, real_array_t>{
+                field,
+                hx,
+                hy,
+                hz,
+                hw,
+                hx * static_cast<T>( input_part.start_x[myid_i] ),
+                hy * static_cast<T>( input_part.start_y[myid_j] ),
+                hz * static_cast<T>( input_part.start_z[myid_k] ),
+                T( 0 )
+            },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( field )
+        );
+        for_each.wait();
 
-    // Step 2: FFT the RHS to Fourier space.
-    distributed_fft.forward( field, field_hat );
+        scfd::utils::system_timer_event t0, t1;
+        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+        t0.record();
 
-    // Step 3: solve -|k|^2 u_hat = f_hat directly on the local spectral chunk.
-    for_each(
-        fftm::test::detail::solve_poisson_4d_in_place_functor<T, idx_t, hat_array_t>{
-            field_hat,
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( options.nz ),
-            static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] ),
-            static_cast<int>( output_part.start_w[myid_k] )
-        },
-        fftm::test::detail::make_range_4d<idx_t, rect_t>( field_hat )
-    );
-    for_each.wait();
+        // Step 2: FFT the RHS to Fourier space.
+        distributed_fft.forward( field, field_hat );
 
-    // Step 4: inverse FFT back to real space and apply CUFFT normalization.
-    distributed_fft.backward( field_hat, field );
-    for_each(
-        fftm::test::detail::scale_real_4d_functor<T, idx_t, real_array_t>{ field, normalization },
-        fftm::test::detail::make_range_4d<idx_t, rect_t>( field )
-    );
-    for_each.wait();
+        // Step 3: solve -|k|^2 u_hat = f_hat directly on the local spectral chunk.
+        for_each(
+            fftm::test::detail::solve_poisson_4d_in_place_functor<T, idx_t, hat_array_t>{
+                field_hat,
+                static_cast<int>( options.nx ),
+                static_cast<int>( options.ny ),
+                static_cast<int>( options.nz ),
+                static_cast<int>( output_part.start_y[myid_i] ),
+                static_cast<int>( output_part.start_z[myid_j] ),
+                static_cast<int>( output_part.start_w[myid_k] )
+            },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( field_hat )
+        );
+        for_each.wait();
 
-    CUDA_SAFE_CALL( cudaDeviceSynchronize() );
-    t1.record();
-    const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
+        // Step 4: inverse FFT back to real space and apply CUFFT normalization.
+        distributed_fft.backward( field_hat, field );
+        for_each(
+            fftm::test::detail::scale_real_4d_functor<T, idx_t, real_array_t>{ field, normalization },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( field )
+        );
+        for_each.wait();
+
+        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+        t1.record();
+        wall_ms_acc += static_cast<T>( t1.elapsed_time( t0 ) );
+    }
+
+    const T wall_ms = wall_ms_acc / static_cast<T>( options.times );
 
     // Step 5: reuse the solution buffer to accumulate the global L2 norm.
     for_each(
@@ -169,13 +192,14 @@ int run_tutorial_case(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: solution_l2=%.8e, wall_ms=%.8e",
+            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: solution_l2=%.8e, wall_ms=%.8e",
             fftm_t::strategy_name_4d(),
             fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ),
             options.nx,
             options.ny,
             options.nz,
             options.nw,
+            options.times,
             std::sqrt( global_l2_sq ),
             wall_ms
         );
@@ -242,7 +266,8 @@ int main( int argc, char *argv[] )
             argv,
             "test_4D_poisson_mpi_tutorial.bin",
             false,
-            false
+            false,
+            true
         );
 
         return dispatch_mode( options.strategy, log, options, comm_info );

@@ -333,6 +333,7 @@ int main( int argc, char *argv[] )
             argv,
             "test_4D_poisson_mpi.bin",
             true,
+            false,
             false
         );
 

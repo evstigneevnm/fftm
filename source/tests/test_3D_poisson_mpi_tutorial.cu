@@ -20,6 +20,8 @@
 #include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 
+#include "detail/fftm_3d_test_options.h"
+#include "detail/poisson_3d_fft_common.h"
 #include "detail/poisson_3d_problem.h"
 
 namespace
@@ -33,189 +35,8 @@ using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::template for_each_nd_type<3, int>;
 using idx_t      = scfd::static_vec::vec<int, 3>;
 using rect_t     = scfd::static_vec::rect<int, 3>;
-
-enum class strategy_kind
-{
-    slab_pencil,
-    pencil_slab,
-    pencil_pencil
-};
-
-struct test_options
-{
-    strategy_kind               strategy = strategy_kind::pencil_pencil;
-    fftm::mpi_transpose_3d_mode mode     = fftm::mpi_transpose_3d_mode::alltoallv;
-    std::size_t                 nx       = 128;
-    std::size_t                 ny       = 128;
-    std::size_t                 nz       = 128;
-    std::size_t                 p1       = 0;
-    std::size_t                 p2       = 0;
-};
-
-std::pair<std::size_t, std::size_t> choose_pencil_grid( std::size_t num_procs )
-{
-    std::size_t p1 = 1;
-    for ( std::size_t d = 1; d * d <= num_procs; ++d )
-    {
-        if ( num_procs % d == 0 )
-            p1 = d;
-    }
-    return std::make_pair( p1, num_procs / p1 );
-}
-
-test_options parse_options( int argc, char *argv[], int num_procs )
-{
-    test_options options;
-    int          argi = 1;
-
-    while ( argi < argc )
-    {
-        const std::string arg = argv[argi];
-        if ( arg == "--strategy" )
-        {
-            if ( argi + 1 >= argc )
-                throw std::logic_error( "Missing value for --strategy" );
-            const std::string value = argv[argi + 1];
-            if ( value == "slab-pencil" )
-                options.strategy = strategy_kind::slab_pencil;
-            else if ( value == "pencil-slab" )
-                options.strategy = strategy_kind::pencil_slab;
-            else if ( value == "pencil-pencil" )
-                options.strategy = strategy_kind::pencil_pencil;
-            else
-                throw std::logic_error( "Unknown strategy '" + value + "'" );
-            argi += 2;
-        }
-        else if ( arg == "--mode" )
-        {
-            if ( argi + 1 >= argc )
-                throw std::logic_error( "Missing value for --mode" );
-            const std::string value = argv[argi + 1];
-            if ( value == "p2p-waitall" )
-                options.mode = fftm::mpi_transpose_3d_mode::p2p_waitall;
-            else if ( value == "p2p-waitany" )
-                options.mode = fftm::mpi_transpose_3d_mode::p2p_waitany;
-            else if ( value == "alltoallv" )
-                options.mode = fftm::mpi_transpose_3d_mode::alltoallv;
-            else if ( value == "alltoallw" )
-                options.mode = fftm::mpi_transpose_3d_mode::alltoallw;
-            else
-                throw std::logic_error( "Unknown mode '" + value + "'" );
-            argi += 2;
-        }
-        else if ( arg == "--grid" )
-        {
-            if ( argi + 2 >= argc )
-                throw std::logic_error( "Missing values for --grid P1 P2" );
-            options.p1 = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
-            options.p2 = static_cast<std::size_t>( std::strtoull( argv[argi + 2], NULL, 10 ) );
-            argi += 3;
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    if ( argc - argi == 3 )
-    {
-        options.nx = static_cast<std::size_t>( std::strtoull( argv[argi], NULL, 10 ) );
-        options.ny = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
-        options.nz = static_cast<std::size_t>( std::strtoull( argv[argi + 2], NULL, 10 ) );
-    }
-    else if ( argc != argi )
-    {
-        throw std::logic_error(
-            "USAGE: test_3D_poisson_mpi_tutorial.bin "
-            "[--strategy slab-pencil|pencil-slab|pencil-pencil] "
-            "[--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] "
-            "[--grid P1 P2] [Nx Ny Nz]"
-        );
-    }
-
-    if ( options.p1 == 0 || options.p2 == 0 )
-    {
-        const auto pencil_grid = choose_pencil_grid( static_cast<std::size_t>( num_procs ) );
-        if ( options.strategy == strategy_kind::slab_pencil )
-        {
-            options.p1 = static_cast<std::size_t>( num_procs );
-            options.p2 = 1;
-        }
-        else if ( options.strategy == strategy_kind::pencil_slab )
-        {
-            options.p1 = 1;
-            options.p2 = static_cast<std::size_t>( num_procs );
-        }
-        else
-        {
-            options.p1 = pencil_grid.first;
-            options.p2 = pencil_grid.second;
-        }
-    }
-
-    return options;
-}
-
-template <class Array>
-rect_t make_range( const Array &array )
-{
-    const auto sz = array.size_nd();
-    return rect_t( idx_t( 0, 0, 0 ), idx_t( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) ) );
-}
-
-template <class ComplexArray>
-struct solve_fourier_in_place_functor
-{
-    ComplexArray spectrum;
-    int          nx;
-    int          ny;
-    int          y_start;
-    int          z_start;
-
-    __DEVICE_TAG__ void operator()( const idx_t &idx ) const
-    {
-        const int kx = idx[0] <= nx / 2 ? idx[0] : idx[0] - nx;
-        const int gy = y_start + idx[2];
-        const int ky = gy <= ny / 2 ? gy : gy - ny;
-        const int kz = z_start + idx[1];
-
-        const T k2 = static_cast<T>( kx * kx + ky * ky + kz * kz );
-        if ( k2 == T( 0 ) )
-        {
-            spectrum( idx ).x = T( 0 );
-            spectrum( idx ).y = T( 0 );
-            return;
-        }
-
-        const T scale = -T( 1 ) / k2;
-        spectrum( idx ).x *= scale;
-        spectrum( idx ).y *= scale;
-    }
-};
-
-template <class RealArray>
-struct scale_real_functor
-{
-    RealArray field;
-    T         scale;
-
-    __DEVICE_TAG__ void operator()( const idx_t &idx ) const
-    {
-        field( idx ) *= scale;
-    }
-};
-
-template <class RealArray>
-struct square_real_functor
-{
-    RealArray field;
-
-    __DEVICE_TAG__ void operator()( const idx_t &idx ) const
-    {
-        const T value = field( idx );
-        field( idx ) = value * value;
-    }
-};
+using strategy_kind = fftm::test::detail::fftm_3d_strategy_kind;
+using test_options  = fftm::test::detail::fftm_3d_test_options;
 
 template <class Strategy>
 int run_tutorial_case(
@@ -274,7 +95,7 @@ int run_tutorial_case(
             hy * static_cast<T>( input_part.start_y[myid_j] ),
             T( 0 )
         },
-        make_range( field )
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( field )
     );
     for_each.wait();
 
@@ -285,37 +106,64 @@ int run_tutorial_case(
         log.warning_f( "rhs_mean = %.8e", rhs_mean );
     }
 
-    scfd::utils::system_timer_event t0, t1;
-    CUDA_SAFE_CALL( cudaDeviceSynchronize() );
-    t0.record();
+    T wall_ms_acc = T( 0 );
+    for ( int iter = 0; iter < options.times; ++iter )
+    {
+        // Refill the RHS so each iteration solves the same problem without storing an extra copy.
+        for_each(
+            fftm::test::detail::fill_poisson_3d_rhs_functor<T, idx_t, real_array_t>{
+                field,
+                hx,
+                hy,
+                hz,
+                hx * static_cast<T>( input_part.start_x[myid_i] ),
+                hy * static_cast<T>( input_part.start_y[myid_j] ),
+                T( 0 )
+            },
+            fftm::test::detail::make_range_3d<idx_t, rect_t>( field )
+        );
+        for_each.wait();
 
-    // Step 2: FFT the RHS to Fourier space.
-    distributed_fft.forward( field, field_hat );
+        scfd::utils::system_timer_event t0, t1;
+        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+        t0.record();
 
-    // Step 3: solve -k^2 u_hat = f_hat directly on the local spectral chunk.
-    for_each(
-        solve_fourier_in_place_functor<hat_array_t>{
-            field_hat,
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] )
-        },
-        make_range( field_hat )
-    );
-    for_each.wait();
+        // Step 2: FFT the RHS to Fourier space.
+        distributed_fft.forward( field, field_hat );
 
-    // Step 4: inverse FFT back to real space and apply CUFFT normalization.
-    distributed_fft.backward( field_hat, field );
-    for_each( scale_real_functor<real_array_t>{ field, normalization }, make_range( field ) );
-    for_each.wait();
+        // Step 3: solve -k^2 u_hat = f_hat directly on the local spectral chunk.
+        for_each(
+            fftm::test::detail::solve_poisson_3d_in_place_functor<T, idx_t, hat_array_t>{
+                field_hat,
+                static_cast<int>( options.nx ),
+                static_cast<int>( options.ny ),
+                static_cast<int>( output_part.start_y[myid_i] ),
+                static_cast<int>( output_part.start_z[myid_j] )
+            },
+            fftm::test::detail::make_range_3d<idx_t, rect_t>( field_hat )
+        );
+        for_each.wait();
 
-    CUDA_SAFE_CALL( cudaDeviceSynchronize() );
-    t1.record();
-    const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
+        // Step 4: inverse FFT back to real space and apply CUFFT normalization.
+        distributed_fft.backward( field_hat, field );
+        for_each(
+            fftm::test::detail::scale_real_3d_functor<T, idx_t, real_array_t>{ field, normalization },
+            fftm::test::detail::make_range_3d<idx_t, rect_t>( field )
+        );
+        for_each.wait();
+
+        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+        t1.record();
+        wall_ms_acc += static_cast<T>( t1.elapsed_time( t0 ) );
+    }
+
+    const T wall_ms = wall_ms_acc / static_cast<T>( options.times );
 
     // Step 5: reuse the solution buffer to accumulate the global L2 norm.
-    for_each( square_real_functor<real_array_t>{ field }, make_range( field ) );
+    for_each(
+        fftm::test::detail::square_real_3d_functor<T, idx_t, real_array_t>{ field },
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( field )
+    );
     for_each.wait();
 
     const T local_l2_sq  = reduce( field.size(), field.raw_ptr(), T( 0 ) ) * cell_volume;
@@ -324,12 +172,13 @@ int run_tutorial_case(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu: solution_l2=%.8e, wall_ms=%.8e",
+            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: solution_l2=%.8e, wall_ms=%.8e",
             fftm_t::strategy_name(),
             fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ),
             options.nx,
             options.ny,
             options.nz,
+            options.times,
             std::sqrt( global_l2_sq ),
             wall_ms
         );
@@ -391,7 +240,21 @@ int main( int argc, char *argv[] )
     {
         scfd::utils::init_cuda_mpi( log, comm_info );
 
-        const test_options options = parse_options( argc, argv, comm_info.num_procs );
+        const test_options options = fftm::test::detail::parse_fftm_3d_test_options(
+            argc,
+            argv,
+            comm_info.num_procs,
+            "test_3D_poisson_mpi_tutorial.bin",
+            false,
+            true,
+            []{
+                test_options defaults;
+                defaults.nx = 128;
+                defaults.ny = 128;
+                defaults.nz = 128;
+                return defaults;
+            }()
+        );
         if ( options.p1 * options.p2 != static_cast<std::size_t>( comm_info.num_procs ) )
             throw std::logic_error( "P1*P2 must equal the number of MPI processes" );
 
