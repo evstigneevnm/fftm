@@ -215,7 +215,7 @@ public:
             input_dim.size_z[j]++;      
         input_dim.size_w.resize(1, g_sizes_.Nw); 
         input_dim.compute_offsets(g_sizes_._4D);
-        input_dim.debug_plot(mpi_, {myid_i, myid_j, myid_k});
+        // input_dim.debug_plot(mpi_, {myid_i, myid_j, myid_k});
 
         transpose1.size_x = input_dim.size_x;
         transpose1.size_y = input_dim.size_y;
