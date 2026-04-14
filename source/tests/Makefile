@@ -36,6 +36,10 @@ test_fftm_3D_compare.bin: test_fftm_3D_compare.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_fftm_3D_compare.cu -c -o test_fftm_3D_compare.o
 	mpicxx -g test_fftm_3D_compare.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_fftm_3D_compare.bin
 
+test_fftm_4D_compare.bin: test_fftm_4D_compare.cu
+	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_fftm_4D_compare.cu -c -o test_fftm_4D_compare.o
+	mpicxx -g test_fftm_4D_compare.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_fftm_4D_compare.bin
+
 test_3D_poisson_mpi.bin: test_3D_poisson_mpi.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_3D_poisson_mpi.cu -c -o test_3D_poisson_mpi.o
 	mpicxx -g test_3D_poisson_mpi.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_3D_poisson_mpi.bin
