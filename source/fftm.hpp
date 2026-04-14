@@ -8,12 +8,9 @@
 #include <tuple>
 #include <type_traits>
 
-#include <cuda_runtime.h>
-
 #include <scfd/arrays/tensor_array_nd.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
-#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
 
@@ -222,6 +219,7 @@ class fftm
 public:
     using real         = typename BaseFFT::real;
     using complex      = typename BaseFFT::complex;
+    using runtime_api_t = typename BaseFFT::runtime_api;
     using memory_t     = typename Backend::memory_type;
     using partition_t  = ::fftm::partition;
     using strategy_3d_t = Strategy3D;
@@ -402,11 +400,11 @@ private:
     using complex_array4_t    = typename traits_4d_t::complex_array_t;
 
     using partitioning_t      = fft_partitioning<MPIComm>;
-    using same_x_t            = ::fftm::mpi_transpose_3d<complex, Backend, MPIComm, Log>;
-    using same_z_t            = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log>;
-    using same_xy_t           = ::fftm::detail::mpi_transpose_4d_same_xy<complex, Backend, MPIComm, Log>;
-    using same_xw_t           = ::fftm::detail::mpi_transpose_4d_same_xw<complex, Backend, MPIComm, Log>;
-    using same_zw_t           = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log>;
+    using same_x_t            = ::fftm::mpi_transpose_3d<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_z_t            = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_xy_t           = ::fftm::detail::mpi_transpose_4d_same_xy<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_xw_t           = ::fftm::detail::mpi_transpose_4d_same_xw<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_zw_t           = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log, runtime_api_t>;
     using for_each_3d_t       = typename Backend::template for_each_nd_type<3, int>;
     using for_each_4d_t       = typename Backend::template for_each_nd_type<4, int>;
 
@@ -1139,12 +1137,12 @@ private:
         if ( in.size() != out.size() )
             throw std::logic_error( "fftm device copy requires equal total sizes" );
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             out.raw_ptr(),
             in.raw_ptr(),
             in.size() * sizeof( typename ArrayIn::value_type ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
     }
 
 private:

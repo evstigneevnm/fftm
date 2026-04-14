@@ -9,14 +9,11 @@
 #include <type_traits>
 #include <vector>
 
-#include <cuda_runtime.h>
-
 #include <scfd/arrays/array_nd.h>
 #include <scfd/communication/mpi_comm.h>
-#include <scfd/utils/cuda_safe_call.h>
-#include <scfd/utils/cuda_stream_wrap.h>
 #include <scfd/utils/log_mpi.h>
 
+#include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
 
 namespace fftm
@@ -60,7 +57,13 @@ inline int mpi_int_cast( std::size_t value, const std::string &what )
 
 } // namespace detail
 
-template <class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi>
+template <
+    class ValueType,
+    class Backend,
+    class MPIComm,
+    class Log        = scfd::utils::log_mpi,
+    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api
+>
 class mpi_transpose_3d
 {
 public:
@@ -72,13 +75,14 @@ public:
     using contiguous_buf_t = scfd::arrays::array_nd<value_type, 1, memory_t>;
     using mpi_request_t    = scfd::communication::detail::mpi_request;
     using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
+    using runtime_api_t    = RuntimeAPI;
 
     mpi_transpose_3d( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
         , log_( log )
     {
         static_assert(
-            std::is_same<memory_t, scfd::memory::cuda_device>::value,
+            std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
             "mpi_transpose_3d currently requires a CUDA backend memory type"
         );
     }
@@ -382,7 +386,7 @@ private:
     {
         for ( std::size_t i = 0; i < streams_.size(); ++i )
         {
-            CUDA_SAFE_CALL( cudaStreamSynchronize( streams_[i].stream() ) );
+            runtime_api_t::stream_synchronize( streams_[i].stream() );
         }
     }
 
@@ -391,30 +395,30 @@ private:
         std::size_t       src_y_size,
         std::size_t       dst_y_offset,
         value_type       *dst_ptr,
-        cudaStream_t      stream
+        typename runtime_api_t::stream_t stream
     ) const
     {
-        cudaMemcpy3DParms params = {};
-        params.srcPos            = make_cudaPos( 0, 0, 0 );
-        params.srcPtr            = make_cudaPitchedPtr(
-            const_cast<value_type *>( src_ptr ),
+        typename runtime_api_t::memcpy_3d_params_t params = {};
+        params.srcPos            = runtime_api_t::make_pos( 0, 0, 0 );
+        params.srcPtr            = runtime_api_t::make_pitched_ptr(
+            src_ptr,
             src_y_size * sizeof( value_type ),
             src_y_size,
             nx_local_
         );
 
-        params.dstPos = make_cudaPos( dst_y_offset * sizeof( value_type ), 0, 0 );
-        params.dstPtr = make_cudaPitchedPtr(
+        params.dstPos = runtime_api_t::make_pos( dst_y_offset * sizeof( value_type ), 0, 0 );
+        params.dstPtr = runtime_api_t::make_pitched_ptr(
             dst_ptr,
             ny_global_ * sizeof( value_type ),
             ny_global_,
             nx_local_
         );
 
-        params.extent = make_cudaExtent( src_y_size * sizeof( value_type ), nx_local_, nz_local_ );
-        params.kind   = cudaMemcpyDeviceToDevice;
+        params.extent = runtime_api_t::make_extent( src_y_size * sizeof( value_type ), nx_local_, nz_local_ );
+        params.kind   = runtime_api_t::device_to_device_kind();
 
-        CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+        runtime_api_t::memcpy_3d_async( &params, stream );
     }
 
     void pack_backward_chunk_async_(
@@ -422,30 +426,30 @@ private:
         std::size_t       src_y_offset,
         std::size_t       packed_y_size,
         value_type       *dst_ptr,
-        cudaStream_t      stream
+        typename runtime_api_t::stream_t stream
     ) const
     {
-        cudaMemcpy3DParms params = {};
-        params.srcPos            = make_cudaPos( src_y_offset * sizeof( value_type ), 0, 0 );
-        params.srcPtr            = make_cudaPitchedPtr(
-            const_cast<value_type *>( src_ptr ),
+        typename runtime_api_t::memcpy_3d_params_t params = {};
+        params.srcPos            = runtime_api_t::make_pos( src_y_offset * sizeof( value_type ), 0, 0 );
+        params.srcPtr            = runtime_api_t::make_pitched_ptr(
+            src_ptr,
             ny_global_ * sizeof( value_type ),
             ny_global_,
             nx_local_
         );
 
-        params.dstPos = make_cudaPos( 0, 0, 0 );
-        params.dstPtr = make_cudaPitchedPtr(
+        params.dstPos = runtime_api_t::make_pos( 0, 0, 0 );
+        params.dstPtr = runtime_api_t::make_pitched_ptr(
             dst_ptr,
             packed_y_size * sizeof( value_type ),
             packed_y_size,
             nx_local_
         );
 
-        params.extent = make_cudaExtent( packed_y_size * sizeof( value_type ), nx_local_, nz_local_ );
-        params.kind   = cudaMemcpyDeviceToDevice;
+        params.extent = runtime_api_t::make_extent( packed_y_size * sizeof( value_type ), nx_local_, nz_local_ );
+        params.kind   = runtime_api_t::device_to_device_kind();
 
-        CUDA_SAFE_CALL( cudaMemcpy3DAsync( &params, stream ) );
+        runtime_api_t::memcpy_3d_async( &params, stream );
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -665,13 +669,13 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpyAsync(
+        runtime_api_t::memcpy_async(
             out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
             send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
             bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice,
+            runtime_api_t::device_to_device_kind(),
             streams_[myid_j_].stream()
-        ) );
+        );
 
         row_comm_info_.waitall( row_size, recv_requests_.data() );
         row_comm_info_.waitall( row_size, send_requests_.data() );
@@ -720,13 +724,13 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpyAsync(
+        runtime_api_t::memcpy_async(
             out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
             send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
             bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice,
+            runtime_api_t::device_to_device_kind(),
             streams_[myid_j_].stream()
-        ) );
+        );
 
         int completed = 0;
         while ( completed < row_size - 1 )
@@ -815,7 +819,7 @@ private:
     contiguous_buf_t                        recv_buffer_;
     std::vector<mpi_request_t>              send_requests_;
     std::vector<mpi_request_t>              recv_requests_;
-    std::vector<scfd::utils::cuda_stream_wrap> streams_;
+    std::vector<typename runtime_api_t::stream_wrap> streams_;
 
     std::vector<int>           forward_sendcounts_;
     std::vector<int>           forward_sdispls_;

@@ -6,10 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include <cuda_runtime.h>
-
 #include <scfd/backend/cuda.h>
-#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/init_cuda.h>
 #include <scfd/utils/log_std.h>
@@ -28,6 +25,7 @@ class poisson_3d_fft_case
 public:
     using T         = typename FFTS::real;
     using results_t = std::pair<std::pair<T, T>, T>;
+    using runtime_api_t = typename FFTS::runtime_api;
 
     explicit poisson_3d_fft_case( std::size_t nx, std::size_t ny, std::size_t nz )
         : nx_( nx )
@@ -238,7 +236,7 @@ private:
     {
         scfd::utils::system_timer_event t_begin, t_end;
 
-        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+        runtime_api_t::device_synchronize();
         t_begin.record();
 
         ffts_.forward( rhs_, rhs_hat_ );
@@ -246,7 +244,7 @@ private:
         ffts_.backward( solution_hat_, numerical_solution_ );
         scale_real_field( numerical_solution_, normalization_factor() );
 
-        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+        runtime_api_t::device_synchronize();
         t_end.record();
 
         return static_cast<T>( t_end.elapsed_time( t_begin ) );

@@ -4,13 +4,10 @@
 #include <string>
 #include <tuple>
 
-#include <cuda_runtime.h>
-
 #include <scfd/backend/cuda.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
-#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
@@ -28,6 +25,7 @@ namespace
 
 using T           = double;
 using base_fft_t  = fftm::wrap::cufft_wrap_many<T>;
+using runtime_api_t = typename base_fft_t::runtime_api;
 using backend_t   = scfd::backend::cuda;
 using reduce_t    = backend_t::reduce_type;
 using for_each_t  = backend_t::template for_each_nd_type<4, int>;
@@ -162,7 +160,7 @@ int run_poisson(
         log.warning_f( "rhs_mean = %.8e", rhs_mean );
 
     scfd::utils::system_timer_event t0, t1;
-    CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+    runtime_api_t::device_synchronize();
     t0.record();
 
     distributed_fft.forward( rhs, rhs_hat );
@@ -187,7 +185,7 @@ int run_poisson(
     );
     for_each.wait();
 
-    CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+    runtime_api_t::device_synchronize();
     t1.record();
     const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
 

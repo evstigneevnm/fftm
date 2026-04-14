@@ -6,6 +6,9 @@
 #include <type_traits>
 #include <cufft.h>
 #include <cuda.h>
+#include <cuda_runtime.h>
+#include <scfd/memory/cuda.h>
+#include <scfd/utils/cuda_stream_wrap.h>
 #include <scfd/utils/todo.h>
 #include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/cufft_safe_call.h>
@@ -16,6 +19,79 @@ namespace fftm
 {
 namespace wrap
 {
+
+struct cuda_runtime_api
+{
+    using memory_type        = scfd::memory::cuda_device;
+    using stream_wrap        = scfd::utils::cuda_stream_wrap;
+    using stream_t           = cudaStream_t;
+    using memcpy_kind_t      = cudaMemcpyKind;
+    using memcpy_3d_params_t = cudaMemcpy3DParms;
+    using pos_t              = cudaPos;
+    using pitched_ptr_t      = cudaPitchedPtr;
+    using extent_t           = cudaExtent;
+
+    static pos_t make_pos( size_t x, size_t y, size_t z )
+    {
+        return make_cudaPos( x, y, z );
+    }
+
+    static pitched_ptr_t make_pitched_ptr( void *ptr, size_t pitch, size_t xsz, size_t ysz )
+    {
+        return make_cudaPitchedPtr( ptr, pitch, xsz, ysz );
+    }
+
+    static pitched_ptr_t make_pitched_ptr( const void *ptr, size_t pitch, size_t xsz, size_t ysz )
+    {
+        return make_cudaPitchedPtr( const_cast<void *>( ptr ), pitch, xsz, ysz );
+    }
+
+    static extent_t make_extent( size_t width, size_t height, size_t depth )
+    {
+        return make_cudaExtent( width, height, depth );
+    }
+
+    static constexpr memcpy_kind_t device_to_device_kind()
+    {
+        return cudaMemcpyDeviceToDevice;
+    }
+
+    static constexpr memcpy_kind_t device_to_host_kind()
+    {
+        return cudaMemcpyDeviceToHost;
+    }
+
+    static constexpr memcpy_kind_t host_to_device_kind()
+    {
+        return cudaMemcpyHostToDevice;
+    }
+
+    static void memcpy_3d_async( memcpy_3d_params_t *params, stream_t stream )
+    {
+        CUDA_SAFE_CALL( cudaMemcpy3DAsync( params, stream ) );
+    }
+
+    static void memcpy_async( void *dst, const void *src, size_t bytes, memcpy_kind_t kind, stream_t stream )
+    {
+        CUDA_SAFE_CALL( cudaMemcpyAsync( dst, src, bytes, kind, stream ) );
+    }
+
+    static void memcpy( void *dst, const void *src, size_t bytes, memcpy_kind_t kind )
+    {
+        CUDA_SAFE_CALL( cudaMemcpy( dst, src, bytes, kind ) );
+    }
+
+    static void device_synchronize()
+    {
+        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+    }
+
+    static void stream_synchronize( stream_t stream )
+    {
+        CUDA_SAFE_CALL( cudaStreamSynchronize( stream ) );
+    }
+};
+
 namespace cufft
 {
 namespace detail
@@ -182,6 +258,8 @@ class fft_base
 {
 public:
     using complex = typename detail::fft_complex<T>::complex;
+    using memory_type = typename cuda_runtime_api::memory_type;
+    using runtime_api = cuda_runtime_api;
     virtual ~fft_base() {}
     // virtual cufftResult exec(void* in, void* out) = 0; //check error here
     virtual void exec(void* in, void* out) = 0;
@@ -197,6 +275,7 @@ class fft : public fft_base<T>
     using traits = detail::fft_traits<T, D>;
 
 public:
+    using base_t   = fft_base<T>;
     using in_type  = typename traits::in_type;
     using out_type = typename traits::out_type;
 

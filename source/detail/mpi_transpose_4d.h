@@ -9,16 +9,14 @@
 #include <type_traits>
 #include <vector>
 
-#include <cuda_runtime.h>
-
 #include <scfd/arrays/array_nd.h>
 #include <scfd/communication/mpi_comm.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
-#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
 
+#include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
 #include "mpi_transpose_3d.h"
 
@@ -68,7 +66,13 @@ inline rect_4d_t<Idx> make_range_4d( std::size_t d0, std::size_t d1, std::size_t
     );
 }
 
-template <class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi>
+template <
+    class ValueType,
+    class Backend,
+    class MPIComm,
+    class Log        = scfd::utils::log_mpi,
+    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api
+>
 class mpi_transpose_4d_same_xy
 {
 public:
@@ -83,13 +87,14 @@ public:
     using idx_t            = scfd::static_vec::vec<int, 4>;
     using range_t          = rect_4d_t<idx_t>;
     using for_each_t       = typename backend_t::template for_each_nd_type<4, int>;
+    using runtime_api_t    = RuntimeAPI;
 
     mpi_transpose_4d_same_xy( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
         , log_( log )
     {
         static_assert(
-            std::is_same<memory_t, scfd::memory::cuda_device>::value,
+            std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
             "mpi_transpose_4d_same_xy currently requires a CUDA backend memory type"
         );
         for_each_.block_size = 128;
@@ -520,12 +525,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_k_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_k_],
             bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
         for ( int p = 0; p < comm_size; ++p )
@@ -563,12 +568,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_k_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_k_],
             bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
         unpack_forward_chunk_( myid_k_, out );
 
         int completed = 0;
@@ -658,12 +663,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_k_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_k_],
             bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
         for ( int p = 0; p < comm_size; ++p )
@@ -701,12 +706,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_k_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_k_],
             bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
         unpack_backward_chunk_( myid_k_, out );
 
         int completed = 0;
@@ -823,7 +828,13 @@ private:
     std::size_t max_buffer_elems_ = 0;
 };
 
-template <class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi>
+template <
+    class ValueType,
+    class Backend,
+    class MPIComm,
+    class Log        = scfd::utils::log_mpi,
+    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api
+>
 class mpi_transpose_4d_same_xw
 {
 public:
@@ -838,13 +849,14 @@ public:
     using idx_t            = scfd::static_vec::vec<int, 4>;
     using range_t          = rect_4d_t<idx_t>;
     using for_each_t       = typename backend_t::template for_each_nd_type<4, int>;
+    using runtime_api_t    = RuntimeAPI;
 
     mpi_transpose_4d_same_xw( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
         , log_( log )
     {
         static_assert(
-            std::is_same<memory_t, scfd::memory::cuda_device>::value,
+            std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
             "mpi_transpose_4d_same_xw currently requires a CUDA backend memory type"
         );
         for_each_.block_size = 128;
@@ -1275,12 +1287,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
             bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
         for ( int p = 0; p < comm_size; ++p )
@@ -1318,12 +1330,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
             bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
         unpack_forward_chunk_( myid_j_, out );
 
         int completed = 0;
@@ -1413,12 +1425,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
             bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
         for ( int p = 0; p < comm_size; ++p )
@@ -1456,12 +1468,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
             bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
         unpack_backward_chunk_( myid_j_, out );
 
         int completed = 0;
@@ -1578,7 +1590,13 @@ private:
     std::size_t max_buffer_elems_ = 0;
 };
 
-template <class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi>
+template <
+    class ValueType,
+    class Backend,
+    class MPIComm,
+    class Log        = scfd::utils::log_mpi,
+    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api
+>
 class mpi_transpose_4d_same_zw
 {
 public:
@@ -1593,13 +1611,14 @@ public:
     using idx_t            = scfd::static_vec::vec<int, 4>;
     using range_t          = rect_4d_t<idx_t>;
     using for_each_t       = typename backend_t::template for_each_nd_type<4, int>;
+    using runtime_api_t    = RuntimeAPI;
 
     mpi_transpose_4d_same_zw( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
         , log_( log )
     {
         static_assert(
-            std::is_same<memory_t, scfd::memory::cuda_device>::value,
+            std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
             "mpi_transpose_4d_same_zw currently requires a CUDA backend memory type"
         );
         for_each_.block_size = 128;
@@ -2030,12 +2049,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
             bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
         for ( int p = 0; p < comm_size; ++p )
@@ -2073,12 +2092,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
             bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
         unpack_forward_chunk_( myid_i_, out );
 
         int completed = 0;
@@ -2168,12 +2187,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
             bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
         for ( int p = 0; p < comm_size; ++p )
@@ -2211,12 +2230,12 @@ private:
             );
         }
 
-        CUDA_SAFE_CALL( cudaMemcpy(
+        runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
             bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ),
-            cudaMemcpyDeviceToDevice
-        ) );
+            runtime_api_t::device_to_device_kind()
+        );
         unpack_backward_chunk_( myid_i_, out );
 
         int completed = 0;

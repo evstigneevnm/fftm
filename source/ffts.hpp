@@ -7,10 +7,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include <cuda_runtime.h>
-
 #include <scfd/arrays/tensor_array_nd.h>
-#include <scfd/utils/cuda_safe_call.h>
 
 #include "detail/array_arrangers.h"
 #include "detail/cuda_memcpy_4d_slab_transposer.h"
@@ -152,6 +149,7 @@ public:
     using real     = typename BaseFFT::real;
     using complex  = typename BaseFFT::complex;
     using memory_t = typename Backend::memory_type;
+    using runtime_api = typename BaseFFT::runtime_api;
     using strategy_4d_t = Strategy4D;
 
     template <std::size_t Dim>
@@ -286,6 +284,7 @@ public:
 
 private:
     using backend_t     = Backend;
+    using runtime_api_t = typename BaseFFT::runtime_api;
     using for_each_4d_t = typename backend_t::template for_each_nd_type<4, int>;
     using strategy_family_tag   = std::integral_constant<transform_strategy_4d, strategy_family_4d>;
     using transpose_backend_tag = std::integral_constant<transpose_backend, transpose_backend_4d>;
@@ -295,7 +294,7 @@ private:
     using stage1_complex_array_t = typename traits_4d_t::stage1_complex_array_t;
     using stage2_complex_array_t = typename traits_4d_t::stage2_complex_array_t;
     using direct_transposer_t    = detail::direct_transpose_4d;
-    using memcpy_transposer_t    = detail::cuda_memcpy_4d_slab_transposer<complex>;
+    using memcpy_transposer_t    = detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>;
 
     void ensure_can_init_() const
     {
@@ -592,7 +591,7 @@ private:
 
     void init_memcpy_transposer_( std::integral_constant<transpose_backend, transpose_backend::memcpy> )
     {
-        memcpy_transposer_.reset( new detail::cuda_memcpy_4d_slab_transposer<complex>( nx_, ny_, nz_, nw_half_ ) );
+        memcpy_transposer_.reset( new detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>( nx_, ny_, nz_, nw_half_ ) );
     }
 
     void forward_4d_(
@@ -917,13 +916,11 @@ private:
 
     void copy_spectral_field_( const complex_array_t<4> &src, complex_array_t<4> &dst )
     {
-        CUDA_SAFE_CALL(
-            cudaMemcpy(
-                dst.raw_ptr(),
-                src.raw_ptr(),
-                sizeof( complex ) * static_cast<std::size_t>( src.total_size() ),
-                cudaMemcpyDeviceToDevice
-            )
+        runtime_api_t::memcpy(
+            dst.raw_ptr(),
+            src.raw_ptr(),
+            sizeof( complex ) * static_cast<std::size_t>( src.total_size() ),
+            runtime_api_t::device_to_device_kind()
         );
     }
 
