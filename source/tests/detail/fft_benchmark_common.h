@@ -266,6 +266,59 @@ struct diff_square_real_4d_functor
     }
 };
 
+template <class T, class Idx, class Array>
+struct overwrite_with_random_diff_square_3d_functor
+{
+    Array              actual;
+    unsigned long long seed;
+    int                start_x;
+    int                start_y;
+    int                start_z;
+
+    __DEVICE_TAG__ void operator()( const Idx &idx ) const
+    {
+        const unsigned long long gx = static_cast<unsigned long long>( start_x + idx[0] );
+        const unsigned long long gy = static_cast<unsigned long long>( start_y + idx[1] );
+        const unsigned long long gz = static_cast<unsigned long long>( start_z + idx[2] );
+        const unsigned long long state =
+            seed ^
+            ( gx * 0xD6E8FEB86659FD93ull ) ^
+            ( gy * 0xA5A3564E27F886A5ull ) ^
+            ( gz * 0x9E3779B97F4A7C15ull );
+        const T expected = unit_random_from_state<T>( state );
+        const T diff = actual( idx ) - expected;
+        actual( idx ) = diff * diff;
+    }
+};
+
+template <class T, class Idx, class Array>
+struct overwrite_with_random_diff_square_4d_functor
+{
+    Array              actual;
+    unsigned long long seed;
+    int                start_x;
+    int                start_y;
+    int                start_z;
+    int                start_w;
+
+    __DEVICE_TAG__ void operator()( const Idx &idx ) const
+    {
+        const unsigned long long gx = static_cast<unsigned long long>( start_x + idx[0] );
+        const unsigned long long gy = static_cast<unsigned long long>( start_y + idx[1] );
+        const unsigned long long gz = static_cast<unsigned long long>( start_z + idx[2] );
+        const unsigned long long gw = static_cast<unsigned long long>( start_w + idx[3] );
+        const unsigned long long state =
+            seed ^
+            ( gx * 0xD6E8FEB86659FD93ull ) ^
+            ( gy * 0xA5A3564E27F886A5ull ) ^
+            ( gz * 0x9E3779B97F4A7C15ull ) ^
+            ( gw * 0x94D049BB133111EBull );
+        const T expected = unit_random_from_state<T>( state );
+        const T diff = actual( idx ) - expected;
+        actual( idx ) = diff * diff;
+    }
+};
+
 template <class Idx, class Rect, class Array>
 inline Rect make_range_3d( const Array &array )
 {

@@ -45,15 +45,11 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
     ffts_t fft;
     fft.init( options.nx, options.ny, options.nz, options.nw );
 
-    real_array_t original;
     real_array_t work;
     hat_array_t  hat;
-    error_array_t diff_sq;
 
-    original.init( options.nx, options.ny, options.nz, options.nw );
     work.init( options.nx, options.ny, options.nz, options.nw );
     hat.init( options.ny, options.nz, options.nw / 2 + 1, options.nx );
-    diff_sq.init( original.total_size() );
 
     for_each_t for_each;
     reduce_t   reduce;
@@ -69,15 +65,7 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
         const unsigned long long seed = 0xCAFEBABE13579BDFull + static_cast<unsigned long long>( iter );
 
         for_each(
-            fftm::test::detail::fill_random_real_4d_functor<T, idx_t, real_array_t>{
-                original, seed, 0, 0, 0, 0
-            },
-            fftm::test::detail::make_range_4d<idx_t, rect_t>( original )
-        );
-        for_each.wait();
-
-        for_each(
-            fftm::test::detail::copy_same_indices_functor<idx_t, real_array_t, real_array_t>{ original, work },
+            fftm::test::detail::fill_random_real_4d_functor<T, idx_t, real_array_t>{ work, seed, 0, 0, 0, 0 },
             fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
         );
         for_each.wait();
@@ -98,14 +86,14 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
         for_each.wait();
 
         for_each(
-            fftm::test::detail::diff_square_real_4d_functor<T, idx_t, real_array_t, real_array_t, error_array_t>{
-                work, original, diff_sq
+            fftm::test::detail::overwrite_with_random_diff_square_4d_functor<T, idx_t, real_array_t>{
+                work, seed, 0, 0, 0, 0
             },
             fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
         );
         for_each.wait();
 
-        const T diff_norm = std::sqrt( reduce( diff_sq.size(), diff_sq.raw_ptr(), T( 0 ) ) );
+        const T diff_norm = std::sqrt( reduce( work.size(), work.raw_ptr(), T( 0 ) ) );
         if ( diff_norm > max_norm )
             max_norm = diff_norm;
         if ( diff_norm > options.epsilon )

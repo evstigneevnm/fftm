@@ -68,15 +68,11 @@ int run_benchmark_case(
     int myid_i = 0, myid_j = 0, myid_k = 0;
     std::tie( myid_i, myid_j, myid_k ) = partitioning.get_my_grid();
 
-    real_array_t original;
     real_array_t work;
     hat_array_t  hat;
-    error_array_t diff_sq;
 
-    original.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ) );
     work.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ) );
     hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ) );
-    diff_sq.init( original.total_size() );
 
     for_each_t for_each;
     reduce_t   reduce;
@@ -93,18 +89,12 @@ int run_benchmark_case(
 
         for_each(
             fftm::test::detail::fill_random_real_3d_functor<T, idx_t, real_array_t>{
-                original,
+                work,
                 seed,
                 static_cast<int>( input_part.start_x[myid_i] ),
                 static_cast<int>( input_part.start_y[myid_j] ),
                 0
             },
-            fftm::test::detail::make_range_3d<idx_t, rect_t>( original )
-        );
-        for_each.wait();
-
-        for_each(
-            fftm::test::detail::copy_same_indices_functor<idx_t, real_array_t, real_array_t>{ original, work },
             fftm::test::detail::make_range_3d<idx_t, rect_t>( work )
         );
         for_each.wait();
@@ -125,14 +115,18 @@ int run_benchmark_case(
         for_each.wait();
 
         for_each(
-            fftm::test::detail::diff_square_real_3d_functor<T, idx_t, real_array_t, real_array_t, error_array_t>{
-                work, original, diff_sq
+            fftm::test::detail::overwrite_with_random_diff_square_3d_functor<T, idx_t, real_array_t>{
+                work,
+                seed,
+                static_cast<int>( input_part.start_x[myid_i] ),
+                static_cast<int>( input_part.start_y[myid_j] ),
+                0
             },
             fftm::test::detail::make_range_3d<idx_t, rect_t>( work )
         );
         for_each.wait();
 
-        const T local_diff_sq = reduce( diff_sq.size(), diff_sq.raw_ptr(), T( 0 ) );
+        const T local_diff_sq = reduce( work.size(), work.raw_ptr(), T( 0 ) );
         const T diff_norm     = std::sqrt( comm_info.all_reduce_sum( local_diff_sq ) );
         if ( diff_norm > max_norm )
             max_norm = diff_norm;

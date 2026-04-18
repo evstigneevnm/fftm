@@ -8,6 +8,7 @@
 #include <tuple>
 #include <type_traits>
 
+#include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
@@ -406,6 +407,7 @@ private:
     using same_zw_t           = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log, runtime_api_t>;
     using for_each_3d_t       = typename Backend::template for_each_nd_type<3, int>;
     using for_each_4d_t       = typename Backend::template for_each_nd_type<4, int>;
+    using complex_buffer_t    = scfd::arrays::array_nd<complex, 1, memory_t>;
 
     void ensure_can_init_() const
     {
@@ -792,9 +794,19 @@ private:
 
         output_dim_ = transpose2_dim_;
 
-        stage0_3d_.init( input_dim_.size_x[myid_i_], nz_half_, ny_ );
-        work_hat_3d_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
-        x_fft_stage_3d_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
+        init_shared_stage0_xfft_3d_(
+            input_dim_.size_x[myid_i_],
+            nz_half_,
+            ny_,
+            output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_],
+            output_dim_.size_y[myid_i_]
+        );
+        init_owned_work_hat_3d_(
+            output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_],
+            output_dim_.size_y[myid_i_]
+        );
         same_z_.init( half_input_dim_, output_dim_, myid_i_, 0 );
     }
 
@@ -804,9 +816,19 @@ private:
 
         output_dim_ = transpose2_dim_;
 
-        stage0_3d_.init( input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_ );
-        work_hat_3d_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
-        x_fft_stage_3d_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
+        init_shared_stage0_xfft_3d_(
+            input_dim_.size_x[myid_i_],
+            input_dim_.size_y[myid_j_],
+            nz_half_,
+            output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_],
+            output_dim_.size_y[myid_i_]
+        );
+        init_owned_work_hat_3d_(
+            output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_],
+            output_dim_.size_y[myid_i_]
+        );
         same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ );
     }
 
@@ -814,10 +836,24 @@ private:
     {
         output_dim_ = transpose2_dim_;
 
-        stage0_3d_.init( input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_ );
-        stage1_3d_.init( input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_ );
-        work_hat_3d_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
-        x_fft_stage_3d_.init( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
+        init_shared_stage0_xfft_3d_(
+            input_dim_.size_x[myid_i_],
+            input_dim_.size_y[myid_j_],
+            nz_half_,
+            output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_],
+            output_dim_.size_y[myid_i_]
+        );
+        init_owned_stage1_3d_(
+            input_dim_.size_x[myid_i_],
+            transpose1_dim_.size_z[myid_j_],
+            ny_
+        );
+        init_owned_work_hat_3d_(
+            output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_],
+            output_dim_.size_y[myid_i_]
+        );
 
         same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ );
         same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ );
@@ -1144,6 +1180,37 @@ private:
         );
     }
 
+    void init_shared_stage0_xfft_3d_(
+        std::size_t stage0_d0,
+        std::size_t stage0_d1,
+        std::size_t stage0_d2,
+        std::size_t xfft_d0,
+        std::size_t xfft_d1,
+        std::size_t xfft_d2
+    )
+    {
+        const std::size_t stage0_size = stage0_d0 * stage0_d1 * stage0_d2;
+        const std::size_t xfft_size   = xfft_d0 * xfft_d1 * xfft_d2;
+        if ( stage0_size != xfft_size )
+            throw std::logic_error( "fftm 3D shared stage0/xfft buffer size mismatch" );
+
+        scratch_stage0_xfft_3d_.init( stage0_size );
+        stage0_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2 );
+        x_fft_stage_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), xfft_d0, xfft_d1, xfft_d2 );
+    }
+
+    void init_owned_stage1_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
+    {
+        scratch_stage1_3d_.init( d0 * d1 * d2 );
+        stage1_3d_.init_by_raw_data( scratch_stage1_3d_.raw_ptr(), d0, d1, d2 );
+    }
+
+    void init_owned_work_hat_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
+    {
+        scratch_work_hat_3d_.init( d0 * d1 * d2 );
+        work_hat_3d_.init_by_raw_data( scratch_work_hat_3d_.raw_ptr(), d0, d1, d2 );
+    }
+
 private:
     BaseFFT          base_fft_;
     MPIComm          mpi_;
@@ -1175,6 +1242,9 @@ private:
     partition_t      transpose3_dim_;
     partition_t      output_dim_;
 
+    complex_buffer_t scratch_stage0_xfft_3d_;
+    complex_buffer_t scratch_stage1_3d_;
+    complex_buffer_t scratch_work_hat_3d_;
     stage0_complex3_t stage0_3d_;
     stage1_complex3_t stage1_3d_;
     complex_array3_t  work_hat_3d_;
