@@ -17,7 +17,6 @@
 #include "detail/array_arrangers.h"
 #include "detail/direct_transpose_4d.h"
 #include "detail/mpi_transpose_3d.h"
-#include "detail/mpi_transpose_3d_same_z.h"
 #include "detail/mpi_transpose_4d.h"
 #include "fft_direction.h"
 #include "fft_partitioning.h"

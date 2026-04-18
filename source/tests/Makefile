@@ -56,6 +56,20 @@ test_4D_poisson_mpi_tutorial.bin: test_4D_poisson_mpi_tutorial.cu
 	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_4D_poisson_mpi_tutorial.cu -c -o test_4D_poisson_mpi_tutorial.o
 	mpicxx -g test_4D_poisson_mpi_tutorial.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_4D_poisson_mpi_tutorial.bin
 
+test_benchmark_ffts_3D.bin: test_benchmark_ffts_3D.cu
+	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_benchmark_ffts_3D.cu -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_benchmark_ffts_3D.bin
+
+test_benchmark_ffts_4D.bin: test_benchmark_ffts_4D.cu
+	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_benchmark_ffts_4D.cu -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_benchmark_ffts_4D.bin
+
+test_benchmark_fftm_3D.bin: test_benchmark_fftm_3D.cu
+	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_benchmark_fftm_3D.cu -c -o test_benchmark_fftm_3D.o
+	mpicxx -g test_benchmark_fftm_3D.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_benchmark_fftm_3D.bin
+
+test_benchmark_fftm_4D.bin: test_benchmark_fftm_4D.cu
+	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) test_benchmark_fftm_4D.cu -c -o test_benchmark_fftm_4D.o
+	mpicxx -g test_benchmark_fftm_4D.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o test_benchmark_fftm_4D.bin
+
 test:
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) test_cudaMemcpy3DAsync_1.cu -o test_cudaMemcpy3DAsync_1.bin
 
