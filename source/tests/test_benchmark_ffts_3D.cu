@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#define SCFD_ARRAYS_ORDINAL_TYPE ptrdiff_t
+
 #include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>
 #include <scfd/static_vec/rect.h>

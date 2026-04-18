@@ -5,6 +5,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -25,6 +26,7 @@ class fft_wrap_many
 private:
     using wrap_t          = typename BaseFFTWrap<T, ::fftm::direction::C2CF>::base_t;
     using memory_t        = typename wrap_t::memory_type;
+    using ordinal_type    = scfd::arrays::ordinal_type;
     using work_array_t    = scfd::arrays::array_nd<char, 1, memory_t>;
 
 public:
@@ -163,7 +165,7 @@ public:
 
         if ( work_area_size_ > 0 )
         {
-            work_area_.init( work_area_size_ );
+            work_area_.init( ordinal_cast_( work_area_size_ ) );
             for ( auto &el : container_ )
             {
                 el.second->set_work_area( static_cast<void *>( work_area_.raw_ptr() ) );
@@ -185,6 +187,19 @@ public:
     }
 
 private:
+    ordinal_type ordinal_cast_( std::size_t value ) const
+    {
+        const auto max_value = static_cast<std::size_t>( std::numeric_limits<ordinal_type>::max() );
+        if ( value > max_value )
+        {
+            throw std::overflow_error(
+                "fft_wrap_many::activate: work area size exceeds scfd::arrays::ordinal_type range. "
+                "Rebuild with a wider SCFD_ARRAYS_ORDINAL_TYPE."
+            );
+        }
+        return static_cast<ordinal_type>( value );
+    }
+
     work_array_t                              work_area_;
     std::size_t                               work_area_size_;
     bool                                      activated_;
