@@ -127,18 +127,21 @@ int run_benchmark_case(
         for_each.wait();
 
         const T local_diff_sq = reduce( work.size(), work.raw_ptr(), T( 0 ) );
-        const T diff_norm     = std::sqrt( comm_info.all_reduce_sum( local_diff_sq ) );
-        if ( diff_norm > max_norm )
-            max_norm = diff_norm;
+        const T global_diff_sq = comm_info.all_reduce_sum( local_diff_sq );
+        const T diff_l2       = std::sqrt(
+            global_diff_sq / static_cast<T>( options.nx * options.ny * options.nz )
+        );
+        if ( diff_l2 > max_norm )
+            max_norm = diff_l2;
 
-        if ( diff_norm > options.epsilon && comm_info.myid == 0 )
+        if ( diff_l2 > options.epsilon && comm_info.myid == 0 )
         {
             log.warning_f(
-                "strategy=%s, mode=%s, iteration=%d: norm2_diff=%.8e exceeded epsilon=%.8e",
+                "strategy=%s, mode=%s, iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e",
                 fftm_t::strategy_name(),
                 fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ),
                 iter,
-                diff_norm,
+                diff_l2,
                 options.epsilon
             );
         }
@@ -180,7 +183,7 @@ int run_benchmark_case(
         fftm::test::detail::append_csv_row(
             options.directory,
             "benchmark_fftm_3d.csv",
-            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_norm2,directory",
+            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
             row.str()
         );
     }

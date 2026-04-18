@@ -93,16 +93,16 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
         );
         for_each.wait();
 
-        const T diff_norm = std::sqrt( reduce( work.size(), work.raw_ptr(), T( 0 ) ) );
-        if ( diff_norm > max_norm )
-            max_norm = diff_norm;
-        if ( diff_norm > options.epsilon )
+        const T diff_l2 = std::sqrt( reduce( work.size(), work.raw_ptr(), T( 0 ) ) / static_cast<T>( work.size() ) );
+        if ( diff_l2 > max_norm )
+            max_norm = diff_l2;
+        if ( diff_l2 > options.epsilon )
         {
             log.warning_f(
-                "strategy=%s, iteration=%d: norm2_diff=%.8e exceeded epsilon=%.8e",
+                "strategy=%s, iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e",
                 ffts_t::strategy_name(),
                 iter,
-                diff_norm,
+                diff_l2,
                 options.epsilon
             );
         }
@@ -140,7 +140,7 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
     fftm::test::detail::append_csv_row(
         options.directory,
         "benchmark_ffts_4d.csv",
-        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_norm2,directory",
+        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
         row.str()
     );
 
