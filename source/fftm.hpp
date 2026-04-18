@@ -14,6 +14,7 @@
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
+#include <scfd/utils/safe_call.h>
 
 #include "detail/array_arrangers.h"
 #include "detail/direct_transpose_4d.h"
@@ -21,6 +22,7 @@
 #include "detail/mpi_transpose_4d.h"
 #include "fft_direction.h"
 #include "fft_partitioning.h"
+#include "profiling.h"
 
 namespace fftm
 {
@@ -65,6 +67,9 @@ struct strategy_4d_slab_slab_mpi
 
 struct fftm_init_options
 {
+    std::string profiling_key;
+    bool        print_profile_summary_on_destroy = true;
+    bool        print_profile_totals_on_destroy  = true;
 };
 
 namespace detail
@@ -276,10 +281,21 @@ public:
         for_each_4d_.block_size = 128;
     }
 
+    ~fftm()
+    {
+        try
+        {
+            log_profile_on_destroy_();
+        }
+        catch ( ... )
+        {
+        }
+    }
+
     template <std::size_t Dim>
     void init( const processor_grid &pg, const global_sizes &gs, const fftm_init_options &options = fftm_init_options() )
     {
-        init_( std::integral_constant<std::size_t, Dim>(), pg, gs, options );
+        SCFD_SAFE_CALL( init_( std::integral_constant<std::size_t, Dim>(), pg, gs, options ) );
     }
 
     bool is_initialized() const
@@ -350,25 +366,41 @@ public:
     void forward( const real_array_t<3> &in, complex_array_t<3> &out )
     {
         ensure_dimension_( 3 );
-        forward_3d_( strategy_family_3d_tag(), in, out );
+        SCFD_SAFE_CALL( forward_3d_( strategy_family_3d_tag(), in, out ) );
     }
 
     void backward( const complex_array_t<3> &in, real_array_t<3> &out )
     {
         ensure_dimension_( 3 );
-        backward_3d_( strategy_family_3d_tag(), in, out );
+        SCFD_SAFE_CALL( backward_3d_( strategy_family_3d_tag(), in, out ) );
     }
 
     void forward( const real_array_t<4> &in, complex_array_t<4> &out )
     {
         ensure_dimension_( 4 );
-        forward_4d_( strategy_family_4d_tag(), in, out );
+        SCFD_SAFE_CALL( forward_4d_( strategy_family_4d_tag(), in, out ) );
     }
 
     void backward( const complex_array_t<4> &in, real_array_t<4> &out )
     {
         ensure_dimension_( 4 );
-        backward_4d_( strategy_family_4d_tag(), in, out );
+        SCFD_SAFE_CALL( backward_4d_( strategy_family_4d_tag(), in, out ) );
+    }
+
+    void log_profile()
+    {
+        if ( profiler_.enabled() )
+        {
+            profiler_.log_print( log_ );
+        }
+    }
+
+    void log_profile_totals()
+    {
+        if ( profiler_.enabled() )
+        {
+            profiler_.log_print_totals( log_ );
+        }
     }
 
 private:
@@ -408,6 +440,42 @@ private:
     using for_each_3d_t       = typename Backend::template for_each_nd_type<3, int>;
     using for_each_4d_t       = typename Backend::template for_each_nd_type<4, int>;
     using complex_buffer_t    = scfd::arrays::array_nd<complex, 1, memory_t>;
+    using profiler_t          = fftm_profiler;
+    using optional_profiler_t = optional_profiler<profiler_t>;
+
+    typename optional_profiler_t::scoped_ticker profile_scope_( const std::string &name )
+    {
+        return profiler_.scoped_tic( name );
+    }
+
+    void configure_profiling_( const fftm_init_options &options )
+    {
+        init_options_ = options;
+        if ( !options.profiling_key.empty() )
+        {
+            profiler_.enable( options.profiling_key );
+        }
+        else
+        {
+            profiler_.disable();
+        }
+    }
+
+    void log_profile_on_destroy_()
+    {
+        if ( !profiler_.enabled() )
+        {
+            return;
+        }
+        if ( init_options_.print_profile_summary_on_destroy )
+        {
+            profiler_.log_print( log_ );
+        }
+        if ( init_options_.print_profile_totals_on_destroy )
+        {
+            profiler_.log_print_totals( log_ );
+        }
+    }
 
     void ensure_can_init_() const
     {
@@ -452,59 +520,63 @@ private:
 
     void init_( std::integral_constant<std::size_t, 3>, const processor_grid &pg, const global_sizes &gs, const fftm_init_options &options )
     {
-        (void)options;
         ensure_can_init_();
         if ( gs.is_4D() )
             throw std::logic_error( "fftm::init<3> received 4D sizes." );
+        configure_profiling_( options );
 
-        partitioning_.init( pg, gs );
-        std::tie( myid_i_, myid_j_, myid_k_ ) = partitioning_.get_my_grid();
-        std::tie( input_dim_, transpose1_dim_, transpose2_dim_ ) = partitioning_.get_partitioning_3D();
+        FFTM_PROFILE_SCOPED_TIC( "fftm::init<3>" );
+        SCFD_SAFE_CALL( partitioning_.init( pg, gs ) );
+        SCFD_SAFE_CALL( std::tie( myid_i_, myid_j_, myid_k_ ) = partitioning_.get_my_grid() );
+        SCFD_SAFE_CALL( std::tie( input_dim_, transpose1_dim_, transpose2_dim_ ) = partitioning_.get_partitioning_3D() );
 
-        nx_      = gs.Nx;
-        ny_      = gs.Ny;
-        nz_      = gs.Nz;
-        nw_      = 0;
-        nz_half_ = nz_ / 2 + 1;
-        nw_half_ = 0;
-        dim_     = 3;
+        nx_        = gs.Nx;
+        ny_        = gs.Ny;
+        nz_        = gs.Nz;
+        nw_        = 0;
+        nz_half_   = nz_ / 2 + 1;
+        nw_half_   = 0;
+        dim_       = 3;
 
         half_input_dim_           = input_dim_;
         half_input_dim_.size_z[0] = nz_half_;
-        half_input_dim_.compute_offsets( false );
+        SCFD_SAFE_CALL( half_input_dim_.compute_offsets( false ) );
 
-        init_strategy_( strategy_family_3d_tag() );
-        add_plans_( strategy_family_3d_tag() );
-        base_fft_.activate();
+        SCFD_SAFE_CALL( init_strategy_( strategy_family_3d_tag() ) );
+        SCFD_SAFE_CALL( add_plans_( strategy_family_3d_tag() ) );
+        SCFD_SAFE_CALL( base_fft_.activate() );
         init_done_ = true;
     }
 
     void init_( std::integral_constant<std::size_t, 4>, const processor_grid &pg, const global_sizes &gs, const fftm_init_options &options )
     {
-        (void)options;
         ensure_can_init_();
         if ( !gs.is_4D() )
             throw std::logic_error( "fftm::init<4> requires 4D global sizes." );
+        configure_profiling_( options );
 
-        partitioning_.init( pg, gs );
-        std::tie( myid_i_, myid_j_, myid_k_ ) = partitioning_.get_my_grid();
-        std::tie( input_dim_, transpose1_dim_, transpose2_dim_, transpose3_dim_ ) = partitioning_.get_partitioning_4D();
+        FFTM_PROFILE_SCOPED_TIC( "fftm::init<4>" );
+        SCFD_SAFE_CALL( partitioning_.init( pg, gs ) );
+        SCFD_SAFE_CALL( std::tie( myid_i_, myid_j_, myid_k_ ) = partitioning_.get_my_grid() );
+        SCFD_SAFE_CALL(
+            std::tie( input_dim_, transpose1_dim_, transpose2_dim_, transpose3_dim_ ) = partitioning_.get_partitioning_4D()
+        );
 
-        nx_      = gs.Nx;
-        ny_      = gs.Ny;
-        nz_      = gs.Nz;
-        nw_      = gs.Nw;
-        nz_half_ = 0;
-        nw_half_ = nw_ / 2 + 1;
-        dim_     = 4;
+        nx_        = gs.Nx;
+        ny_        = gs.Ny;
+        nz_        = gs.Nz;
+        nw_        = gs.Nw;
+        nz_half_   = 0;
+        nw_half_   = nw_ / 2 + 1;
+        dim_       = 4;
 
         half_input_dim_           = input_dim_;
         half_input_dim_.size_w[0] = nw_half_;
-        half_input_dim_.compute_offsets( true );
+        SCFD_SAFE_CALL( half_input_dim_.compute_offsets( true ) );
 
-        init_4d_strategy_( strategy_family_4d_tag() );
-        add_4d_plans_( strategy_family_4d_tag() );
-        base_fft_.activate();
+        SCFD_SAFE_CALL( init_4d_strategy_( strategy_family_4d_tag() ) );
+        SCFD_SAFE_CALL( add_4d_plans_( strategy_family_4d_tag() ) );
+        SCFD_SAFE_CALL( base_fft_.activate() );
         init_done_ = true;
     }
 
@@ -790,318 +862,354 @@ private:
 
     void init_strategy_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_3d_slab_pencil" );
         require_grid_p2_is_one_();
 
         output_dim_ = transpose2_dim_;
 
-        init_shared_stage0_xfft_3d_(
+        SCFD_SAFE_CALL( init_shared_stage0_xfft_3d_(
             input_dim_.size_x[myid_i_],
             nz_half_,
             ny_,
             output_dim_.size_x[0],
             output_dim_.size_z[myid_j_],
             output_dim_.size_y[myid_i_]
-        );
-        init_owned_work_hat_3d_(
+        ) );
+        SCFD_SAFE_CALL( init_owned_work_hat_3d_(
             output_dim_.size_x[0],
             output_dim_.size_z[myid_j_],
             output_dim_.size_y[myid_i_]
-        );
-        same_z_.init( half_input_dim_, output_dim_, myid_i_, 0 );
+        ) );
+        SCFD_SAFE_CALL( same_z_.init( half_input_dim_, output_dim_, myid_i_, 0 ) );
     }
 
     void init_strategy_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_3d_pencil_slab" );
         require_grid_p1_is_one_();
 
         output_dim_ = transpose2_dim_;
 
-        init_shared_stage0_xfft_3d_(
+        SCFD_SAFE_CALL( init_shared_stage0_xfft_3d_(
             input_dim_.size_x[myid_i_],
             input_dim_.size_y[myid_j_],
             nz_half_,
             output_dim_.size_x[0],
             output_dim_.size_z[myid_j_],
             output_dim_.size_y[myid_i_]
-        );
-        init_owned_work_hat_3d_(
+        ) );
+        SCFD_SAFE_CALL( init_owned_work_hat_3d_(
             output_dim_.size_x[0],
             output_dim_.size_z[myid_j_],
             output_dim_.size_y[myid_i_]
-        );
-        same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ );
+        ) );
+        SCFD_SAFE_CALL( same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ ) );
     }
 
     void init_strategy_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_3d_pencil_pencil" );
         output_dim_ = transpose2_dim_;
 
-        init_shared_stage0_xfft_3d_(
+        SCFD_SAFE_CALL( init_shared_stage0_xfft_3d_(
             input_dim_.size_x[myid_i_],
             input_dim_.size_y[myid_j_],
             nz_half_,
             output_dim_.size_x[0],
             output_dim_.size_z[myid_j_],
             output_dim_.size_y[myid_i_]
-        );
-        init_owned_stage1_3d_(
+        ) );
+        SCFD_SAFE_CALL( init_owned_stage1_3d_(
             input_dim_.size_x[myid_i_],
             transpose1_dim_.size_z[myid_j_],
             ny_
-        );
-        init_owned_work_hat_3d_(
+        ) );
+        SCFD_SAFE_CALL( init_owned_work_hat_3d_(
             output_dim_.size_x[0],
             output_dim_.size_z[myid_j_],
             output_dim_.size_y[myid_i_]
-        );
+        ) );
 
-        same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ );
-        same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ );
+        SCFD_SAFE_CALL( same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ ) );
+        SCFD_SAFE_CALL( same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ ) );
     }
 
     void init_4d_strategy_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_4d_pencil_pencil" );
         output_dim_ = transpose3_dim_;
 
-        stage0_4d_.init(
+        SCFD_SAFE_CALL( stage0_4d_.init(
             input_dim_.size_x[myid_i_],
             input_dim_.size_y[myid_j_],
             input_dim_.size_z[myid_k_],
             nw_half_
-        );
-        stage1_4d_.init(
+        ) );
+        SCFD_SAFE_CALL( stage1_4d_.init(
             transpose1_dim_.size_x[myid_i_],
             transpose1_dim_.size_y[myid_j_],
             transpose1_dim_.size_w[myid_k_],
             transpose1_dim_.size_z[0]
-        );
-        stage2_4d_.init(
+        ) );
+        SCFD_SAFE_CALL( stage2_4d_.init(
             transpose2_dim_.size_x[myid_i_],
             transpose2_dim_.size_z[myid_j_],
             transpose2_dim_.size_w[myid_k_],
             transpose2_dim_.size_y[0]
-        );
-        work_hat_4d_.init(
+        ) );
+        SCFD_SAFE_CALL( work_hat_4d_.init(
             output_dim_.size_y[myid_i_],
             output_dim_.size_z[myid_j_],
             output_dim_.size_w[myid_k_],
             output_dim_.size_x[0]
-        );
+        ) );
 
-        same_xy_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_, myid_k_ );
-        same_xw_.init( transpose1_dim_, transpose2_dim_, myid_i_, myid_j_, myid_k_ );
-        same_zw_.init( transpose2_dim_, output_dim_, myid_i_, myid_j_, myid_k_ );
+        SCFD_SAFE_CALL( same_xy_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_, myid_k_ ) );
+        SCFD_SAFE_CALL( same_xw_.init( transpose1_dim_, transpose2_dim_, myid_i_, myid_j_, myid_k_ ) );
+        SCFD_SAFE_CALL( same_zw_.init( transpose2_dim_, output_dim_, myid_i_, myid_j_, myid_k_ ) );
     }
 
     void init_4d_strategy_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_4d_slab_slab" );
         require_grid_p1_is_one_();
         require_grid_p3_is_one_();
 
         output_dim_ = transpose3_dim_;
 
-        stage0_4d_.init(
+        SCFD_SAFE_CALL( stage0_4d_.init(
             input_dim_.size_x[myid_i_],
             input_dim_.size_y[myid_j_],
             input_dim_.size_z[myid_k_],
             nw_half_
-        );
-        stage1_4d_.init(
+        ) );
+        SCFD_SAFE_CALL( stage1_4d_.init(
             transpose1_dim_.size_x[myid_i_],
             transpose1_dim_.size_y[myid_j_],
             transpose1_dim_.size_w[myid_k_],
             transpose1_dim_.size_z[0]
-        );
-        stage2_4d_.init(
+        ) );
+        SCFD_SAFE_CALL( stage2_4d_.init(
             transpose2_dim_.size_x[myid_i_],
             transpose2_dim_.size_z[myid_j_],
             transpose2_dim_.size_w[myid_k_],
             transpose2_dim_.size_y[0]
-        );
-        work_hat_4d_.init(
+        ) );
+        SCFD_SAFE_CALL( work_hat_4d_.init(
             output_dim_.size_y[myid_i_],
             output_dim_.size_z[myid_j_],
             output_dim_.size_w[myid_k_],
             output_dim_.size_x[0]
-        );
+        ) );
 
-        same_xw_.init( transpose1_dim_, transpose2_dim_, myid_i_, myid_j_, myid_k_ );
+        SCFD_SAFE_CALL( same_xw_.init( transpose1_dim_, transpose2_dim_, myid_i_, myid_j_, myid_k_ ) );
     }
 
     void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil> )
     {
-        add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], ny_ );
-        add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], nz_half_ );
-        add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], nz_half_ );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_3d_slab_pencil" );
+        SCFD_SAFE_CALL( add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], ny_ ) );
+        SCFD_SAFE_CALL( add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], nz_half_ ) );
+        SCFD_SAFE_CALL( add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], nz_half_ ) );
     }
 
     void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab> )
     {
-        add_plan_z_r2c_( "forward_z", "inverse_z", nx_, input_dim_.size_y[myid_j_] );
-        add_plan_y_c2c_( "forward_y", "inverse_y", nx_, output_dim_.size_z[myid_j_] );
-        add_plan_x_c2c_( "forward_x", "inverse_x", ny_, output_dim_.size_z[myid_j_] );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_3d_pencil_slab" );
+        SCFD_SAFE_CALL( add_plan_z_r2c_( "forward_z", "inverse_z", nx_, input_dim_.size_y[myid_j_] ) );
+        SCFD_SAFE_CALL( add_plan_y_c2c_( "forward_y", "inverse_y", nx_, output_dim_.size_z[myid_j_] ) );
+        SCFD_SAFE_CALL( add_plan_x_c2c_( "forward_x", "inverse_x", ny_, output_dim_.size_z[myid_j_] ) );
     }
 
     void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil> )
     {
-        add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_] );
-        add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_] );
-        add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_] );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_3d_pencil_pencil" );
+        SCFD_SAFE_CALL(
+            add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_] )
+        );
+        SCFD_SAFE_CALL(
+            add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_] )
+        );
+        SCFD_SAFE_CALL( add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_] ) );
     }
 
     void add_4d_plans_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil> )
     {
-        add_plan_w_r2c_(
+        FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_4d_pencil_pencil" );
+        SCFD_SAFE_CALL( add_plan_w_r2c_(
             "forward_w",
             "inverse_w",
             input_dim_.size_x[myid_i_],
             input_dim_.size_y[myid_j_],
             input_dim_.size_z[myid_k_]
-        );
-        add_plan_z_c2c_4d_(
+        ) );
+        SCFD_SAFE_CALL( add_plan_z_c2c_4d_(
             "forward_z",
             "inverse_z",
             transpose1_dim_.size_x[myid_i_],
             transpose1_dim_.size_y[myid_j_],
             transpose1_dim_.size_w[myid_k_]
-        );
-        add_plan_y_c2c_4d_(
+        ) );
+        SCFD_SAFE_CALL( add_plan_y_c2c_4d_(
             "forward_y",
             "inverse_y",
             transpose2_dim_.size_x[myid_i_],
             transpose2_dim_.size_z[myid_j_],
             transpose2_dim_.size_w[myid_k_]
-        );
-        add_plan_x_c2c_4d_(
+        ) );
+        SCFD_SAFE_CALL( add_plan_x_c2c_4d_(
             "forward_x",
             "inverse_x",
             output_dim_.size_y[myid_i_],
             output_dim_.size_z[myid_j_],
             output_dim_.size_w[myid_k_]
-        );
+        ) );
     }
 
     void add_4d_plans_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab> )
     {
-        add_plan_zw_r2c_(
+        FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_4d_slab_slab" );
+        SCFD_SAFE_CALL( add_plan_zw_r2c_(
             "forward_zw",
             "inverse_zw",
             input_dim_.size_x[myid_i_],
             input_dim_.size_y[myid_j_]
-        );
-        add_plan_xy_c2c_4d_(
+        ) );
+        SCFD_SAFE_CALL( add_plan_xy_c2c_4d_(
             "forward_xy",
             "inverse_xy",
             output_dim_.size_z[myid_j_],
             output_dim_.size_w[myid_k_]
-        );
+        ) );
     }
 
     void forward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil>, const real_array3_t &in, complex_array3_t &out )
     {
-        base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ );
-        base_fft_.template exec<stage0_complex3_t, stage0_complex3_t>( "forward_y", stage0_3d_, stage0_3d_ );
-        same_z_.transpose_x_to_y( stage0_3d_, work_hat_3d_, transpose_mode_3d );
-        reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ );
-        base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "forward_x", x_fft_stage_3d_, x_fft_stage_3d_ );
-        reorder_x_stage_( x_fft_stage_3d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_slab_pencil" );
+        SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, stage0_complex3_t>( "forward_y", stage0_3d_, stage0_3d_ ) );
+        SCFD_SAFE_CALL( same_z_.transpose_x_to_y( stage0_3d_, work_hat_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ ) );
+        SCFD_SAFE_CALL(
+            base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "forward_x", x_fft_stage_3d_, x_fft_stage_3d_ )
+        );
+        SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, out ) );
     }
 
     void backward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil>, const complex_array3_t &in, real_array3_t &out )
     {
-        copy_device_buffer_( in, work_hat_3d_ );
-        reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ );
-        base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ );
-        reorder_x_stage_( x_fft_stage_3d_, work_hat_3d_ );
-        same_z_.transpose_y_to_x( work_hat_3d_, stage0_3d_, transpose_mode_3d );
-        base_fft_.template exec<stage0_complex3_t, stage0_complex3_t>( "inverse_y", stage0_3d_, stage0_3d_ );
-        base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_slab_pencil" );
+        SCFD_SAFE_CALL( copy_device_buffer_( in, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ ) );
+        SCFD_SAFE_CALL(
+            base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ )
+        );
+        SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( same_z_.transpose_y_to_x( work_hat_3d_, stage0_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, stage0_complex3_t>( "inverse_y", stage0_3d_, stage0_3d_ ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
     }
 
     void forward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab>, const real_array3_t &in, complex_array3_t &out )
     {
-        base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ );
-        same_x_.transpose_xyz_to_xzy( stage0_3d_, work_hat_3d_, transpose_mode_3d );
-        base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_y", work_hat_3d_, work_hat_3d_ );
-        reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ );
-        base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "forward_x", x_fft_stage_3d_, x_fft_stage_3d_ );
-        reorder_x_stage_( x_fft_stage_3d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_slab" );
+        SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xyz_to_xzy( stage0_3d_, work_hat_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_y", work_hat_3d_, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ ) );
+        SCFD_SAFE_CALL(
+            base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "forward_x", x_fft_stage_3d_, x_fft_stage_3d_ )
+        );
+        SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, out ) );
     }
 
     void backward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab>, const complex_array3_t &in, real_array3_t &out )
     {
-        copy_device_buffer_( in, work_hat_3d_ );
-        reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ );
-        base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ );
-        reorder_x_stage_( x_fft_stage_3d_, work_hat_3d_ );
-        base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_y", work_hat_3d_, work_hat_3d_ );
-        same_x_.transpose_xzy_to_xyz( work_hat_3d_, stage0_3d_, transpose_mode_3d );
-        base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_slab" );
+        SCFD_SAFE_CALL( copy_device_buffer_( in, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ ) );
+        SCFD_SAFE_CALL(
+            base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ )
+        );
+        SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_y", work_hat_3d_, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz( work_hat_3d_, stage0_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
     }
 
     void forward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil>, const real_array3_t &in, complex_array3_t &out )
     {
-        base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ );
-        same_x_.transpose_xyz_to_xzy( stage0_3d_, stage1_3d_, transpose_mode_3d );
-        base_fft_.template exec<stage1_complex3_t, stage1_complex3_t>( "forward_y", stage1_3d_, stage1_3d_ );
-        same_z_.transpose_x_to_y( stage1_3d_, work_hat_3d_, transpose_mode_3d );
-        reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ );
-        base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "forward_x", x_fft_stage_3d_, x_fft_stage_3d_ );
-        reorder_x_stage_( x_fft_stage_3d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil" );
+        SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xyz_to_xzy( stage0_3d_, stage1_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage1_complex3_t, stage1_complex3_t>( "forward_y", stage1_3d_, stage1_3d_ ) );
+        SCFD_SAFE_CALL( same_z_.transpose_x_to_y( stage1_3d_, work_hat_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ ) );
+        SCFD_SAFE_CALL(
+            base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "forward_x", x_fft_stage_3d_, x_fft_stage_3d_ )
+        );
+        SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, out ) );
     }
 
     void backward_3d_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_pencil>, const complex_array3_t &in, real_array3_t &out )
     {
-        copy_device_buffer_( in, work_hat_3d_ );
-        reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ );
-        base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ );
-        reorder_x_stage_( x_fft_stage_3d_, work_hat_3d_ );
-        same_z_.transpose_y_to_x( work_hat_3d_, stage1_3d_, transpose_mode_3d );
-        base_fft_.template exec<stage1_complex3_t, stage1_complex3_t>( "inverse_y", stage1_3d_, stage1_3d_ );
-        same_x_.transpose_xzy_to_xyz( stage1_3d_, stage0_3d_, transpose_mode_3d );
-        base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil" );
+        SCFD_SAFE_CALL( copy_device_buffer_( in, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( reorder_x_stage_( work_hat_3d_, x_fft_stage_3d_ ) );
+        SCFD_SAFE_CALL(
+            base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ )
+        );
+        SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, work_hat_3d_ ) );
+        SCFD_SAFE_CALL( same_z_.transpose_y_to_x( work_hat_3d_, stage1_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage1_complex3_t, stage1_complex3_t>( "inverse_y", stage1_3d_, stage1_3d_ ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz( stage1_3d_, stage0_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
     }
 
     void forward_4d_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil>, const real_array4_t &in, complex_array4_t &out )
     {
-        base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_w", in, stage0_4d_ );
-        same_xy_.transpose_xyzw_to_xywz( stage0_4d_, stage1_4d_, transpose_mode_4d );
-        base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "forward_z", stage1_4d_, stage1_4d_ );
-        same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d );
-        base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "forward_y", stage2_4d_, stage2_4d_ );
-        same_zw_.transpose_xzwy_to_yzwx( stage2_4d_, out, transpose_mode_4d );
-        base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_x", out, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::forward_4d_pencil_pencil" );
+        SCFD_SAFE_CALL( base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_w", in, stage0_4d_ ) );
+        SCFD_SAFE_CALL( same_xy_.transpose_xyzw_to_xywz( stage0_4d_, stage1_4d_, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "forward_z", stage1_4d_, stage1_4d_ ) );
+        SCFD_SAFE_CALL( same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "forward_y", stage2_4d_, stage2_4d_ ) );
+        SCFD_SAFE_CALL( same_zw_.transpose_xzwy_to_yzwx( stage2_4d_, out, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_x", out, out ) );
     }
 
     void backward_4d_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil>, const complex_array4_t &in, real_array4_t &out )
     {
-        copy_device_buffer_( in, work_hat_4d_ );
-        base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_x", work_hat_4d_, work_hat_4d_ );
-        same_zw_.transpose_yzwx_to_xzwy( work_hat_4d_, stage2_4d_, transpose_mode_4d );
-        base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "inverse_y", stage2_4d_, stage2_4d_ );
-        same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d );
-        base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "inverse_z", stage1_4d_, stage1_4d_ );
-        same_xy_.transpose_xywz_to_xyzw( stage1_4d_, stage0_4d_, transpose_mode_4d );
-        base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_w", stage0_4d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_pencil_pencil" );
+        SCFD_SAFE_CALL( copy_device_buffer_( in, work_hat_4d_ ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_x", work_hat_4d_, work_hat_4d_ ) );
+        SCFD_SAFE_CALL( same_zw_.transpose_yzwx_to_xzwy( work_hat_4d_, stage2_4d_, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "inverse_y", stage2_4d_, stage2_4d_ ) );
+        SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "inverse_z", stage1_4d_, stage1_4d_ ) );
+        SCFD_SAFE_CALL( same_xy_.transpose_xywz_to_xyzw( stage1_4d_, stage0_4d_, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_w", stage0_4d_, out ) );
     }
 
     void forward_4d_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab>, const real_array4_t &in, complex_array4_t &out )
     {
-        base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_zw", in, stage0_4d_ );
-        transpose_local_4d_<0, 1, 3, 2>( stage0_4d_, stage1_4d_ );
-        same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d );
-        transpose_local_4d_<3, 1, 2, 0>( stage2_4d_, out );
-        base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_xy", out, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::forward_4d_slab_slab" );
+        SCFD_SAFE_CALL( base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_zw", in, stage0_4d_ ) );
+        SCFD_SAFE_CALL( transpose_local_4d_<0, 1, 3, 2>( stage0_4d_, stage1_4d_ ) );
+        SCFD_SAFE_CALL( same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( stage2_4d_, out ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_xy", out, out ) );
     }
 
     void backward_4d_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab>, const complex_array4_t &in, real_array4_t &out )
     {
-        copy_device_buffer_( in, work_hat_4d_ );
-        base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_xy", work_hat_4d_, work_hat_4d_ );
-        transpose_local_4d_<3, 1, 2, 0>( work_hat_4d_, stage2_4d_ );
-        same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d );
-        transpose_local_4d_<0, 1, 3, 2>( stage1_4d_, stage0_4d_ );
-        base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_zw", stage0_4d_, out );
+        FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_slab_slab" );
+        SCFD_SAFE_CALL( copy_device_buffer_( in, work_hat_4d_ ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_xy", work_hat_4d_, work_hat_4d_ ) );
+        SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( work_hat_4d_, stage2_4d_ ) );
+        SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d ) );
+        SCFD_SAFE_CALL( transpose_local_4d_<0, 1, 3, 2>( stage1_4d_, stage0_4d_ ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_zw", stage0_4d_, out ) );
     }
 
     template <class Array>
@@ -1132,11 +1240,11 @@ private:
     template <class ArrayIn, class ArrayOut>
     void reorder_x_stage_( const ArrayIn &in, ArrayOut &out )
     {
-        for_each_3d_(
+        SCFD_SAFE_CALL( for_each_3d_(
             detail::fftm_copy_same_indices_functor<ArrayIn, ArrayOut, idx_3d_t>{ in, out },
             make_range_( out )
-        );
-        for_each_3d_.wait();
+        ) );
+        SCFD_SAFE_CALL( for_each_3d_.wait() );
     }
 
     template <int DstAxis0, int DstAxis1, int DstAxis2, int DstAxis3, class ArrayIn, class ArrayOut>
@@ -1159,11 +1267,11 @@ private:
             throw std::logic_error( "fftm local 4D transpose destination shape mismatch" );
         }
 
-        for_each_4d_(
+        SCFD_SAFE_CALL( for_each_4d_(
             detail::direct_transpose_4d_functor<idx_4d_t, ArrayIn, ArrayOut, DstAxis0, DstAxis1, DstAxis2, DstAxis3>( in, out ),
             make_range_4d_( in )
-        );
-        for_each_4d_.wait();
+        ) );
+        SCFD_SAFE_CALL( for_each_4d_.wait() );
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -1172,12 +1280,12 @@ private:
         if ( in.size() != out.size() )
             throw std::logic_error( "fftm device copy requires equal total sizes" );
 
-        runtime_api_t::memcpy(
+        SCFD_SAFE_CALL( runtime_api_t::memcpy(
             out.raw_ptr(),
             in.raw_ptr(),
             in.size() * sizeof( typename ArrayIn::value_type ),
             runtime_api_t::device_to_device_kind()
-        );
+        ) );
     }
 
     void init_shared_stage0_xfft_3d_(
@@ -1192,27 +1300,29 @@ private:
         const std::size_t stage0_size = stage0_d0 * stage0_d1 * stage0_d2;
         const std::size_t xfft_size   = xfft_d0 * xfft_d1 * xfft_d2;
 
-        scratch_stage0_xfft_3d_.init( std::max( stage0_size, xfft_size ) );
-        stage0_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2 );
-        x_fft_stage_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), xfft_d0, xfft_d1, xfft_d2 );
+        SCFD_SAFE_CALL( scratch_stage0_xfft_3d_.init( std::max( stage0_size, xfft_size ) ) );
+        SCFD_SAFE_CALL( stage0_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2 ) );
+        SCFD_SAFE_CALL( x_fft_stage_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), xfft_d0, xfft_d1, xfft_d2 ) );
     }
 
     void init_owned_stage1_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
     {
-        scratch_stage1_3d_.init( d0 * d1 * d2 );
-        stage1_3d_.init_by_raw_data( scratch_stage1_3d_.raw_ptr(), d0, d1, d2 );
+        SCFD_SAFE_CALL( scratch_stage1_3d_.init( d0 * d1 * d2 ) );
+        SCFD_SAFE_CALL( stage1_3d_.init_by_raw_data( scratch_stage1_3d_.raw_ptr(), d0, d1, d2 ) );
     }
 
     void init_owned_work_hat_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
     {
-        scratch_work_hat_3d_.init( d0 * d1 * d2 );
-        work_hat_3d_.init_by_raw_data( scratch_work_hat_3d_.raw_ptr(), d0, d1, d2 );
+        SCFD_SAFE_CALL( scratch_work_hat_3d_.init( d0 * d1 * d2 ) );
+        SCFD_SAFE_CALL( work_hat_3d_.init_by_raw_data( scratch_work_hat_3d_.raw_ptr(), d0, d1, d2 ) );
     }
 
 private:
     BaseFFT          base_fft_;
     MPIComm          mpi_;
     Log              log_;
+    fftm_init_options init_options_;
+    optional_profiler_t profiler_;
     partitioning_t   partitioning_;
     same_x_t         same_x_;
     same_z_t         same_z_;
