@@ -1191,10 +1191,8 @@ private:
     {
         const std::size_t stage0_size = stage0_d0 * stage0_d1 * stage0_d2;
         const std::size_t xfft_size   = xfft_d0 * xfft_d1 * xfft_d2;
-        if ( stage0_size != xfft_size )
-            throw std::logic_error( "fftm 3D shared stage0/xfft buffer size mismatch" );
 
-        scratch_stage0_xfft_3d_.init( stage0_size );
+        scratch_stage0_xfft_3d_.init( std::max( stage0_size, xfft_size ) );
         stage0_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2 );
         x_fft_stage_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), xfft_d0, xfft_d1, xfft_d2 );
     }
