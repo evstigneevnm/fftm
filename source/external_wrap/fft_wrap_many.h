@@ -14,6 +14,7 @@
 #include <scfd/arrays/array_nd.h>
 
 #include "fft_direction.h"
+#include "../profiling.h"
 
 namespace fftm
 {
@@ -33,6 +34,7 @@ public:
     using real            = T;
     using complex         = typename wrap_t::complex;
     using runtime_api     = typename wrap_t::runtime_api;
+    using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
     fft_wrap_many()
         : work_area_size_( 0 )
@@ -172,12 +174,20 @@ public:
             }
         }
 
+        update_memory_profile_();
         activated_ = true;
     }
 
     std::size_t get_work_size() const
     {
         return work_area_size_;
+    }
+
+    void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
+    {
+        memory_profiler_       = profiler;
+        memory_profile_prefix_ = prefix;
+        update_memory_profile_();
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -200,10 +210,22 @@ private:
         return static_cast<ordinal_type>( value );
     }
 
+    void update_memory_profile_()
+    {
+        if ( memory_profiler_ == nullptr || memory_profile_prefix_.empty() )
+        {
+            return;
+        }
+
+        memory_profiler_->set_bytes( memory_profile_prefix_ + "/work_area", static_cast<memory_profiler_t::bytes_type>( work_area_size_ ) );
+    }
+
     work_array_t                              work_area_;
     std::size_t                               work_area_size_;
     bool                                      activated_;
     std::map<std::string, std::unique_ptr<wrap_t>> container_;
+    memory_profiler_t                        *memory_profiler_ = nullptr;
+    std::string                               memory_profile_prefix_;
 };
 
 } // namespace wrap

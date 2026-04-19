@@ -7,6 +7,7 @@
 #include <scfd/utils/mpi_timer_event.h>
 #include <scfd/utils/system_timer_event.h>
 
+#include "common/memory_profiler.h"
 #include "common/profiler.h"
 
 namespace fftm
@@ -14,6 +15,8 @@ namespace fftm
 
 using fftm_profiler = scfd::utils::profiler<scfd::utils::mpi_timer_event>;
 using ffts_profiler = scfd::utils::profiler<scfd::utils::system_timer_event>;
+using fftm_memory_profiler = memory_profiler;
+using ffts_memory_profiler = memory_profiler;
 
 template <class Profiler>
 class profile_scope
@@ -89,6 +92,59 @@ public:
     scoped_ticker scoped_tic( const std::string &name )
     {
         return scoped_ticker( profiler_.get(), name );
+    }
+
+    Profiler *native_ptr()
+    {
+        return profiler_.get();
+    }
+
+    const Profiler *native_ptr() const
+    {
+        return profiler_.get();
+    }
+
+    template <class Log>
+    void log_print( Log &log ) const
+    {
+        if ( profiler_ != nullptr )
+        {
+            profiler_->log_print( log );
+        }
+    }
+
+    template <class Log>
+    void log_print_totals( Log &log ) const
+    {
+        if ( profiler_ != nullptr )
+        {
+            profiler_->log_print_totals( log );
+        }
+    }
+
+private:
+    std::unique_ptr<Profiler> profiler_;
+};
+
+template <class Profiler>
+class optional_memory_profiler
+{
+public:
+    optional_memory_profiler() = default;
+
+    void enable( const std::string &name )
+    {
+        profiler_.reset( new Profiler( name ) );
+    }
+
+    void disable()
+    {
+        profiler_.reset();
+    }
+
+    bool enabled() const
+    {
+        return profiler_ != nullptr;
     }
 
     Profiler *native_ptr()

@@ -3,6 +3,8 @@
 
 #include <array>
 #include <cstddef>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -68,8 +70,11 @@ struct strategy_4d_slab_slab_mpi
 struct fftm_init_options
 {
     std::string profiling_key;
+    std::string memory_profiling_key;
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;
+    bool        print_memory_profile_on_destroy  = true;
+    bool        print_memory_totals_on_destroy   = true;
 };
 
 namespace detail
@@ -286,6 +291,7 @@ public:
         try
         {
             log_profile_on_destroy_();
+            log_memory_profile_on_destroy_();
         }
         catch ( ... )
         {
@@ -403,6 +409,22 @@ public:
         }
     }
 
+    void log_memory_profile()
+    {
+        if ( memory_profiler_.enabled() )
+        {
+            log_memory_profile_summary_();
+        }
+    }
+
+    void log_memory_totals()
+    {
+        if ( memory_profiler_.enabled() )
+        {
+            log_memory_profile_totals_();
+        }
+    }
+
 private:
     using strategy_family_3d_tag = std::integral_constant<transform_strategy_3d, strategy_family_3d>;
     using strategy_family_4d_tag = std::integral_constant<transform_strategy_4d_mpi, strategy_family_4d>;
@@ -442,10 +464,18 @@ private:
     using complex_buffer_t    = scfd::arrays::array_nd<complex, 1, memory_t>;
     using profiler_t          = fftm_profiler;
     using optional_profiler_t = optional_profiler<profiler_t>;
+    using memory_profiler_t   = fftm_memory_profiler;
+    using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
 
     typename optional_profiler_t::scoped_ticker profile_scope_( const std::string &name )
     {
         return profiler_.scoped_tic( name );
+    }
+
+    static typename memory_profiler_t::bytes_type bytes_of_elems_( std::size_t elems, std::size_t elem_size )
+    {
+        return static_cast<typename memory_profiler_t::bytes_type>( elems ) *
+               static_cast<typename memory_profiler_t::bytes_type>( elem_size );
     }
 
     void configure_profiling_( const fftm_init_options &options )
@@ -459,11 +489,33 @@ private:
         {
             profiler_.disable();
         }
+        configure_memory_profiling_( options );
         same_x_.set_profiler( profiler_.native_ptr() );
         same_z_.set_profiler( profiler_.native_ptr() );
         same_xy_.set_profiler( profiler_.native_ptr() );
         same_xw_.set_profiler( profiler_.native_ptr() );
         same_zw_.set_profiler( profiler_.native_ptr() );
+    }
+
+    void configure_memory_profiling_( const fftm_init_options &options )
+    {
+        if ( !options.memory_profiling_key.empty() )
+        {
+            memory_profiler_.enable( options.memory_profiling_key );
+        }
+        else
+        {
+            memory_profiler_.disable();
+        }
+
+        base_fft_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/base_fft" );
+        same_x_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_x" );
+        same_z_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_z" );
+        same_xy_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xy" );
+        same_xw_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xw" );
+        same_zw_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_zw" );
+        update_memory_profile_3d_();
+        update_memory_profile_4d_();
     }
 
     void log_profile_on_destroy_()
@@ -479,6 +531,112 @@ private:
         if ( init_options_.print_profile_totals_on_destroy )
         {
             profiler_.log_print_totals( log_ );
+        }
+    }
+
+    void log_memory_profile_on_destroy_()
+    {
+        if ( !memory_profiler_.enabled() )
+        {
+            return;
+        }
+        if ( init_options_.print_memory_profile_on_destroy )
+        {
+            log_memory_profile_summary_();
+        }
+        if ( init_options_.print_memory_totals_on_destroy )
+        {
+            log_memory_profile_totals_();
+        }
+    }
+
+    void log_memory_profile_summary_()
+    {
+        memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        if ( profiler == nullptr )
+        {
+            return;
+        }
+
+        auto bytes_to_mib = []( typename memory_profiler_t::bytes_type bytes ) -> double
+        {
+            return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
+        };
+
+        std::stringstream ss;
+        ss << "Memory profile (MPI reduced):";
+        for ( const auto &item : profiler->entries() )
+        {
+            const auto current_local = item.second.current_bytes;
+            const auto peak_local    = item.second.peak_bytes;
+            const auto current_sum   = mpi_.all_reduce_sum( current_local );
+            const auto current_max   = mpi_.all_reduce_max( current_local );
+            const auto peak_sum      = mpi_.all_reduce_sum( peak_local );
+            const auto peak_max      = mpi_.all_reduce_max( peak_local );
+
+            if ( mpi_.myid == 0 )
+            {
+                const double proc_count = static_cast<double>( mpi_.num_procs );
+                ss << "\n  " << item.first
+                   << ": current(sum/max/avg)="
+                   << current_sum << "/" << current_max << "/" << static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs )
+                   << " B ("
+                   << std::fixed << std::setprecision( 3 )
+                   << bytes_to_mib( current_sum ) << "/"
+                   << bytes_to_mib( current_max ) << "/"
+                   << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs ) ) << " MiB)"
+                   << ", peak(sum/max/avg)="
+                   << peak_sum << "/" << peak_max << "/" << static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs )
+                   << " B ("
+                   << bytes_to_mib( peak_sum ) << "/"
+                   << bytes_to_mib( peak_max ) << "/"
+                   << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs ) ) << " MiB)";
+                (void)proc_count;
+            }
+        }
+        if ( mpi_.myid == 0 )
+        {
+            log_.info( ss.str() );
+        }
+    }
+
+    void log_memory_profile_totals_()
+    {
+        memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        if ( profiler == nullptr )
+        {
+            return;
+        }
+
+        const auto current_local = profiler->total_current_bytes();
+        const auto peak_local    = profiler->total_peak_bytes();
+        const auto current_sum   = mpi_.all_reduce_sum( current_local );
+        const auto current_max   = mpi_.all_reduce_max( current_local );
+        const auto peak_sum      = mpi_.all_reduce_sum( peak_local );
+        const auto peak_max      = mpi_.all_reduce_max( peak_local );
+
+        if ( mpi_.myid == 0 )
+        {
+            auto bytes_to_mib = []( typename memory_profiler_t::bytes_type bytes ) -> double
+            {
+                return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
+            };
+            std::stringstream ss;
+            ss << "Memory profile totals (MPI reduced): "
+               << "current(sum/max/avg)="
+               << current_sum << "/" << current_max << "/" << static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs )
+               << " B ("
+               << std::fixed << std::setprecision( 3 )
+               << bytes_to_mib( current_sum ) << "/"
+               << bytes_to_mib( current_max ) << "/"
+               << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs ) ) << " MiB)"
+               << ", peak(sum/max/avg)="
+               << peak_sum << "/" << peak_max << "/" << static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs )
+               << " B ("
+               << bytes_to_mib( peak_sum ) << "/"
+               << bytes_to_mib( peak_max ) << "/"
+               << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs ) ) << " MiB)";
+            log_.info( ss.str() );
         }
     }
 
@@ -972,6 +1130,7 @@ private:
         SCFD_SAFE_CALL( same_xy_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_, myid_k_ ) );
         SCFD_SAFE_CALL( same_xw_.init( transpose1_dim_, transpose2_dim_, myid_i_, myid_j_, myid_k_ ) );
         SCFD_SAFE_CALL( same_zw_.init( transpose2_dim_, output_dim_, myid_i_, myid_j_, myid_k_ ) );
+        update_memory_profile_4d_();
     }
 
     void init_4d_strategy_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab> )
@@ -1008,6 +1167,7 @@ private:
         ) );
 
         SCFD_SAFE_CALL( same_xw_.init( transpose1_dim_, transpose2_dim_, myid_i_, myid_j_, myid_k_ ) );
+        update_memory_profile_4d_();
     }
 
     void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil> )
@@ -1308,18 +1468,76 @@ private:
         SCFD_SAFE_CALL( scratch_stage0_xfft_3d_.init( std::max( stage0_size, xfft_size ) ) );
         SCFD_SAFE_CALL( stage0_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2 ) );
         SCFD_SAFE_CALL( x_fft_stage_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), xfft_d0, xfft_d1, xfft_d2 ) );
+        update_memory_profile_3d_();
     }
 
     void init_owned_stage1_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
     {
         SCFD_SAFE_CALL( scratch_stage1_3d_.init( d0 * d1 * d2 ) );
         SCFD_SAFE_CALL( stage1_3d_.init_by_raw_data( scratch_stage1_3d_.raw_ptr(), d0, d1, d2 ) );
+        update_memory_profile_3d_();
     }
 
     void init_owned_work_hat_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
     {
         SCFD_SAFE_CALL( scratch_work_hat_3d_.init( d0 * d1 * d2 ) );
         SCFD_SAFE_CALL( work_hat_3d_.init_by_raw_data( scratch_work_hat_3d_.raw_ptr(), d0, d1, d2 ) );
+        update_memory_profile_3d_();
+    }
+
+    void update_memory_profile_3d_()
+    {
+        if ( !memory_profiler_.enabled() )
+        {
+            return;
+        }
+
+        memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        profiler->set_bytes(
+            "fftm/scratch_stage0_xfft_3d",
+            bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_xfft_3d_.size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "fftm/scratch_stage1_3d",
+            bytes_of_elems_( static_cast<std::size_t>( scratch_stage1_3d_.size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "fftm/scratch_work_hat_3d",
+            bytes_of_elems_( static_cast<std::size_t>( scratch_work_hat_3d_.size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes( "fftm/stage0_4d", 0 );
+        profiler->set_bytes( "fftm/stage1_4d", 0 );
+        profiler->set_bytes( "fftm/stage2_4d", 0 );
+        profiler->set_bytes( "fftm/work_hat_4d", 0 );
+    }
+
+    void update_memory_profile_4d_()
+    {
+        if ( !memory_profiler_.enabled() )
+        {
+            return;
+        }
+
+        memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        profiler->set_bytes( "fftm/scratch_stage0_xfft_3d", 0 );
+        profiler->set_bytes( "fftm/scratch_stage1_3d", 0 );
+        profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
+        profiler->set_bytes(
+            "fftm/stage0_4d",
+            bytes_of_elems_( static_cast<std::size_t>( stage0_4d_.total_size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "fftm/stage1_4d",
+            bytes_of_elems_( static_cast<std::size_t>( stage1_4d_.total_size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "fftm/stage2_4d",
+            bytes_of_elems_( static_cast<std::size_t>( stage2_4d_.total_size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "fftm/work_hat_4d",
+            bytes_of_elems_( static_cast<std::size_t>( work_hat_4d_.total_size() ), sizeof( complex ) )
+        );
     }
 
 private:
@@ -1328,6 +1546,7 @@ private:
     Log              log_;
     fftm_init_options init_options_;
     optional_profiler_t profiler_;
+    optional_memory_profiler_t memory_profiler_;
     partitioning_t   partitioning_;
     same_x_t         same_x_;
     same_z_t         same_z_;

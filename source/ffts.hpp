@@ -3,8 +3,10 @@
 
 #include <array>
 #include <cstddef>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 
 #include <scfd/arrays/tensor_array_nd.h>
@@ -13,6 +15,7 @@
 #include "detail/cuda_memcpy_4d_slab_transposer.h"
 #include "detail/direct_transpose_4d.h"
 #include "fft_direction.h"
+#include "profiling.h"
 
 namespace fftm
 {
@@ -54,6 +57,9 @@ struct strategy_4d_slab_slab
 
 struct ffts_init_options
 {
+    std::string memory_profiling_key;
+    bool        print_memory_profile_on_destroy = true;
+    bool        print_memory_totals_on_destroy  = true;
 };
 
 namespace detail
@@ -151,6 +157,8 @@ public:
     using memory_t = typename Backend::memory_type;
     using runtime_api = typename BaseFFT::runtime_api;
     using strategy_4d_t = Strategy4D;
+    using memory_profiler_t = ffts_memory_profiler;
+    using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
 
     template <std::size_t Dim>
     using real_array_t = typename detail::ffts_array_traits<real, complex, memory_t, Dim, Strategy4D>::real_array_t;
@@ -180,15 +188,27 @@ public:
         for_each_4d_.block_size = 128;
     }
 
+    ~ffts()
+    {
+        try
+        {
+            log_memory_profile_on_destroy_();
+        }
+        catch ( ... )
+        {
+        }
+    }
+
     template <std::size_t Dim>
     void init( const std::array<std::size_t, Dim> &grid, const ffts_init_options &options = ffts_init_options() )
     {
         init_array_( grid, options, typename std::integral_constant<std::size_t, Dim>::type() );
     }
 
-    void init( std::size_t nx, std::size_t ny )
+    void init( std::size_t nx, std::size_t ny, const ffts_init_options &options = ffts_init_options() )
     {
         ensure_can_init_();
+        configure_memory_profiling_( options );
         nx_      = nx;
         ny_      = ny;
         ny_half_ = ny_ / 2 + 1;
@@ -196,12 +216,14 @@ public:
 
         add_2d_plans_();
         base_fft_.activate();
+        update_memory_profile_();
         init_done_ = true;
     }
 
-    void init( std::size_t nx, std::size_t ny, std::size_t nz )
+    void init( std::size_t nx, std::size_t ny, std::size_t nz, const ffts_init_options &options = ffts_init_options() )
     {
         ensure_can_init_();
+        configure_memory_profiling_( options );
         nx_      = nx;
         ny_      = ny;
         nz_      = nz;
@@ -210,13 +232,14 @@ public:
 
         add_3d_plans_();
         base_fft_.activate();
+        update_memory_profile_();
         init_done_ = true;
     }
 
     void init( std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw, const ffts_init_options &options = ffts_init_options() )
     {
-        (void)options;
         ensure_can_init_();
+        configure_memory_profiling_( options );
         nx_      = nx;
         ny_      = ny;
         nz_      = nz;
@@ -230,12 +253,29 @@ public:
         init_4d_storage_( strategy_family_tag() );
         add_4d_plans_( strategy_family_tag() );
         base_fft_.activate();
+        update_memory_profile_();
         init_done_ = true;
     }
 
     bool is_initialized() const
     {
         return init_done_;
+    }
+
+    void print_memory_profile( std::ostream &out ) const
+    {
+        if ( memory_profiler_.enabled() )
+        {
+            memory_profiler_.native_ptr()->print( out );
+        }
+    }
+
+    void print_memory_totals( std::ostream &out ) const
+    {
+        if ( memory_profiler_.enabled() )
+        {
+            memory_profiler_.native_ptr()->print_totals( out );
+        }
     }
 
     std::size_t dimension() const
@@ -295,6 +335,70 @@ private:
     using stage2_complex_array_t = typename traits_4d_t::stage2_complex_array_t;
     using direct_transposer_t    = detail::direct_transpose_4d;
     using memcpy_transposer_t    = detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>;
+
+    static typename memory_profiler_t::bytes_type bytes_of_elems_( std::size_t elems, std::size_t elem_size )
+    {
+        return static_cast<typename memory_profiler_t::bytes_type>( elems ) *
+               static_cast<typename memory_profiler_t::bytes_type>( elem_size );
+    }
+
+    void configure_memory_profiling_( const ffts_init_options &options )
+    {
+        init_options_ = options;
+        if ( !options.memory_profiling_key.empty() )
+        {
+            memory_profiler_.enable( options.memory_profiling_key );
+        }
+        else
+        {
+            memory_profiler_.disable();
+        }
+        base_fft_.set_memory_profiler( memory_profiler_.native_ptr(), "ffts/base_fft" );
+        update_memory_profile_();
+    }
+
+    void update_memory_profile_()
+    {
+        if ( !memory_profiler_.enabled() )
+        {
+            return;
+        }
+
+        memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        profiler->set_bytes(
+            "ffts/stage0_4d",
+            bytes_of_elems_( static_cast<std::size_t>( stage0_.total_size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "ffts/stage1_4d",
+            bytes_of_elems_( static_cast<std::size_t>( stage1_.total_size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "ffts/stage2_4d",
+            bytes_of_elems_( static_cast<std::size_t>( stage2_.total_size() ), sizeof( complex ) )
+        );
+        profiler->set_bytes(
+            "ffts/work_hat_4d",
+            bytes_of_elems_( static_cast<std::size_t>( work_hat_.total_size() ), sizeof( complex ) )
+        );
+    }
+
+    void log_memory_profile_on_destroy_() const
+    {
+        if ( !memory_profiler_.enabled() )
+        {
+            return;
+        }
+
+        if ( init_options_.print_memory_profile_on_destroy )
+        {
+            memory_profiler_.native_ptr()->print( std::cout );
+        }
+        if ( init_options_.print_memory_totals_on_destroy )
+        {
+            memory_profiler_.native_ptr()->print_totals( std::cout );
+        }
+    }
 
     void ensure_can_init_() const
     {
@@ -576,6 +680,7 @@ private:
         stage2_.init( nx_, nz_, nw_half_, ny_ );
         direct_transposer_.reset( new detail::direct_transpose_4d( nx_, ny_, nz_, nw_half_ ) );
         init_memcpy_transposer_( transpose_backend_tag() );
+        update_memory_profile_();
     }
 
     void init_4d_storage_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab> )
@@ -583,6 +688,7 @@ private:
         stage1_.init( nz_, nw_half_, nx_, ny_ );
         direct_transposer_.reset( new detail::direct_transpose_4d( nx_, ny_, nz_, nw_half_ ) );
         init_memcpy_transposer_( transpose_backend_tag() );
+        update_memory_profile_();
     }
 
     void init_memcpy_transposer_( std::integral_constant<transpose_backend, transpose_backend::direct> )
@@ -926,20 +1032,20 @@ private:
 
     void init_array_(
         const std::array<std::size_t, 2> &grid,
-        const ffts_init_options          &,
+        const ffts_init_options          &options,
         std::integral_constant<std::size_t, 2>
     )
     {
-        init( grid[0], grid[1] );
+        init( grid[0], grid[1], options );
     }
 
     void init_array_(
         const std::array<std::size_t, 3> &grid,
-        const ffts_init_options          &,
+        const ffts_init_options          &options,
         std::integral_constant<std::size_t, 3>
     )
     {
-        init( grid[0], grid[1], grid[2] );
+        init( grid[0], grid[1], grid[2], options );
     }
 
     void init_array_(
@@ -952,6 +1058,8 @@ private:
     }
 
     BaseFFT base_fft_;
+    ffts_init_options init_options_;
+    optional_memory_profiler_t memory_profiler_;
 
     bool        init_done_;
     std::size_t dim_;

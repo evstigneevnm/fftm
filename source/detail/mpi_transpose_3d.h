@@ -75,9 +75,10 @@ public:
     using contiguous_buf_t = scfd::arrays::array_nd<value_type, 1, memory_t>;
     using mpi_request_t    = scfd::communication::detail::mpi_request;
     using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
-    using runtime_api_t    = RuntimeAPI;
-    using profiler_t       = ::fftm::fftm_profiler;
-    using profiler_scope_t = ::fftm::profile_scope<profiler_t>;
+    using runtime_api_t     = RuntimeAPI;
+    using profiler_t        = ::fftm::fftm_profiler;
+    using profiler_scope_t  = ::fftm::profile_scope<profiler_t>;
+    using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
     mpi_transpose_3d( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
@@ -98,6 +99,16 @@ public:
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
+    }
+
+    void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
+    {
+        memory_profiler_       = profiler;
+        memory_profile_prefix_ = prefix;
+        if ( is_inited_ )
+        {
+            update_memory_profile_();
+        }
     }
 
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j )
@@ -163,6 +174,7 @@ public:
         init_forward_layout_();
         init_backward_layout_();
         is_inited_ = true;
+        update_memory_profile_();
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -231,6 +243,25 @@ private:
         {
             throw std::logic_error( "mpi_transpose_3d::init must be called before transpose" );
         }
+    }
+
+    void update_memory_profile_()
+    {
+        if ( memory_profiler_ == nullptr || memory_profile_prefix_.empty() )
+        {
+            return;
+        }
+
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/send_buffer",
+            static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
+                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+        );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/recv_buffer",
+            static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
+                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+        );
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -947,6 +978,8 @@ private:
     MPIComm mpi_;
     Log     log_;
     profiler_t *profiler_ = nullptr;
+    memory_profiler_t *memory_profiler_ = nullptr;
+    std::string memory_profile_prefix_;
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
@@ -1012,9 +1045,10 @@ public:
     using contiguous_buf_t = scfd::arrays::array_nd<value_type, 1, memory_t>;
     using mpi_request_t    = scfd::communication::detail::mpi_request;
     using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
-    using runtime_api_t    = RuntimeAPI;
-    using profiler_t       = ::fftm::fftm_profiler;
-    using profiler_scope_t = ::fftm::profile_scope<profiler_t>;
+    using runtime_api_t     = RuntimeAPI;
+    using profiler_t        = ::fftm::fftm_profiler;
+    using profiler_scope_t  = ::fftm::profile_scope<profiler_t>;
+    using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
     mpi_transpose_3d_same_z( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
@@ -1034,6 +1068,16 @@ public:
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
+    }
+
+    void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
+    {
+        memory_profiler_       = profiler;
+        memory_profile_prefix_ = prefix;
+        if ( is_inited_ )
+        {
+            update_memory_profile_();
+        }
     }
 
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j )
@@ -1098,6 +1142,7 @@ public:
         init_forward_layout_();
         init_backward_layout_();
         is_inited_ = true;
+        update_memory_profile_();
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -1165,6 +1210,25 @@ private:
     {
         if ( !is_inited_ )
             throw std::logic_error( "mpi_transpose_3d_same_z::init must be called before transpose" );
+    }
+
+    void update_memory_profile_()
+    {
+        if ( memory_profiler_ == nullptr || memory_profile_prefix_.empty() )
+        {
+            return;
+        }
+
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/send_buffer",
+            static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
+                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+        );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/recv_buffer",
+            static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
+                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+        );
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -1961,6 +2025,8 @@ private:
     MPIComm mpi_;
     Log     log_;
     profiler_t *profiler_ = nullptr;
+    memory_profiler_t *memory_profiler_ = nullptr;
+    std::string memory_profile_prefix_;
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
