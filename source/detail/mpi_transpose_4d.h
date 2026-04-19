@@ -16,7 +16,6 @@
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
 
-#include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
 #include "../profiling.h"
 #include "mpi_transpose_3d.h"
