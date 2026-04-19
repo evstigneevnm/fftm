@@ -16,60 +16,58 @@ using fftm_profiler = scfd::utils::profiler<scfd::utils::mpi_timer_event>;
 using ffts_profiler = scfd::utils::profiler<scfd::utils::system_timer_event>;
 
 template <class Profiler>
-class optional_profiler
+class profile_scope
 {
 public:
-    class scoped_ticker
+    profile_scope( Profiler *profiler, const std::string &name )
+        : profiler_( profiler )
     {
-    public:
-        scoped_ticker()
-            : profiler_( nullptr )
+        if ( profiler_ != nullptr )
         {
+            profiler_->tic( name );
         }
+    }
 
-        scoped_ticker( Profiler *profiler, const std::string &name )
-            : profiler_( profiler )
+    ~profile_scope()
+    {
+        if ( profiler_ != nullptr )
         {
-            if ( profiler_ != nullptr )
-            {
-                profiler_->tic( name );
-            }
+            profiler_->toc();
         }
+    }
 
-        ~scoped_ticker()
+    profile_scope( const profile_scope & ) = delete;
+    profile_scope &operator=( const profile_scope & ) = delete;
+
+    profile_scope( profile_scope &&other ) noexcept
+        : profiler_( other.profiler_ )
+    {
+        other.profiler_ = nullptr;
+    }
+
+    profile_scope &operator=( profile_scope &&other ) noexcept
+    {
+        if ( this != &other )
         {
             if ( profiler_ != nullptr )
             {
                 profiler_->toc();
             }
-        }
-
-        scoped_ticker( const scoped_ticker & ) = delete;
-        scoped_ticker &operator=( const scoped_ticker & ) = delete;
-
-        scoped_ticker( scoped_ticker &&other ) noexcept
-            : profiler_( other.profiler_ )
-        {
+            profiler_       = other.profiler_;
             other.profiler_ = nullptr;
         }
+        return *this;
+    }
 
-        scoped_ticker &operator=( scoped_ticker &&other ) noexcept
-        {
-            if ( this != &other )
-            {
-                if ( profiler_ != nullptr )
-                {
-                    profiler_->toc();
-                }
-                profiler_       = other.profiler_;
-                other.profiler_ = nullptr;
-            }
-            return *this;
-        }
+private:
+    Profiler *profiler_;
+};
 
-    private:
-        Profiler *profiler_;
-    };
+template <class Profiler>
+class optional_profiler
+{
+public:
+    using scoped_ticker = profile_scope<Profiler>;
 
     optional_profiler() = default;
 
@@ -91,6 +89,16 @@ public:
     scoped_ticker scoped_tic( const std::string &name )
     {
         return scoped_ticker( profiler_.get(), name );
+    }
+
+    Profiler *native_ptr()
+    {
+        return profiler_.get();
+    }
+
+    const Profiler *native_ptr() const
+    {
+        return profiler_.get();
     }
 
     template <class Log>

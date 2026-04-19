@@ -459,6 +459,11 @@ private:
         {
             profiler_.disable();
         }
+        same_x_.set_profiler( profiler_.native_ptr() );
+        same_z_.set_profiler( profiler_.native_ptr() );
+        same_xy_.set_profiler( profiler_.native_ptr() );
+        same_xw_.set_profiler( profiler_.native_ptr() );
+        same_zw_.set_profiler( profiler_.native_ptr() );
     }
 
     void log_profile_on_destroy_()

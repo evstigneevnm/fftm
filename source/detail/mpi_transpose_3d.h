@@ -15,6 +15,7 @@
 
 #include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
+#include "../profiling.h"
 
 namespace fftm
 {
@@ -76,6 +77,8 @@ public:
     using mpi_request_t    = scfd::communication::detail::mpi_request;
     using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
     using runtime_api_t    = RuntimeAPI;
+    using profiler_t       = ::fftm::fftm_profiler;
+    using profiler_scope_t = ::fftm::profile_scope<profiler_t>;
 
     mpi_transpose_3d( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
@@ -93,8 +96,14 @@ public:
         free_value_type_();
     }
 
+    void set_profiler( profiler_t *profiler )
+    {
+        profiler_ = profiler;
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j )
     {
+        auto scope = profile_scope_( "mpi_transpose_3d::init" );
         free_forward_types_();
         free_value_type_();
 
@@ -160,6 +169,9 @@ public:
     template <class ArrayIn, class ArrayOut>
     void transpose_xyz_to_xzy( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
     {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_3d::transpose_xyz_to_xzy/" ) + mpi_transpose_3d_mode_name( mode )
+        );
         ensure_is_inited_();
         verify_forward_shapes_( in, out );
         reset_requests_();
@@ -184,6 +196,9 @@ public:
     template <class ArrayIn, class ArrayOut>
     void transpose_xzy_to_xyz( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
     {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_3d::transpose_xzy_to_xyz/" ) + mpi_transpose_3d_mode_name( mode )
+        );
         ensure_is_inited_();
         verify_backward_shapes_( in, out );
         reset_requests_();
@@ -206,6 +221,11 @@ public:
     }
 
 private:
+    profiler_scope_t profile_scope_( const std::string &name )
+    {
+        return profiler_scope_t( profiler_, name );
+    }
+
     void ensure_is_inited_() const
     {
         if ( !is_inited_ )
@@ -397,6 +417,7 @@ private:
 
     void synchronize_streams_()
     {
+        auto scope = profile_scope_( "stream_synchronize" );
         for ( std::size_t i = 0; i < streams_.size(); ++i )
         {
             runtime_api_t::stream_synchronize( streams_[i].stream() );
@@ -507,43 +528,55 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "forward_p2p_waitall" );
         const int row_size = row_comm_info_.num_procs;
-
-        copy_forward_self_block_async_( in, out );
-
-        for ( int p = 0; p < row_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-
-            row_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
-                detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ),
-                mpi_value_type_,
-                p,
-                p,
-                recv_requests_[p]
-            );
-
-            row_comm_info_.isend(
-                in.raw_ptr() + forward_send_offset_elems_( p ),
-                detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ),
-                mpi_value_type_,
-                p,
-                myid_j_,
-                send_requests_[p]
-            );
+            auto phase = profile_scope_( "self_copy" );
+            copy_forward_self_block_async_( in, out );
         }
-
-        row_comm_info_.waitall( row_size, recv_requests_.data() );
-        for ( int p = 0; p < row_size; ++p )
         {
-            if ( p != myid_j_ )
-                unpack_forward_received_chunk_async_( p, out );
-        }
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
 
+                row_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
+                    detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    recv_requests_[p]
+                );
+
+                row_comm_info_.isend(
+                    in.raw_ptr() + forward_send_offset_elems_( p ),
+                    detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_j_,
+                    send_requests_[p]
+                );
+            }
+        }
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            row_comm_info_.waitall( row_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                if ( p != myid_j_ )
+                    unpack_forward_received_chunk_async_( p, out );
+            }
+        }
         synchronize_streams_();
-        row_comm_info_.waitall( row_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_send" );
+            row_comm_info_.waitall( row_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -553,46 +586,57 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "forward_p2p_waitany" );
         const int row_size = row_comm_info_.num_procs;
-
-        copy_forward_self_block_async_( in, out );
-
-        for ( int p = 0; p < row_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
+            auto phase = profile_scope_( "self_copy" );
+            copy_forward_self_block_async_( in, out );
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
 
-            row_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
-                detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ),
-                mpi_value_type_,
-                p,
-                p,
-                recv_requests_[p]
-            );
+                row_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
+                    detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    recv_requests_[p]
+                );
 
-            row_comm_info_.isend(
-                in.raw_ptr() + forward_send_offset_elems_( p ),
-                detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ),
-                mpi_value_type_,
-                p,
-                myid_j_,
-                send_requests_[p]
-            );
+                row_comm_info_.isend(
+                    in.raw_ptr() + forward_send_offset_elems_( p ),
+                    detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_j_,
+                    send_requests_[p]
+                );
+            }
         }
 
-        int completed = 0;
-        while ( completed < row_size - 1 )
         {
-            const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            unpack_forward_received_chunk_async_( p, out );
-            completed++;
+            auto phase = profile_scope_( "waitany_unpack" );
+            int completed = 0;
+            while ( completed < row_size - 1 )
+            {
+                const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                if ( p == MPI_UNDEFINED )
+                    break;
+                unpack_forward_received_chunk_async_( p, out );
+                completed++;
+            }
         }
 
         synchronize_streams_();
-        row_comm_info_.waitall( row_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_send" );
+            row_comm_info_.waitall( row_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -602,20 +646,26 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        row_comm_info_.alltoallv(
-            static_cast<const void *>( in.raw_ptr() ),
-            forward_sendcounts_.data(),
-            forward_sdispls_.data(),
-            mpi_value_type_,
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_.data(),
-            forward_rdispls_.data(),
-            mpi_value_type_
-        );
-
-        for ( int p = 0; p < row_comm_info_.num_procs; ++p )
+        auto scope = profile_scope_( "forward_alltoallv" );
         {
-            unpack_forward_received_chunk_async_( p, out );
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            row_comm_info_.alltoallv(
+                static_cast<const void *>( in.raw_ptr() ),
+                forward_sendcounts_.data(),
+                forward_sdispls_.data(),
+                mpi_value_type_,
+                static_cast<void *>( recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(),
+                forward_rdispls_.data(),
+                mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < row_comm_info_.num_procs; ++p )
+            {
+                unpack_forward_received_chunk_async_( p, out );
+            }
         }
         synchronize_streams_();
 #endif
@@ -627,28 +677,35 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "forward_alltoallw" );
         const int row_size = row_comm_info_.num_procs;
-        for ( int p = 0; p < row_size; ++p )
         {
-            forward_sdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_send_offset_elems_( p ) ),
-                "forward_sdispls_w"
-            );
-            forward_rdispls_w_[p] = detail::mpi_int_cast(
-                input_dim_.start_y[p] * sizeof( value_type ),
-                "forward_rdispls_w"
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                forward_sdispls_w_[p] = detail::mpi_int_cast(
+                    bytes_from_elems_( forward_send_offset_elems_( p ) ),
+                    "forward_sdispls_w"
+                );
+                forward_rdispls_w_[p] = detail::mpi_int_cast(
+                    input_dim_.start_y[p] * sizeof( value_type ),
+                    "forward_rdispls_w"
+                );
+            }
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            row_comm_info_.alltoallw(
+                static_cast<const void *>( in.raw_ptr() ),
+                forward_sendcounts_w_.data(),
+                forward_sdispls_w_.data(),
+                forward_sendtypes_w_.data(),
+                static_cast<void *>( out.raw_ptr() ),
+                forward_recvcounts_w_.data(),
+                forward_rdispls_w_.data(),
+                forward_recvtypes_w_.data()
             );
         }
-        row_comm_info_.alltoallw(
-            static_cast<const void *>( in.raw_ptr() ),
-            forward_sendcounts_w_.data(),
-            forward_sdispls_w_.data(),
-            forward_sendtypes_w_.data(),
-            static_cast<void *>( out.raw_ptr() ),
-            forward_recvcounts_w_.data(),
-            forward_rdispls_w_.data(),
-            forward_recvtypes_w_.data()
-        );
 #endif
     }
 
@@ -658,52 +715,68 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "backward_p2p_waitall" );
         const int row_size = row_comm_info_.num_procs;
 
-        for ( int p = 0; p < row_size; ++p )
         {
-            pack_backward_chunk_async_( p, in );
+            auto phase = profile_scope_( "pack_and_post_recv" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                pack_backward_chunk_async_( p, in );
 
-            if ( p == myid_j_ )
-                continue;
+                if ( p == myid_j_ )
+                    continue;
 
-            row_comm_info_.irecv(
-                out.raw_ptr() + backward_recv_offset_elems_( p ),
-                detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ),
-                mpi_value_type_,
-                p,
-                myid_j_,
-                recv_requests_[p]
-            );
+                row_comm_info_.irecv(
+                    out.raw_ptr() + backward_recv_offset_elems_( p ),
+                    detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_j_,
+                    recv_requests_[p]
+                );
+            }
         }
 
         synchronize_streams_();
 
-        for ( int p = 0; p < row_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
+            auto phase = profile_scope_( "post_send" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
 
-            row_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
-                detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ),
-                mpi_value_type_,
-                p,
-                p,
-                send_requests_[p]
+                row_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
+                    detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy_async(
+                out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
+                send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
+                bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
+                runtime_api_t::device_to_device_kind(),
+                streams_[myid_j_].stream()
             );
         }
 
-        runtime_api_t::memcpy_async(
-            out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
-            send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
-            bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
-            runtime_api_t::device_to_device_kind(),
-            streams_[myid_j_].stream()
-        );
-
-        row_comm_info_.waitall( row_size, recv_requests_.data() );
-        row_comm_info_.waitall( row_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            row_comm_info_.waitall( row_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            row_comm_info_.waitall( row_size, send_requests_.data() );
+        }
         synchronize_streams_();
 #endif
     }
@@ -714,59 +787,75 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "backward_p2p_waitany" );
         const int row_size = row_comm_info_.num_procs;
 
-        for ( int p = 0; p < row_size; ++p )
         {
-            pack_backward_chunk_async_( p, in );
+            auto phase = profile_scope_( "pack_and_post_recv" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                pack_backward_chunk_async_( p, in );
 
-            if ( p == myid_j_ )
-                continue;
+                if ( p == myid_j_ )
+                    continue;
 
-            row_comm_info_.irecv(
-                out.raw_ptr() + backward_recv_offset_elems_( p ),
-                detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ),
-                mpi_value_type_,
-                p,
-                myid_j_,
-                recv_requests_[p]
-            );
+                row_comm_info_.irecv(
+                    out.raw_ptr() + backward_recv_offset_elems_( p ),
+                    detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_j_,
+                    recv_requests_[p]
+                );
+            }
         }
 
         synchronize_streams_();
 
-        for ( int p = 0; p < row_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            row_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
-                detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ),
-                mpi_value_type_,
-                p,
-                p,
-                send_requests_[p]
+            auto phase = profile_scope_( "post_send" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                row_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
+                    detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy_async(
+                out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
+                send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
+                bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
+                runtime_api_t::device_to_device_kind(),
+                streams_[myid_j_].stream()
             );
         }
 
-        runtime_api_t::memcpy_async(
-            out.raw_ptr() + backward_recv_offset_elems_( myid_j_ ),
-            send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( myid_j_ ),
-            bytes_from_elems_( backward_send_chunk_elems_( myid_j_ ) ),
-            runtime_api_t::device_to_device_kind(),
-            streams_[myid_j_].stream()
-        );
-
-        int completed = 0;
-        while ( completed < row_size - 1 )
         {
-            const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            completed++;
+            auto phase = profile_scope_( "waitany_recv" );
+            int completed = 0;
+            while ( completed < row_size - 1 )
+            {
+                const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                if ( p == MPI_UNDEFINED )
+                    break;
+                completed++;
+            }
         }
 
-        row_comm_info_.waitall( row_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_send" );
+            row_comm_info_.waitall( row_size, send_requests_.data() );
+        }
         synchronize_streams_();
 #endif
     }
@@ -777,22 +866,31 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        for ( int p = 0; p < row_comm_info_.num_procs; ++p )
         {
-            pack_backward_chunk_async_( p, in );
-        }
-        synchronize_streams_();
+            auto scope = profile_scope_( "backward_alltoallv" );
+            {
+                auto phase = profile_scope_( "pack_backward" );
+                for ( int p = 0; p < row_comm_info_.num_procs; ++p )
+                {
+                    pack_backward_chunk_async_( p, in );
+                }
+            }
+            synchronize_streams_();
 
-        row_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_.data(),
-            backward_sdispls_.data(),
-            mpi_value_type_,
-            static_cast<void *>( out.raw_ptr() ),
-            backward_recvcounts_.data(),
-            backward_rdispls_.data(),
-            mpi_value_type_
-        );
+            {
+                auto phase = profile_scope_( "mpi_alltoallv" );
+                row_comm_info_.alltoallv(
+                    static_cast<const void *>( send_buffer_.raw_ptr() ),
+                    backward_sendcounts_.data(),
+                    backward_sdispls_.data(),
+                    mpi_value_type_,
+                    static_cast<void *>( out.raw_ptr() ),
+                    backward_recvcounts_.data(),
+                    backward_rdispls_.data(),
+                    mpi_value_type_
+                );
+            }
+        }
 #endif
     }
 
@@ -802,41 +900,54 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        for ( int p = 0; p < row_comm_info_.num_procs; ++p )
         {
-            pack_backward_chunk_async_( p, in );
-        }
-        synchronize_streams_();
+            auto scope = profile_scope_( "backward_alltoallw" );
+            {
+                auto phase = profile_scope_( "pack_backward" );
+                for ( int p = 0; p < row_comm_info_.num_procs; ++p )
+                {
+                    pack_backward_chunk_async_( p, in );
+                }
+            }
+            synchronize_streams_();
 
-        const int row_size = row_comm_info_.num_procs;
-        for ( int p = 0; p < row_size; ++p )
-        {
-            backward_sdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_pack_offset_elems_( p ) ),
-                "backward_sdispls_w"
-            );
-            backward_rdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_offset_elems_( p ) ),
-                "backward_rdispls_w"
-            );
-        }
+            const int row_size = row_comm_info_.num_procs;
+            {
+                auto phase = profile_scope_( "prepare_alltoallw_layout" );
+                for ( int p = 0; p < row_size; ++p )
+                {
+                    backward_sdispls_w_[p] = detail::mpi_int_cast(
+                        bytes_from_elems_( backward_send_pack_offset_elems_( p ) ),
+                        "backward_sdispls_w"
+                    );
+                    backward_rdispls_w_[p] = detail::mpi_int_cast(
+                        bytes_from_elems_( backward_recv_offset_elems_( p ) ),
+                        "backward_rdispls_w"
+                    );
+                }
+            }
 
-        row_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_w_.data(),
-            backward_sdispls_w_.data(),
-            backward_sendtypes_w_.data(),
-            static_cast<void *>( out.raw_ptr() ),
-            backward_recvcounts_w_.data(),
-            backward_rdispls_w_.data(),
-            backward_recvtypes_w_.data()
-        );
+            {
+                auto phase = profile_scope_( "mpi_alltoallw" );
+                row_comm_info_.alltoallw(
+                    static_cast<const void *>( send_buffer_.raw_ptr() ),
+                    backward_sendcounts_w_.data(),
+                    backward_sdispls_w_.data(),
+                    backward_sendtypes_w_.data(),
+                    static_cast<void *>( out.raw_ptr() ),
+                    backward_recvcounts_w_.data(),
+                    backward_rdispls_w_.data(),
+                    backward_recvtypes_w_.data()
+                );
+            }
+        }
 #endif
     }
 
 private:
     MPIComm mpi_;
     Log     log_;
+    profiler_t *profiler_ = nullptr;
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
@@ -903,6 +1014,8 @@ public:
     using mpi_request_t    = scfd::communication::detail::mpi_request;
     using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
     using runtime_api_t    = RuntimeAPI;
+    using profiler_t       = ::fftm::fftm_profiler;
+    using profiler_scope_t = ::fftm::profile_scope<profiler_t>;
 
     mpi_transpose_3d_same_z( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi )
@@ -919,8 +1032,14 @@ public:
         free_value_type_();
     }
 
+    void set_profiler( profiler_t *profiler )
+    {
+        profiler_ = profiler;
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j )
     {
+        auto scope = profile_scope_( "mpi_transpose_3d_same_z::init" );
         free_value_type_();
 
         input_dim_  = input_dim;
@@ -985,6 +1104,9 @@ public:
     template <class ArrayIn, class ArrayOut>
     void transpose_x_to_y( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
     {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_3d_same_z::transpose_x_to_y/" ) + mpi_transpose_3d_mode_name( mode )
+        );
         ensure_is_inited_();
         verify_forward_shapes_( in, out );
         reset_requests_();
@@ -1010,6 +1132,9 @@ public:
     template <class ArrayIn, class ArrayOut>
     void transpose_y_to_x( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
     {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_3d_same_z::transpose_y_to_x/" ) + mpi_transpose_3d_mode_name( mode )
+        );
         ensure_is_inited_();
         verify_backward_shapes_( in, out );
         reset_requests_();
@@ -1032,6 +1157,11 @@ public:
     }
 
 private:
+    profiler_scope_t profile_scope_( const std::string &name )
+    {
+        return profiler_scope_t( profiler_, name );
+    }
+
     void ensure_is_inited_() const
     {
         if ( !is_inited_ )
@@ -1218,6 +1348,7 @@ private:
 
     void synchronize_streams_()
     {
+        auto scope = profile_scope_( "stream_synchronize" );
         for ( std::size_t i = 0; i < streams_.size(); ++i )
         {
             runtime_api_t::stream_synchronize( streams_[i].stream() );
@@ -1339,6 +1470,7 @@ private:
     template <class ArrayIn>
     void pack_forward_( const ArrayIn &in )
     {
+        auto scope = profile_scope_( "pack_forward" );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
             pack_forward_chunk_async_(
@@ -1355,6 +1487,7 @@ private:
     template <class ArrayOut>
     void unpack_forward_chunk_async_( int source_i, ArrayOut &out )
     {
+        auto scope = profile_scope_( "unpack_forward_chunk" );
         unpack_forward_chunk_async_(
             recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( source_i ),
             input_dim_.size_x[source_i],
@@ -1367,6 +1500,7 @@ private:
     template <class ArrayOut>
     void unpack_backward_chunk_async_( int source_i, ArrayOut &out )
     {
+        auto scope = profile_scope_( "unpack_backward_chunk" );
         unpack_backward_chunk_async_(
             recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( source_i ),
             output_dim_.size_y[source_i],
@@ -1379,6 +1513,7 @@ private:
     template <class ArrayIn>
     void pack_backward_( const ArrayIn &in )
     {
+        auto scope = profile_scope_( "pack_backward" );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
             pack_backward_chunk_async_(
@@ -1398,44 +1533,60 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p ),
-                detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z forward recv count" ),
-                mpi_value_type_,
-                p,
-                p,
-                recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z forward send count" ),
-                mpi_value_type_,
-                p,
-                myid_i_,
-                send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p ),
+                    detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z forward recv count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p],
+                    detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z forward send count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_i_,
+                    send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy_async(
+                recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( myid_i_ ),
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+                bytes_from_elems_( forward_chunk_elems_( myid_i_ ) ),
+                runtime_api_t::device_to_device_kind(),
+                streams_[myid_i_].stream()
             );
         }
 
-        runtime_api_t::memcpy_async(
-            recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( myid_i_ ),
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind(),
-            streams_[myid_i_].stream()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
         {
-            unpack_forward_chunk_async_( p, out );
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                unpack_forward_chunk_async_( p, out );
+            }
         }
         synchronize_streams_();
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -1445,51 +1596,67 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p ),
-                detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z forward recv count" ),
-                mpi_value_type_,
-                p,
-                p,
-                recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z forward send count" ),
-                mpi_value_type_,
-                p,
-                myid_i_,
-                send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p ),
+                    detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z forward recv count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p],
+                    detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z forward send count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_i_,
+                    send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy_async(
+                recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( myid_i_ ),
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+                bytes_from_elems_( forward_chunk_elems_( myid_i_ ) ),
+                runtime_api_t::device_to_device_kind(),
+                streams_[myid_i_].stream()
             );
         }
 
-        runtime_api_t::memcpy_async(
-            recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( myid_i_ ),
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind(),
-            streams_[myid_i_].stream()
-        );
-
-        unpack_forward_chunk_async_( myid_i_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            unpack_forward_chunk_async_( p, out );
-            completed++;
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_forward_chunk_async_( myid_i_, out );
+        }
+
+        {
+            auto phase = profile_scope_( "waitany_unpack" );
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                if ( p == MPI_UNDEFINED )
+                    break;
+                unpack_forward_chunk_async_( p, out );
+                completed++;
+            }
         }
 
         synchronize_streams_();
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -1499,20 +1666,26 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            forward_sendcounts_.data(),
-            forward_sdispls_.data(),
-            mpi_value_type_,
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_.data(),
-            forward_rdispls_.data(),
-            mpi_value_type_
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        auto scope = profile_scope_( "forward_alltoallv" );
         {
-            unpack_forward_chunk_async_( p, out );
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( send_buffer_.raw_ptr() ),
+                forward_sendcounts_.data(),
+                forward_sdispls_.data(),
+                mpi_value_type_,
+                static_cast<void *>( recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(),
+                forward_rdispls_.data(),
+                mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            {
+                unpack_forward_chunk_async_( p, out );
+            }
         }
         synchronize_streams_();
 #endif
@@ -1524,33 +1697,42 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "forward_alltoallw" );
         std::vector<int> forward_sdispls_w( line_comm_info_.num_procs );
         std::vector<int> forward_rdispls_w( line_comm_info_.num_procs );
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
-            forward_sdispls_w[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_send_offsets_[p] ),
-                "same_z forward sdispls_w"
-            );
-            forward_rdispls_w[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_recv_pack_offset_elems_( p ) ),
-                "same_z forward rdispls_w"
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            {
+                forward_sdispls_w[p] = detail::mpi_int_cast(
+                    bytes_from_elems_( forward_send_offsets_[p] ),
+                    "same_z forward sdispls_w"
+                );
+                forward_rdispls_w[p] = detail::mpi_int_cast(
+                    bytes_from_elems_( forward_recv_pack_offset_elems_( p ) ),
+                    "same_z forward rdispls_w"
+                );
+            }
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( send_buffer_.raw_ptr() ),
+                forward_sendcounts_.data(),
+                forward_sdispls_w.data(),
+                forward_sendtypes_w_.data(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(),
+                forward_rdispls_w.data(),
+                forward_recvtypes_w_.data()
             );
         }
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            forward_sendcounts_.data(),
-            forward_sdispls_w.data(),
-            forward_sendtypes_w_.data(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_.data(),
-            forward_rdispls_w.data(),
-            forward_recvtypes_w_.data()
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
-            unpack_forward_chunk_async_( p, out );
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            {
+                unpack_forward_chunk_async_( p, out );
+            }
         }
         synchronize_streams_();
 #endif
@@ -1562,46 +1744,62 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         pack_backward_( in );
 
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p ),
-                detail::mpi_int_cast( backward_chunk_elems_( p ), "same_z backward recv count" ),
-                mpi_value_type_,
-                p,
-                myid_i_,
-                recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z backward send count" ),
-                mpi_value_type_,
-                p,
-                p,
-                send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p ),
+                    detail::mpi_int_cast( backward_chunk_elems_( p ), "same_z backward recv count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_i_,
+                    recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p],
+                    detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z backward send count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy_async(
+                recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+                bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
+                runtime_api_t::device_to_device_kind(),
+                streams_[myid_i_].stream()
             );
         }
 
-        runtime_api_t::memcpy_async(
-            recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind(),
-            streams_[myid_i_].stream()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
         {
-            unpack_backward_chunk_async_( p, out );
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                unpack_backward_chunk_async_( p, out );
+            }
         }
         synchronize_streams_();
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -1611,53 +1809,69 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         pack_backward_( in );
 
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p ),
-                detail::mpi_int_cast( backward_chunk_elems_( p ), "same_z backward recv count" ),
-                mpi_value_type_,
-                p,
-                myid_i_,
-                recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z backward send count" ),
-                mpi_value_type_,
-                p,
-                p,
-                send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p ),
+                    detail::mpi_int_cast( backward_chunk_elems_( p ), "same_z backward recv count" ),
+                    mpi_value_type_,
+                    p,
+                    myid_i_,
+                    recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p],
+                    detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z backward send count" ),
+                    mpi_value_type_,
+                    p,
+                    p,
+                    send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy_async(
+                recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+                bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
+                runtime_api_t::device_to_device_kind(),
+                streams_[myid_i_].stream()
             );
         }
 
-        runtime_api_t::memcpy_async(
-            recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind(),
-            streams_[myid_i_].stream()
-        );
-
-        unpack_backward_chunk_async_( myid_i_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            unpack_backward_chunk_async_( p, out );
-            completed++;
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_backward_chunk_async_( myid_i_, out );
+        }
+
+        {
+            auto phase = profile_scope_( "waitany_unpack" );
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                if ( p == MPI_UNDEFINED )
+                    break;
+                unpack_backward_chunk_async_( p, out );
+                completed++;
+            }
         }
 
         synchronize_streams_();
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -1667,22 +1881,28 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "backward_alltoallv" );
         pack_backward_( in );
 
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_.data(),
-            backward_sdispls_.data(),
-            mpi_value_type_,
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_.data(),
-            backward_rdispls_.data(),
-            mpi_value_type_
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
-            unpack_backward_chunk_async_( p, out );
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( send_buffer_.raw_ptr() ),
+                backward_sendcounts_.data(),
+                backward_sdispls_.data(),
+                mpi_value_type_,
+                static_cast<void *>( recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(),
+                backward_rdispls_.data(),
+                mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            {
+                unpack_backward_chunk_async_( p, out );
+            }
         }
         synchronize_streams_();
 #endif
@@ -1694,36 +1914,45 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         throw std::logic_error( "mpi_transpose_3d_same_z currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
+        auto scope = profile_scope_( "backward_alltoallw" );
         pack_backward_( in );
 
         std::vector<int> backward_sdispls_w( line_comm_info_.num_procs );
         std::vector<int> backward_rdispls_w( line_comm_info_.num_procs );
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
-            backward_sdispls_w[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_offsets_[p] ),
-                "same_z backward sdispls_w"
-            );
-            backward_rdispls_w[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_pack_offset_elems_( p ) ),
-                "same_z backward rdispls_w"
-            );
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            {
+                backward_sdispls_w[p] = detail::mpi_int_cast(
+                    bytes_from_elems_( backward_send_offsets_[p] ),
+                    "same_z backward sdispls_w"
+                );
+                backward_rdispls_w[p] = detail::mpi_int_cast(
+                    bytes_from_elems_( backward_recv_pack_offset_elems_( p ) ),
+                    "same_z backward rdispls_w"
+                );
+            }
         }
 
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_.data(),
-            backward_sdispls_w.data(),
-            backward_sendtypes_w_.data(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_.data(),
-            backward_rdispls_w.data(),
-            backward_recvtypes_w_.data()
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
-            unpack_backward_chunk_async_( p, out );
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( send_buffer_.raw_ptr() ),
+                backward_sendcounts_.data(),
+                backward_sdispls_w.data(),
+                backward_sendtypes_w_.data(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(),
+                backward_rdispls_w.data(),
+                backward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            {
+                unpack_backward_chunk_async_( p, out );
+            }
         }
         synchronize_streams_();
 #endif
@@ -1732,6 +1961,7 @@ private:
 private:
     MPIComm mpi_;
     Log     log_;
+    profiler_t *profiler_ = nullptr;
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
