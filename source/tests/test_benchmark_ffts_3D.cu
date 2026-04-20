@@ -24,22 +24,22 @@
 namespace
 {
 
-using T            = double;
-using base_fft_t   = fftm::wrap::cufft_wrap_many<T>;
+using T             = double;
+using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
 using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t    = scfd::backend::cuda;
-using memory_t     = backend_t::memory_type;
-using reduce_t     = backend_t::reduce_type;
-using for_each_t   = backend_t::template for_each_nd_type<3, int>;
-using idx_t        = scfd::static_vec::vec<int, 3>;
-using rect_t       = scfd::static_vec::rect<int, 3>;
-using options_t    = fftm::test::detail::ffts_3d_benchmark_options<T>;
+using backend_t     = scfd::backend::cuda;
+using memory_t      = backend_t::memory_type;
+using reduce_t      = backend_t::reduce_type;
+using for_each_t    = backend_t::template for_each_nd_type<3, int>;
+using idx_t         = scfd::static_vec::vec<int, 3>;
+using rect_t        = scfd::static_vec::rect<int, 3>;
+using options_t     = fftm::test::detail::ffts_3d_benchmark_options<T>;
 
 int run_benchmark( scfd::utils::log_std &log, const options_t &options )
 {
-    using ffts_t       = fftm::ffts<base_fft_t, backend_t>;
-    using real_array_t = typename ffts_t::template real_array_t<3>;
-    using hat_array_t  = typename ffts_t::template complex_array_t<3>;
+    using ffts_t        = fftm::ffts<base_fft_t, backend_t>;
+    using real_array_t  = typename ffts_t::template real_array_t<3>;
+    using hat_array_t   = typename ffts_t::template complex_array_t<3>;
     using error_array_t = scfd::arrays::array_nd<T, 1, memory_t>;
 
     ffts_t fft;
@@ -55,7 +55,7 @@ int run_benchmark( scfd::utils::log_std &log, const options_t &options )
     reduce_t   reduce;
     for_each.block_size = 128;
 
-    const T normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz );
+    const T        normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz );
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_norm = T( 0 );
@@ -87,8 +87,7 @@ int run_benchmark( scfd::utils::log_std &log, const options_t &options )
 
         for_each(
             fftm::test::detail::overwrite_with_random_diff_square_3d_functor<T, idx_t, real_array_t>{
-                work, seed, 0, 0, 0
-            },
+                work, seed, 0, 0, 0 },
             fftm::test::detail::make_range_3d<idx_t, rect_t>( work )
         );
         for_each.wait();
@@ -98,46 +97,28 @@ int run_benchmark( scfd::utils::log_std &log, const options_t &options )
             max_norm = diff_l2;
         if ( diff_l2 > options.epsilon )
         {
-            log.warning_f(
-                "iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e",
-                iter,
-                diff_l2,
-                options.epsilon
-            );
+            log.warning_f( "iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e", iter, diff_l2, options.epsilon );
         }
     }
 
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "benchmark=ffts-3d, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
-        options.nx,
-        options.ny,
-        options.nz,
-        options.times,
-        stats.mean,
-        stats.stddev
+        "benchmark=ffts-3d, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e", options.nx,
+        options.ny, options.nz, options.times, stats.mean, stats.stddev
     );
 
     std::ostringstream row;
-    row
-        << fftm::test::detail::csv_quote( "ffts-3d" ) << ','
-        << 1 << ','
-        << fftm::test::detail::csv_quote( "cufft-3d" ) << ','
-        << fftm::test::detail::csv_quote( "none" ) << ','
-        << 1 << ',' << 1 << ',' << 1 << ','
-        << options.nx << ',' << options.ny << ',' << options.nz << ',' << 0 << ','
-        << options.times << ','
-        << options.epsilon << ','
-        << stats.mean << ','
-        << stats.stddev << ','
-        << max_norm << ','
+    row << fftm::test::detail::csv_quote( "ffts-3d" ) << ',' << 1 << ',' << fftm::test::detail::csv_quote( "cufft-3d" )
+        << ',' << fftm::test::detail::csv_quote( "none" ) << ',' << 1 << ',' << 1 << ',' << 1 << ',' << options.nx
+        << ',' << options.ny << ',' << options.nz << ',' << 0 << ',' << options.times << ',' << options.epsilon << ','
+        << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
         << fftm::test::detail::csv_quote( options.directory );
 
     fftm::test::detail::append_csv_row(
-        options.directory,
-        "benchmark_ffts_3d.csv",
-        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
+        options.directory, "benchmark_ffts_3d.csv",
+        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,"
+        "directory",
         row.str()
     );
 

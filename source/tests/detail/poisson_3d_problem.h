@@ -19,22 +19,14 @@ struct poisson_3d_problem
         return T( 2 ) * scfd::utils::scalar_traits<T>::pi();
     }
 
-    __DEVICE_TAG__ static void evaluate(
-        T  x,
-        T  y,
-        T  z,
-        T &rhs,
-        T &exact_solution,
-        T &exact_dx,
-        T &exact_dy,
-        T &exact_dz
-    )
+    __DEVICE_TAG__ static void
+    evaluate( T x, T y, T z, T &rhs, T &exact_solution, T &exact_dx, T &exact_dy, T &exact_dz )
     {
         const T pi = scfd::utils::scalar_traits<T>::pi();
 
-        const T dx = x - pi;
-        const T dy = y - pi;
-        const T dz = z - pi;
+        const T dx       = x - pi;
+        const T dy       = y - pi;
+        const T dz       = z - pi;
         const T exponent = -( dx * dx + dy * dy + dz * dz );
 
         const T gaussian = scfd::utils::scalar_traits<T>::exp( exponent );
@@ -53,8 +45,7 @@ struct poisson_3d_problem
 
         rhs = T( 100 ) * gaussian *
               ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy + T( 4 ) * dz * dz - T( 9 ) ) * sin_x * sin_y * sin_z -
-                T( 4 ) * dx * cos_x * sin_y * sin_z -
-                T( 4 ) * dy * sin_x * cos_y * sin_z -
+                T( 4 ) * dx * cos_x * sin_y * sin_z - T( 4 ) * dy * sin_x * cos_y * sin_z -
                 T( 4 ) * dz * sin_x * sin_y * cos_z );
     }
 };
@@ -76,21 +67,14 @@ struct fill_poisson_3d_rhs_functor
         const T y = y0 + hy * static_cast<T>( idx[1] );
         const T z = z0 + hz * static_cast<T>( idx[2] );
 
-        T rhs_value = T( 0 );
-        T exact_value = T( 0 );
+        T rhs_value      = T( 0 );
+        T exact_value    = T( 0 );
         T exact_dx_value = T( 0 );
         T exact_dy_value = T( 0 );
         T exact_dz_value = T( 0 );
 
         poisson_3d_problem<T>::evaluate(
-            x,
-            y,
-            z,
-            rhs_value,
-            exact_value,
-            exact_dx_value,
-            exact_dy_value,
-            exact_dz_value
+            x, y, z, rhs_value, exact_value, exact_dx_value, exact_dy_value, exact_dz_value
         );
 
         rhs( idx ) = rhs_value;
@@ -118,21 +102,14 @@ struct fill_poisson_3d_problem_functor
         const T y = y0 + hy * static_cast<T>( idx[1] );
         const T z = z0 + hz * static_cast<T>( idx[2] );
 
-        T rhs_value = T( 0 );
-        T exact_value = T( 0 );
+        T rhs_value      = T( 0 );
+        T exact_value    = T( 0 );
         T exact_dx_value = T( 0 );
         T exact_dy_value = T( 0 );
         T exact_dz_value = T( 0 );
 
         poisson_3d_problem<T>::evaluate(
-            x,
-            y,
-            z,
-            rhs_value,
-            exact_value,
-            exact_dx_value,
-            exact_dy_value,
-            exact_dz_value
+            x, y, z, rhs_value, exact_value, exact_dx_value, exact_dy_value, exact_dz_value
         );
 
         rhs( idx )            = rhs_value;

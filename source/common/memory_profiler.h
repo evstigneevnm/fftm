@@ -22,19 +22,17 @@ public:
         bytes_type peak_bytes    = 0;
     };
 
-    memory_profiler()
-        : name_( "Memory profile" )
+    memory_profiler() : name_( "Memory profile" )
     {
     }
 
-    explicit memory_profiler( const std::string &name )
-        : name_( name )
+    explicit memory_profiler( const std::string &name ) : name_( name )
     {
     }
 
     void set_bytes( const std::string &key, bytes_type bytes )
     {
-        entry &item      = entries_[key];
+        entry &item        = entries_[key];
         item.current_bytes = bytes;
         if ( item.peak_bytes < bytes )
         {
@@ -78,8 +76,7 @@ public:
         out << name_ << ":" << std::endl;
         for ( const auto &item : entries_ )
         {
-            out << "  " << item.first
-                << ": current=" << item.second.current_bytes << " B"
+            out << "  " << item.first << ": current=" << item.second.current_bytes << " B"
                 << " (" << std::fixed << std::setprecision( 3 ) << bytes_to_mib_( item.second.current_bytes ) << " MiB)"
                 << ", peak=" << item.second.peak_bytes << " B"
                 << " (" << std::fixed << std::setprecision( 3 ) << bytes_to_mib_( item.second.peak_bytes ) << " MiB)"
@@ -121,10 +118,7 @@ private:
         std::ios_base::fmtflags f;
         std::streamsize         p;
 
-        explicit ios_saver( std::ios_base &stream )
-            : s( stream )
-            , f( stream.flags() )
-            , p( stream.precision() )
+        explicit ios_saver( std::ios_base &stream ) : s( stream ), f( stream.flags() ), p( stream.precision() )
         {
         }
 
@@ -140,7 +134,7 @@ private:
         return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
     }
 
-    std::string                 name_;
+    std::string                  name_;
     std::map<std::string, entry> entries_;
 };
 

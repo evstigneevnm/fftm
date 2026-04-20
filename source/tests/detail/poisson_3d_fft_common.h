@@ -17,12 +17,7 @@ Rect make_range_3d( const Array &array )
 {
     const auto sz = array.size_nd();
     return Rect(
-        Idx( 0, 0, 0 ),
-        Idx(
-            static_cast<int>( sz[0] ),
-            static_cast<int>( sz[1] ),
-            static_cast<int>( sz[2] )
-        )
+        Idx( 0, 0, 0 ), Idx( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) )
     );
 }
 
@@ -51,7 +46,7 @@ struct solve_poisson_3d_functor
             return;
         }
 
-        const T scale = -T( 1 ) / k2;
+        const T scale         = -T( 1 ) / k2;
         solution_hat( idx ).x = scale * rhs_hat( idx ).x;
         solution_hat( idx ).y = scale * rhs_hat( idx ).y;
     }
@@ -110,13 +105,13 @@ struct poisson_3d_derivative_spectra_functor
         const T imag_part = solution_hat( idx ).y;
 
         dx_hat( idx ).x = -static_cast<T>( kx ) * imag_part;
-        dx_hat( idx ).y =  static_cast<T>( kx ) * real_part;
+        dx_hat( idx ).y = static_cast<T>( kx ) * real_part;
 
         dy_hat( idx ).x = -static_cast<T>( ky ) * imag_part;
-        dy_hat( idx ).y =  static_cast<T>( ky ) * real_part;
+        dy_hat( idx ).y = static_cast<T>( ky ) * real_part;
 
         dz_hat( idx ).x = -static_cast<T>( kz ) * imag_part;
-        dz_hat( idx ).y =  static_cast<T>( kz ) * real_part;
+        dz_hat( idx ).y = static_cast<T>( kz ) * real_part;
     }
 };
 
@@ -140,7 +135,7 @@ struct square_real_3d_functor
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
         const T value = field( idx );
-        field( idx ) = value * value;
+        field( idx )  = value * value;
     }
 };
 

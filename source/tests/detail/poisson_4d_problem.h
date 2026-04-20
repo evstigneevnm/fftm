@@ -19,25 +19,15 @@ struct poisson_4d_problem
         return T( 2 ) * scfd::utils::scalar_traits<T>::pi();
     }
 
-    __DEVICE_TAG__ static void evaluate(
-        T  x,
-        T  y,
-        T  z,
-        T  w,
-        T &rhs,
-        T &exact_solution,
-        T &exact_dx,
-        T &exact_dy,
-        T &exact_dz,
-        T &exact_dw
-    )
+    __DEVICE_TAG__ static void
+    evaluate( T x, T y, T z, T w, T &rhs, T &exact_solution, T &exact_dx, T &exact_dy, T &exact_dz, T &exact_dw )
     {
         const T pi = scfd::utils::scalar_traits<T>::pi();
 
-        const T dx = x - pi;
-        const T dy = y - pi;
-        const T dz = z - pi;
-        const T dw = w - pi;
+        const T dx       = x - pi;
+        const T dy       = y - pi;
+        const T dz       = z - pi;
+        const T dw       = w - pi;
         const T exponent = -( dx * dx + dy * dy + dz * dz + dw * dw );
 
         const T gaussian = scfd::utils::scalar_traits<T>::exp( exponent );
@@ -58,12 +48,10 @@ struct poisson_4d_problem
         exact_dw       = T( 100 ) * gaussian * sin_x * sin_y * sin_z * ( cos_w - T( 2 ) * dw * sin_w );
 
         rhs = T( 100 ) * gaussian *
-              ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy + T( 4 ) * dz * dz + T( 4 ) * dw * dw - T( 12 ) ) *
-                    sin_x * sin_y * sin_z * sin_w -
-                T( 4 ) * dx * cos_x * sin_y * sin_z * sin_w -
-                T( 4 ) * dy * sin_x * cos_y * sin_z * sin_w -
-                T( 4 ) * dz * sin_x * sin_y * cos_z * sin_w -
-                T( 4 ) * dw * sin_x * sin_y * sin_z * cos_w );
+              ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy + T( 4 ) * dz * dz + T( 4 ) * dw * dw - T( 12 ) ) * sin_x *
+                    sin_y * sin_z * sin_w -
+                T( 4 ) * dx * cos_x * sin_y * sin_z * sin_w - T( 4 ) * dy * sin_x * cos_y * sin_z * sin_w -
+                T( 4 ) * dz * sin_x * sin_y * cos_z * sin_w - T( 4 ) * dw * sin_x * sin_y * sin_z * cos_w );
     }
 };
 
@@ -95,16 +83,7 @@ struct fill_poisson_4d_rhs_functor
         T exact_dw_val = T( 0 );
 
         poisson_4d_problem<T>::evaluate(
-            x,
-            y,
-            z,
-            w,
-            rhs_value,
-            exact_value,
-            exact_dx_val,
-            exact_dy_val,
-            exact_dz_val,
-            exact_dw_val
+            x, y, z, w, rhs_value, exact_value, exact_dx_val, exact_dy_val, exact_dz_val, exact_dw_val
         );
 
         rhs( idx ) = rhs_value;
@@ -144,16 +123,7 @@ struct fill_poisson_4d_problem_functor
         T exact_dw_val = T( 0 );
 
         poisson_4d_problem<T>::evaluate(
-            x,
-            y,
-            z,
-            w,
-            rhs_value,
-            exact_value,
-            exact_dx_val,
-            exact_dy_val,
-            exact_dz_val,
-            exact_dw_val
+            x, y, z, w, rhs_value, exact_value, exact_dx_val, exact_dy_val, exact_dz_val, exact_dw_val
         );
 
         rhs( idx )            = rhs_value;

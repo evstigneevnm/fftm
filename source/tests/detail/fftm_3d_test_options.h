@@ -24,15 +24,15 @@ enum class fftm_3d_strategy_kind
 
 struct fftm_3d_test_options
 {
-    fftm_3d_strategy_kind      strategy = fftm_3d_strategy_kind::pencil_pencil;
-    bool                       run_all  = false;
-    ::fftm::mpi_transpose_3d_mode mode  = ::fftm::mpi_transpose_3d_mode::alltoallv;
-    std::size_t                nx       = 16;
-    std::size_t                ny       = 16;
-    std::size_t                nz       = 16;
-    std::size_t                p1       = 0;
-    std::size_t                p2       = 0;
-    int                        times    = 1;
+    fftm_3d_strategy_kind         strategy = fftm_3d_strategy_kind::pencil_pencil;
+    bool                          run_all  = false;
+    ::fftm::mpi_transpose_3d_mode mode     = ::fftm::mpi_transpose_3d_mode::alltoallv;
+    std::size_t                   nx       = 16;
+    std::size_t                   ny       = 16;
+    std::size_t                   nz       = 16;
+    std::size_t                   p1       = 0;
+    std::size_t                   p2       = 0;
+    int                           times    = 1;
 };
 
 inline std::pair<std::size_t, std::size_t> choose_pencil_grid_3d( std::size_t num_procs )
@@ -46,11 +46,8 @@ inline std::pair<std::size_t, std::size_t> choose_pencil_grid_3d( std::size_t nu
     return std::make_pair( p1, num_procs / p1 );
 }
 
-inline std::pair<std::size_t, std::size_t> choose_grid_3d(
-    const fftm_3d_test_options &options,
-    fftm_3d_strategy_kind       strategy,
-    int                         num_procs
-)
+inline std::pair<std::size_t, std::size_t>
+choose_grid_3d( const fftm_3d_test_options &options, fftm_3d_strategy_kind strategy, int num_procs )
 {
     if ( options.p1 != 0 && options.p2 != 0 )
         return std::make_pair( options.p1, options.p2 );
@@ -63,11 +60,7 @@ inline std::pair<std::size_t, std::size_t> choose_grid_3d(
     return pencil_grid;
 }
 
-inline std::string usage_fftm_3d_test(
-    const std::string &binary_name,
-    bool               allow_strategy_all,
-    bool               allow_times
-)
+inline std::string usage_fftm_3d_test( const std::string &binary_name, bool allow_strategy_all, bool allow_times )
 {
     std::string usage = "USAGE: " + binary_name + " [--strategy slab-pencil|pencil-slab|pencil-pencil";
     if ( allow_strategy_all )
@@ -80,13 +73,8 @@ inline std::string usage_fftm_3d_test(
 }
 
 inline fftm_3d_test_options parse_fftm_3d_test_options(
-    int                               argc,
-    char                             *argv[],
-    int                               num_procs,
-    const std::string                &binary_name,
-    bool                              allow_strategy_all,
-    bool                              allow_times,
-    const fftm_3d_test_options       &defaults = fftm_3d_test_options()
+    int argc, char *argv[], int num_procs, const std::string &binary_name, bool allow_strategy_all, bool allow_times,
+    const fftm_3d_test_options &defaults = fftm_3d_test_options()
 )
 {
     fftm_3d_test_options options = defaults;

@@ -23,17 +23,17 @@
 namespace
 {
 
-using T         = double;
-using complex_t = thrust::complex<T>;
-using backend_t = scfd::backend::cuda;
-using memory_t  = backend_t::memory_type;
-using reduce_t  = backend_t::reduce_type;
+using T          = double;
+using complex_t  = thrust::complex<T>;
+using backend_t  = scfd::backend::cuda;
+using memory_t   = backend_t::memory_type;
+using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::for_each_nd_type<3, int>;
 using idx_t      = scfd::static_vec::vec<int, 3>;
 using rect_t     = scfd::static_vec::rect<int, 3>;
 
-using xyz_array_t = scfd::arrays::tensor_array_nd<complex_t, 3, memory_t, scfd::arrays::custom_arranger_102_t>;
-using xzy_array_t = scfd::arrays::tensor_array_nd<complex_t, 3, memory_t, scfd::arrays::custom_arranger_201_t>;
+using xyz_array_t  = scfd::arrays::tensor_array_nd<complex_t, 3, memory_t, scfd::arrays::custom_arranger_102_t>;
+using xzy_array_t  = scfd::arrays::tensor_array_nd<complex_t, 3, memory_t, scfd::arrays::custom_arranger_201_t>;
 using flag_array_t = scfd::arrays::array_nd<int, 3, memory_t, scfd::arrays::custom_arranger_201_t>;
 
 __DEVICE_TAG__ complex_t make_value( int gx, int gy, int gz, int nx, int ny )
@@ -44,13 +44,13 @@ __DEVICE_TAG__ complex_t make_value( int gx, int gy, int gz, int nx, int ny )
 
 struct test_options
 {
-    fftm::mpi_transpose_3d_mode mode = fftm::mpi_transpose_3d_mode::alltoallv;
-    bool run_all = false;
-    std::size_t nx = 24;
-    std::size_t ny = 20;
-    std::size_t nz = 18;
-    std::size_t p1 = 0;
-    std::size_t p2 = 0;
+    fftm::mpi_transpose_3d_mode mode    = fftm::mpi_transpose_3d_mode::alltoallv;
+    bool                        run_all = false;
+    std::size_t                 nx      = 24;
+    std::size_t                 ny      = 20;
+    std::size_t                 nz      = 18;
+    std::size_t                 p1      = 0;
+    std::size_t                 p2      = 0;
 };
 
 std::pair<std::size_t, std::size_t> choose_default_grid( std::size_t num_procs )
@@ -123,8 +123,8 @@ test_options parse_options( int argc, char *argv[], int num_procs )
     if ( options.p1 == 0 || options.p2 == 0 )
     {
         const auto grid = choose_default_grid( static_cast<std::size_t>( num_procs ) );
-        options.p1 = grid.first;
-        options.p2 = grid.second;
+        options.p1      = grid.first;
+        options.p2      = grid.second;
     }
 
     return options;
@@ -135,8 +135,7 @@ rect_t make_range_for_array( const Array &array )
 {
     const auto size = array.size_nd();
     return rect_t(
-        idx_t( 0, 0, 0 ),
-        idx_t( static_cast<int>( size[0] ), static_cast<int>( size[1] ), static_cast<int>( size[2] ) )
+        idx_t( 0, 0, 0 ), idx_t( static_cast<int>( size[0] ), static_cast<int>( size[1] ), static_cast<int>( size[2] ) )
     );
 }
 
@@ -144,11 +143,7 @@ template <class Idx, class Array>
 struct fill_input_functor
 {
     fill_input_functor( Array &_array, int _x0, int _y0, int _nx, int _ny )
-        : array( _array )
-        , x0( _x0 )
-        , y0( _y0 )
-        , nx( _nx )
-        , ny( _ny )
+        : array( _array ), x0( _x0 ), y0( _y0 ), nx( _nx ), ny( _ny )
     {
     }
 
@@ -168,12 +163,7 @@ template <class Idx, class ArrayOut, class FlagArray>
 struct verify_output_functor
 {
     verify_output_functor( const ArrayOut &_array, FlagArray &_flags, int _x0, int _z0, int _nx, int _ny )
-        : array( _array )
-        , flags( _flags )
-        , x0( _x0 )
-        , z0( _z0 )
-        , nx( _nx )
-        , ny( _ny )
+        : array( _array ), flags( _flags ), x0( _x0 ), z0( _z0 ), nx( _nx ), ny( _ny )
     {
     }
 
@@ -193,18 +183,12 @@ struct verify_output_functor
 
 template <class ArrayOut>
 void log_first_mismatch(
-    scfd::utils::log_mpi &log,
-    const ArrayOut       &array,
-    const flag_array_t   &flags,
-    int                   x0,
-    int                   z0,
-    int                   nx,
-    int                   ny
+    scfd::utils::log_mpi &log, const ArrayOut &array, const flag_array_t &flags, int x0, int z0, int nx, int ny
 )
 {
-    typename ArrayOut::view_type out_view( array );
+    typename ArrayOut::view_type     out_view( array );
     typename flag_array_t::view_type flag_view( flags );
-    const auto size = array.size_nd();
+    const auto                       size = array.size_nd();
 
     for ( int i = 0; i < size[0]; ++i )
     {
@@ -218,14 +202,8 @@ void log_first_mismatch(
                 const complex_t expected = make_value( x0 + i, k, z0 + j, nx, ny );
                 const complex_t actual   = out_view( i, j, k );
                 log.error_f(
-                    "first mismatch at local=(%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)",
-                    i,
-                    j,
-                    k,
-                    actual.real(),
-                    actual.imag(),
-                    expected.real(),
-                    expected.imag()
+                    "first mismatch at local=(%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)", i, j, k,
+                    actual.real(), actual.imag(), expected.real(), expected.imag()
                 );
                 out_view.release( false );
                 flag_view.release( false );
@@ -239,13 +217,12 @@ void log_first_mismatch(
 }
 
 int run_mode(
-    scfd::utils::log_mpi      &log,
-    const test_options        &options,
-    fftm::mpi_transpose_3d_mode mode,
+    scfd::utils::log_mpi &log, const test_options &options, fftm::mpi_transpose_3d_mode mode,
     const scfd::communication::mpi_comm_info &comm_info
 )
 {
-    using transpose_t = fftm::mpi_transpose_3d<complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+    using transpose_t =
+        fftm::mpi_transpose_3d<complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
 
     fftm::processor_grid grid;
     grid.init( options.p1, options.p2 );
@@ -275,11 +252,8 @@ int run_mode(
 
     for_each(
         fill_input_functor<idx_t, xyz_array_t>(
-            input,
-            static_cast<int>( input_dim.start_x[myid_i] ),
-            static_cast<int>( input_dim.start_y[myid_j] ),
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny )
+            input, static_cast<int>( input_dim.start_x[myid_i] ), static_cast<int>( input_dim.start_y[myid_j] ),
+            static_cast<int>( options.nx ), static_cast<int>( options.ny )
         ),
         make_range_for_array( input )
     );
@@ -293,11 +267,8 @@ int run_mode(
 
     for_each(
         verify_output_functor<idx_t, xzy_array_t, flag_array_t>(
-            output,
-            flags,
-            static_cast<int>( input_dim.start_x[myid_i] ),
-            static_cast<int>( output_dim.start_z[myid_j] ),
-            static_cast<int>( options.nx ),
+            output, flags, static_cast<int>( input_dim.start_x[myid_i] ),
+            static_cast<int>( output_dim.start_z[myid_j] ), static_cast<int>( options.nx ),
             static_cast<int>( options.ny )
         ),
         make_range_for_array( output )
@@ -310,12 +281,8 @@ int run_mode(
     if ( global_errors != 0 && local_errors != 0 )
     {
         log_first_mismatch(
-            log,
-            output,
-            flags,
-            static_cast<int>( input_dim.start_x[myid_i] ),
-            static_cast<int>( output_dim.start_z[myid_j] ),
-            static_cast<int>( options.nx ),
+            log, output, flags, static_cast<int>( input_dim.start_x[myid_i] ),
+            static_cast<int>( output_dim.start_z[myid_j] ), static_cast<int>( options.nx ),
             static_cast<int>( options.ny )
         );
     }
@@ -323,14 +290,8 @@ int run_mode(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "mode=%s, grid=(%zu,%zu), sizes=(%zu,%zu,%zu), global_errors=%d",
-            fftm::mpi_transpose_3d_mode_name( mode ),
-            options.p1,
-            options.p2,
-            options.nx,
-            options.ny,
-            options.nz,
-            global_errors
+            "mode=%s, grid=(%zu,%zu), sizes=(%zu,%zu,%zu), global_errors=%d", fftm::mpi_transpose_3d_mode_name( mode ),
+            options.p1, options.p2, options.nx, options.ny, options.nz, global_errors
         );
     }
 

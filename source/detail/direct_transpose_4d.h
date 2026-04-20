@@ -17,9 +17,7 @@ namespace detail
 template <class Idx, class ArrayIn, class ArrayOut, int DstAxis0, int DstAxis1, int DstAxis2, int DstAxis3>
 struct direct_transpose_4d_functor
 {
-    direct_transpose_4d_functor( const ArrayIn &_in, ArrayOut &_out )
-        : in( _in )
-        , out( _out )
+    direct_transpose_4d_functor( const ArrayIn &_in, ArrayOut &_out ) : in( _in ), out( _out )
     {
     }
 
@@ -37,10 +35,7 @@ class direct_transpose_4d
 {
 public:
     direct_transpose_4d( std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw_half )
-        : nx_( nx )
-        , ny_( ny )
-        , nz_( nz )
-        , nw_half_( nw_half )
+        : nx_( nx ), ny_( ny ), nz_( nz ), nw_half_( nw_half )
     {
     }
 
@@ -48,13 +43,7 @@ public:
     void xyzw_to_xywz( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<0, 1, 3, 2>(
-            for_each,
-            src,
-            dst,
-            dims_xyzw(),
-            dims_xywz(),
-            "xyzw_to_xywz source",
-            "xyzw_to_xywz destination"
+            for_each, src, dst, dims_xyzw(), dims_xywz(), "xyzw_to_xywz source", "xyzw_to_xywz destination"
         );
     }
 
@@ -62,13 +51,7 @@ public:
     void xywz_to_xyzw( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<0, 1, 3, 2>(
-            for_each,
-            src,
-            dst,
-            dims_xywz(),
-            dims_xyzw(),
-            "xywz_to_xyzw source",
-            "xywz_to_xyzw destination"
+            for_each, src, dst, dims_xywz(), dims_xyzw(), "xywz_to_xyzw source", "xywz_to_xyzw destination"
         );
     }
 
@@ -76,13 +59,7 @@ public:
     void xywz_to_xzwy( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<0, 3, 2, 1>(
-            for_each,
-            src,
-            dst,
-            dims_xywz(),
-            dims_xzwy(),
-            "xywz_to_xzwy source",
-            "xywz_to_xzwy destination"
+            for_each, src, dst, dims_xywz(), dims_xzwy(), "xywz_to_xzwy source", "xywz_to_xzwy destination"
         );
     }
 
@@ -90,13 +67,7 @@ public:
     void xzwy_to_xywz( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<0, 3, 2, 1>(
-            for_each,
-            src,
-            dst,
-            dims_xzwy(),
-            dims_xywz(),
-            "xzwy_to_xywz source",
-            "xzwy_to_xywz destination"
+            for_each, src, dst, dims_xzwy(), dims_xywz(), "xzwy_to_xywz source", "xzwy_to_xywz destination"
         );
     }
 
@@ -104,13 +75,7 @@ public:
     void xyzw_to_zwxy( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<2, 3, 0, 1>(
-            for_each,
-            src,
-            dst,
-            dims_xyzw(),
-            dims_zwxy(),
-            "xyzw_to_zwxy source",
-            "xyzw_to_zwxy destination"
+            for_each, src, dst, dims_xyzw(), dims_zwxy(), "xyzw_to_zwxy source", "xyzw_to_zwxy destination"
         );
     }
 
@@ -118,13 +83,7 @@ public:
     void zwxy_to_xyzw( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<2, 3, 0, 1>(
-            for_each,
-            src,
-            dst,
-            dims_zwxy(),
-            dims_xyzw(),
-            "zwxy_to_xyzw source",
-            "zwxy_to_xyzw destination"
+            for_each, src, dst, dims_zwxy(), dims_xyzw(), "zwxy_to_xyzw source", "zwxy_to_xyzw destination"
         );
     }
 
@@ -132,13 +91,7 @@ public:
     void zwxy_to_yzwx( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<3, 0, 1, 2>(
-            for_each,
-            src,
-            dst,
-            dims_zwxy(),
-            dims_yzwx(),
-            "zwxy_to_yzwx source",
-            "zwxy_to_yzwx destination"
+            for_each, src, dst, dims_zwxy(), dims_yzwx(), "zwxy_to_yzwx source", "zwxy_to_yzwx destination"
         );
     }
 
@@ -146,13 +99,7 @@ public:
     void yzwx_to_zwxy( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<1, 2, 3, 0>(
-            for_each,
-            src,
-            dst,
-            dims_yzwx(),
-            dims_zwxy(),
-            "yzwx_to_zwxy source",
-            "yzwx_to_zwxy destination"
+            for_each, src, dst, dims_yzwx(), dims_zwxy(), "yzwx_to_zwxy source", "yzwx_to_zwxy destination"
         );
     }
 
@@ -160,13 +107,7 @@ public:
     void xzwy_to_yzwx( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<3, 1, 2, 0>(
-            for_each,
-            src,
-            dst,
-            dims_xzwy(),
-            dims_yzwx(),
-            "xzwy_to_yzwx source",
-            "xzwy_to_yzwx destination"
+            for_each, src, dst, dims_xzwy(), dims_yzwx(), "xzwy_to_yzwx source", "xzwy_to_yzwx destination"
         );
     }
 
@@ -174,13 +115,7 @@ public:
     void yzwx_to_xzwy( const ForEach &for_each, const SrcArray &src, DstArray &dst ) const
     {
         transpose<3, 1, 2, 0>(
-            for_each,
-            src,
-            dst,
-            dims_yzwx(),
-            dims_xzwy(),
-            "yzwx_to_xzwy source",
-            "yzwx_to_xzwy destination"
+            for_each, src, dst, dims_yzwx(), dims_xzwy(), "yzwx_to_xzwy source", "yzwx_to_xzwy destination"
         );
     }
 
@@ -237,8 +172,8 @@ private:
                 name + " shape mismatch: expected (" + std::to_string( expected.d0 ) + ", " +
                 std::to_string( expected.d1 ) + ", " + std::to_string( expected.d2 ) + ", " +
                 std::to_string( expected.d3 ) + "), got (" + std::to_string( actual[0] ) + ", " +
-                std::to_string( actual[1] ) + ", " + std::to_string( actual[2] ) + ", " +
-                std::to_string( actual[3] ) + ")"
+                std::to_string( actual[1] ) + ", " + std::to_string( actual[2] ) + ", " + std::to_string( actual[3] ) +
+                ")"
             );
         }
     }
@@ -246,25 +181,17 @@ private:
     static range_t make_range( const dims_4d_t &dims )
     {
         return range_t(
-            idx_t( 0, 0, 0, 0 ),
-            idx_t(
-                static_cast<int>( dims.d0 ),
-                static_cast<int>( dims.d1 ),
-                static_cast<int>( dims.d2 ),
-                static_cast<int>( dims.d3 )
-            )
+            idx_t( 0, 0, 0, 0 ), idx_t(
+                                     static_cast<int>( dims.d0 ), static_cast<int>( dims.d1 ),
+                                     static_cast<int>( dims.d2 ), static_cast<int>( dims.d3 )
+                                 )
         );
     }
 
     template <int DstAxis0, int DstAxis1, int DstAxis2, int DstAxis3, class ForEach, class SrcArray, class DstArray>
     static void transpose(
-        const ForEach     &for_each,
-        const SrcArray    &src,
-        DstArray          &dst,
-        const dims_4d_t   &src_dims,
-        const dims_4d_t   &dst_dims,
-        const std::string &src_name,
-        const std::string &dst_name
+        const ForEach &for_each, const SrcArray &src, DstArray &dst, const dims_4d_t &src_dims,
+        const dims_4d_t &dst_dims, const std::string &src_name, const std::string &dst_name
     )
     {
         verify_shape( src, src_dims, src_name );

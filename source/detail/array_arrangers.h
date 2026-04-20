@@ -53,7 +53,7 @@ using custom_arranger_1032_t = scfd::arrays::custom_index_fast_arranger<1, 0, 3,
 template <scfd::arrays::ordinal_type... Dims>
 using custom_arranger_2103_t = scfd::arrays::custom_index_fast_arranger<2, 1, 0, 3>::type<Dims...>;
 
-}
-}
+} // namespace arrays
+} // namespace scfd
 
 #endif // __FFTM_DETAIL_ARRAY_ARRANGERS_H__

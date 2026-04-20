@@ -22,19 +22,15 @@ template <class FFTS>
 class poisson_2d_fft_case
 {
 public:
-    using T         = typename FFTS::real;
-    using results_t = std::pair<std::pair<T, T>, T>;
+    using T             = typename FFTS::real;
+    using results_t     = std::pair<std::pair<T, T>, T>;
     using runtime_api_t = typename FFTS::runtime_api;
 
     explicit poisson_2d_fft_case( std::size_t nx, std::size_t ny )
-        : nx_( nx )
-        , ny_( ny )
-        , ny_c_( ny / 2 + 1 )
-        , hx_( domain_length() / static_cast<T>( nx_ ) )
-        , hy_( domain_length() / static_cast<T>( ny_ ) )
-        , cell_area_( hx_ * hy_ )
-        , real_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ) ) )
-        , spectral_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_c_ ) ) )
+        : nx_( nx ), ny_( ny ), ny_c_( ny / 2 + 1 ), hx_( domain_length() / static_cast<T>( nx_ ) ),
+          hy_( domain_length() / static_cast<T>( ny_ ) ), cell_area_( hx_ * hy_ ),
+          real_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ) ) ),
+          spectral_range_( idx_t( 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_c_ ) ) )
     {
         if ( nx_ < 2 || ny_ < 2 )
         {
@@ -61,19 +57,21 @@ public:
     void write_gmsh_outputs( const std::string &prefix ) const
     {
         io::write_out_pos_file_scal_2D_quad( prefix + "_rhs.pos", rhs_, domain_length(), domain_length() );
-        io::write_out_pos_file_scal_2D_quad( prefix + "_solution.pos", numerical_solution_, domain_length(), domain_length() );
+        io::write_out_pos_file_scal_2D_quad(
+            prefix + "_solution.pos", numerical_solution_, domain_length(), domain_length()
+        );
         io::write_out_pos_file_scal_2D_quad( prefix + "_exact.pos", exact_solution_, domain_length(), domain_length() );
     }
 
 private:
     static constexpr int dim = 2;
 
-    using backend_t      = scfd::backend::cuda;
-    using for_each_t     = typename backend_t::template for_each_nd_type<dim, int>;
-    using reduce_t       = typename backend_t::reduce_type;
-    using idx_t          = scfd::static_vec::vec<int, dim>;
-    using range_t        = scfd::static_vec::rect<int, dim>;
-    using real_array_t   = typename FFTS::template real_array_t<2>;
+    using backend_t       = scfd::backend::cuda;
+    using for_each_t      = typename backend_t::template for_each_nd_type<dim, int>;
+    using reduce_t        = typename backend_t::reduce_type;
+    using idx_t           = scfd::static_vec::vec<int, dim>;
+    using range_t         = scfd::static_vec::rect<int, dim>;
+    using real_array_t    = typename FFTS::template real_array_t<2>;
     using complex_array_t = typename FFTS::template complex_array_t<2>;
 
 public:
@@ -83,8 +81,8 @@ public:
         real_array_t exact_solution;
         real_array_t exact_dx;
         real_array_t exact_dy;
-        T hx;
-        T hy;
+        T            hx;
+        T            hy;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -92,8 +90,8 @@ public:
             const T y  = hy * static_cast<T>( idx[1] );
             const T pi = scfd::utils::scalar_traits<T>::pi();
 
-            const T dx = x - pi;
-            const T dy = y - pi;
+            const T dx       = x - pi;
+            const T dy       = y - pi;
             const T exponent = -( dx * dx + dy * dy );
 
             const T gaussian = scfd::utils::scalar_traits<T>::exp( exponent );
@@ -109,8 +107,7 @@ public:
 
             rhs( idx ) = T( 100 ) * gaussian *
                          ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy - T( 6 ) ) * sin_x * sin_y -
-                           T( 4 ) * dx * cos_x * sin_y -
-                           T( 4 ) * dy * sin_x * cos_y );
+                           T( 4 ) * dx * cos_x * sin_y - T( 4 ) * dy * sin_x * cos_y );
         }
     };
 
@@ -118,7 +115,7 @@ public:
     {
         complex_array_t rhs_hat;
         complex_array_t solution_hat;
-        int nx;
+        int             nx;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -136,7 +133,7 @@ public:
                 return;
             }
 
-            const T scale = -T( 1 ) / k2;
+            const T scale         = -T( 1 ) / k2;
             solution_hat( idx ).x = scale * rhs_hat( idx ).x;
             solution_hat( idx ).y = scale * rhs_hat( idx ).y;
         }
@@ -147,7 +144,7 @@ public:
         complex_array_t solution_hat;
         complex_array_t dx_hat;
         complex_array_t dy_hat;
-        int nx;
+        int             nx;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -171,7 +168,7 @@ public:
     struct scale_real_functor
     {
         real_array_t field;
-        T scale;
+        T            scale;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -239,28 +236,19 @@ private:
 
     void fill_problem_data()
     {
-        for_each_(
-            fill_problem_functor{ rhs_, exact_solution_, exact_dx_, exact_dy_, hx_, hy_ },
-            real_range_
-        );
+        for_each_( fill_problem_functor{ rhs_, exact_solution_, exact_dx_, exact_dy_, hx_, hy_ }, real_range_ );
         for_each_.wait();
     }
 
     void solve_in_fourier_space()
     {
-        for_each_(
-            solve_fourier_functor{ rhs_hat_, solution_hat_, to_int( nx_ ) },
-            spectral_range_
-        );
+        for_each_( solve_fourier_functor{ rhs_hat_, solution_hat_, to_int( nx_ ) }, spectral_range_ );
         for_each_.wait();
     }
 
     void build_derivative_spectra()
     {
-        for_each_(
-            derivative_spectra_functor{ solution_hat_, dx_hat_, dy_hat_, to_int( nx_ ) },
-            spectral_range_
-        );
+        for_each_( derivative_spectra_functor{ solution_hat_, dx_hat_, dy_hat_, to_int( nx_ ) }, spectral_range_ );
         for_each_.wait();
     }
 
@@ -333,7 +321,7 @@ private:
     range_t spectral_range_;
 
     for_each_t for_each_;
-    reduce_t reduce_;
+    reduce_t   reduce_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
@@ -413,14 +401,14 @@ int main( int argc, char *argv[] )
                 log.warning_f(
                     "rhs_mean = %.8e for Nx=%zu, Ny=%zu; the periodic FFT solve removes the zero Fourier mode,"
                     " so the manufactured rhs should have zero mean.",
-                    rhs_mean,
-                    grid.first,
-                    grid.second
+                    rhs_mean, grid.first, grid.second
                 );
             }
 
             runs.push_back( { grid, poisson_case.run() } );
-            poisson_case.write_gmsh_outputs( "poisson_2d_" + std::to_string( grid.first ) + "x" + std::to_string( grid.second ) );
+            poisson_case.write_gmsh_outputs(
+                "poisson_2d_" + std::to_string( grid.first ) + "x" + std::to_string( grid.second )
+            );
         }
 
         for ( const auto &run : runs )
@@ -429,12 +417,8 @@ int main( int argc, char *argv[] )
             const auto &res  = run.second;
 
             log.info_f(
-                "Nx=%zu, Ny=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
-                grid.first,
-                grid.second,
-                res.first.first,
-                res.first.second,
-                res.second
+                "Nx=%zu, Ny=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e", grid.first, grid.second, res.first.first,
+                res.first.second, res.second
             );
         }
 

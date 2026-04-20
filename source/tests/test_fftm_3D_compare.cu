@@ -27,11 +27,11 @@
 namespace
 {
 
-using T         = double;
+using T          = double;
 using base_fft_t = fftm::wrap::cufft_wrap_many<T>;
-using backend_t = scfd::backend::cuda;
-using memory_t  = backend_t::memory_type;
-using reduce_t  = backend_t::reduce_type;
+using backend_t  = scfd::backend::cuda;
+using memory_t   = backend_t::memory_type;
+using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::template for_each_nd_type<3, int>;
 using idx_t      = scfd::static_vec::vec<int, 3>;
 using rect_t     = scfd::static_vec::rect<int, 3>;
@@ -46,15 +46,15 @@ enum class strategy_kind
 
 struct test_options
 {
-    strategy_kind            strategy  = strategy_kind::pencil_pencil;
-    bool                     run_all   = false;
-    fftm::mpi_transpose_3d_mode mode   = fftm::mpi_transpose_3d_mode::alltoallv;
-    std::size_t              nx        = 16;
-    std::size_t              ny        = 18;
-    std::size_t              nz        = 20;
-    std::size_t              p1        = 0;
-    std::size_t              p2        = 0;
-    T                        threshold = T( 1.0e-11 );
+    strategy_kind               strategy  = strategy_kind::pencil_pencil;
+    bool                        run_all   = false;
+    fftm::mpi_transpose_3d_mode mode      = fftm::mpi_transpose_3d_mode::alltoallv;
+    std::size_t                 nx        = 16;
+    std::size_t                 ny        = 18;
+    std::size_t                 nz        = 20;
+    std::size_t                 p1        = 0;
+    std::size_t                 p2        = 0;
+    T                           threshold = T( 1.0e-11 );
 };
 
 std::pair<std::size_t, std::size_t> choose_pencil_grid( std::size_t num_procs )
@@ -173,13 +173,14 @@ template <class Array>
 rect_t make_range( const Array &array )
 {
     const auto sz = array.size_nd();
-    return rect_t( idx_t( 0, 0, 0 ), idx_t( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) ) );
+    return rect_t(
+        idx_t( 0, 0, 0 ), idx_t( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) )
+    );
 }
 
 __DEVICE_TAG__ T sample_value( T x, T y, T z )
 {
-    return scfd::utils::scalar_traits<T>::sin( x ) +
-           T( 0.5 ) * scfd::utils::scalar_traits<T>::cos( y ) -
+    return scfd::utils::scalar_traits<T>::sin( x ) + T( 0.5 ) * scfd::utils::scalar_traits<T>::cos( y ) -
            T( 0.25 ) * scfd::utils::scalar_traits<T>::sin( T( 2 ) * z ) +
            T( 0.125 ) * scfd::utils::scalar_traits<T>::sin( x + y - z );
 }
@@ -196,9 +197,9 @@ struct fill_input_functor
 
     __DEVICE_TAG__ void operator()( const idx_t &idx ) const
     {
-        const T x = x0 + hx * static_cast<T>( idx[0] );
-        const T y = y0 + hy * static_cast<T>( idx[1] );
-        const T z = hz * static_cast<T>( idx[2] );
+        const T x    = x0 + hx * static_cast<T>( idx[0] );
+        const T y    = y0 + hy * static_cast<T>( idx[1] );
+        const T z    = hz * static_cast<T>( idx[2] );
         array( idx ) = sample_value( x, y, z );
     }
 };
@@ -253,16 +254,15 @@ struct compare_real_output_functor
 
 template <class Strategy>
 int run_compare(
-    scfd::utils::log_mpi                        &log,
-    const test_options                          &options,
-    const scfd::communication::mpi_comm_info    &comm_info
+    scfd::utils::log_mpi &log, const test_options &options, const scfd::communication::mpi_comm_info &comm_info
 )
 {
-    using fftm_t       = fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
-    using local_real_t = typename fftm_t::template real_array_t<3>;
-    using local_hat_t  = typename fftm_t::template complex_array_t<3>;
-    using ref_real_t   = typename ref_ffts_t::template real_array_t<3>;
-    using ref_hat_t    = typename ref_ffts_t::template complex_array_t<3>;
+    using fftm_t =
+        fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
+    using local_real_t     = typename fftm_t::template real_array_t<3>;
+    using local_hat_t      = typename fftm_t::template complex_array_t<3>;
+    using ref_real_t       = typename ref_ffts_t::template real_array_t<3>;
+    using ref_hat_t        = typename ref_ffts_t::template complex_array_t<3>;
     using err_hat_array_t  = scfd::arrays::array_nd<T, 3, memory_t, scfd::arrays::custom_arranger_201_t>;
     using err_real_array_t = scfd::arrays::array_nd<T, 3, memory_t, scfd::arrays::custom_arranger_102_t>;
 
@@ -277,7 +277,7 @@ int run_compare(
     int myid_i = 0, myid_j = 0, myid_k = 0;
     std::tie( myid_i, myid_j, myid_k ) = partitioning.get_my_grid();
 
-    fftm_t  distributed_fft( comm_info, log );
+    fftm_t     distributed_fft( comm_info, log );
     ref_ffts_t reference_fft;
 
     distributed_fft.template init<3>( grid, sizes );
@@ -315,13 +315,8 @@ int run_compare(
     const auto &input_part = distributed_fft.input_partition();
     for_each(
         fill_input_functor<local_real_t>{
-            local_in,
-            hx,
-            hy,
-            hz,
-            hx * static_cast<T>( input_part.start_x[myid_i] ),
-            hy * static_cast<T>( input_part.start_y[myid_j] )
-        },
+            local_in, hx, hy, hz, hx * static_cast<T>( input_part.start_x[myid_i] ),
+            hy * static_cast<T>( input_part.start_y[myid_j] ) },
         make_range( local_in )
     );
     for_each.wait();
@@ -331,25 +326,24 @@ int run_compare(
 
     err_hat_array_t forward_diff_sq;
     err_hat_array_t forward_ref_sq;
-    forward_diff_sq.init( std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes ) );
-    forward_ref_sq.init( std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes ) );
+    forward_diff_sq.init(
+        std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes )
+    );
+    forward_ref_sq.init(
+        std::get<0>( local_out_sizes ), std::get<1>( local_out_sizes ), std::get<2>( local_out_sizes )
+    );
 
     const auto &output_part = distributed_fft.output_partition();
     for_each(
         compare_output_functor<local_hat_t, ref_hat_t, err_hat_array_t>{
-            local_out,
-            ref_out,
-            forward_diff_sq,
-            forward_ref_sq,
-            static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] )
-        },
+            local_out, ref_out, forward_diff_sq, forward_ref_sq, static_cast<int>( output_part.start_y[myid_i] ),
+            static_cast<int>( output_part.start_z[myid_j] ) },
         make_range( local_out )
     );
     for_each.wait();
 
-    const T local_forward_diff_sq = reduce( forward_diff_sq.size(), forward_diff_sq.raw_ptr(), T( 0 ) );
-    const T local_forward_ref_sq  = reduce( forward_ref_sq.size(), forward_ref_sq.raw_ptr(), T( 0 ) );
+    const T local_forward_diff_sq  = reduce( forward_diff_sq.size(), forward_diff_sq.raw_ptr(), T( 0 ) );
+    const T local_forward_ref_sq   = reduce( forward_ref_sq.size(), forward_ref_sq.raw_ptr(), T( 0 ) );
     const T global_forward_diff_sq = comm_info.all_reduce_sum( local_forward_diff_sq );
     const T global_forward_ref_sq  = comm_info.all_reduce_sum( local_forward_ref_sq );
     const T forward_relative_error = std::sqrt( global_forward_diff_sq / global_forward_ref_sq );
@@ -359,25 +353,21 @@ int run_compare(
 
     err_real_array_t backward_diff_sq;
     err_real_array_t backward_ref_sq;
-    backward_diff_sq.init( std::get<0>( local_in_sizes ), std::get<1>( local_in_sizes ), std::get<2>( local_in_sizes ) );
+    backward_diff_sq.init(
+        std::get<0>( local_in_sizes ), std::get<1>( local_in_sizes ), std::get<2>( local_in_sizes )
+    );
     backward_ref_sq.init( std::get<0>( local_in_sizes ), std::get<1>( local_in_sizes ), std::get<2>( local_in_sizes ) );
 
     for_each(
         compare_real_output_functor<local_real_t, ref_real_t, err_real_array_t>{
-            local_back,
-            ref_back,
-            backward_diff_sq,
-            backward_ref_sq,
-            static_cast<int>( input_part.start_x[myid_i] ),
-            static_cast<int>( input_part.start_y[myid_j] ),
-            static_cast<int>( input_part.start_z[myid_k] )
-        },
+            local_back, ref_back, backward_diff_sq, backward_ref_sq, static_cast<int>( input_part.start_x[myid_i] ),
+            static_cast<int>( input_part.start_y[myid_j] ), static_cast<int>( input_part.start_z[myid_k] ) },
         make_range( local_back )
     );
     for_each.wait();
 
-    const T local_backward_diff_sq = reduce( backward_diff_sq.size(), backward_diff_sq.raw_ptr(), T( 0 ) );
-    const T local_backward_ref_sq  = reduce( backward_ref_sq.size(), backward_ref_sq.raw_ptr(), T( 0 ) );
+    const T local_backward_diff_sq  = reduce( backward_diff_sq.size(), backward_diff_sq.raw_ptr(), T( 0 ) );
+    const T local_backward_ref_sq   = reduce( backward_ref_sq.size(), backward_ref_sq.raw_ptr(), T( 0 ) );
     const T global_backward_diff_sq = comm_info.all_reduce_sum( local_backward_diff_sq );
     const T global_backward_ref_sq  = comm_info.all_reduce_sum( local_backward_ref_sq );
     const T backward_relative_error = std::sqrt( global_backward_diff_sq / global_backward_ref_sq );
@@ -386,15 +376,8 @@ int run_compare(
     {
         log.info_f(
             "strategy=%s, mode=%s, grid=(%zu,%zu), sizes=(%zu,%zu,%zu), forward_rel_l2=%.8e, backward_rel_l2=%.8e",
-            fftm_t::strategy_name(),
-            fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ),
-            options.p1,
-            options.p2,
-            options.nx,
-            options.ny,
-            options.nz,
-            forward_relative_error,
-            backward_relative_error
+            fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
+            options.p2, options.nx, options.ny, options.nz, forward_relative_error, backward_relative_error
         );
     }
 
@@ -403,41 +386,37 @@ int run_compare(
 
 template <fftm::mpi_transpose_3d_mode Mode>
 int run_for_strategy_kind(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const test_options                         &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( strategy )
     {
-        case strategy_kind::slab_pencil:
-            return run_compare<fftm::strategy_3d_slab_pencil<Mode>>( log, options, comm_info );
-        case strategy_kind::pencil_slab:
-            return run_compare<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
-        case strategy_kind::pencil_pencil:
-            return run_compare<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
+    case strategy_kind::slab_pencil:
+        return run_compare<fftm::strategy_3d_slab_pencil<Mode>>( log, options, comm_info );
+    case strategy_kind::pencil_slab:
+        return run_compare<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
+    case strategy_kind::pencil_pencil:
+        return run_compare<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
     }
     return 1;
 }
 
 int dispatch_mode(
-    strategy_kind                              strategy,
-    scfd::utils::log_mpi                      &log,
-    const test_options                        &options,
-    const scfd::communication::mpi_comm_info  &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( options.mode )
     {
-        case fftm::mpi_transpose_3d_mode::p2p_waitall:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::p2p_waitany:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallv:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallw:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitall:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitany:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallv:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallw:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
     }
     return 1;
 }

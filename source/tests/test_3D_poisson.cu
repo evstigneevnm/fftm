@@ -23,21 +23,16 @@ template <class FFTS>
 class poisson_3d_fft_case
 {
 public:
-    using T         = typename FFTS::real;
-    using results_t = std::pair<std::pair<T, T>, T>;
+    using T             = typename FFTS::real;
+    using results_t     = std::pair<std::pair<T, T>, T>;
     using runtime_api_t = typename FFTS::runtime_api;
 
     explicit poisson_3d_fft_case( std::size_t nx, std::size_t ny, std::size_t nz )
-        : nx_( nx )
-        , ny_( ny )
-        , nz_( nz )
-        , nz_c_( nz / 2 + 1 )
-        , hx_( domain_length() / static_cast<T>( nx_ ) )
-        , hy_( domain_length() / static_cast<T>( ny_ ) )
-        , hz_( domain_length() / static_cast<T>( nz_ ) )
-        , cell_volume_( hx_ * hy_ * hz_ )
-        , real_range_( idx_t( 0, 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ), to_int( nz_ ) ) )
-        , spectral_range_( idx_t( 0, 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ), to_int( nz_c_ ) ) )
+        : nx_( nx ), ny_( ny ), nz_( nz ), nz_c_( nz / 2 + 1 ), hx_( domain_length() / static_cast<T>( nx_ ) ),
+          hy_( domain_length() / static_cast<T>( ny_ ) ), hz_( domain_length() / static_cast<T>( nz_ ) ),
+          cell_volume_( hx_ * hy_ * hz_ ),
+          real_range_( idx_t( 0, 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ), to_int( nz_ ) ) ),
+          spectral_range_( idx_t( 0, 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ), to_int( nz_c_ ) ) )
     {
         if ( nx_ < 2 || ny_ < 2 || nz_ < 2 )
         {
@@ -87,8 +82,8 @@ public:
     {
         complex_array_t rhs_hat;
         complex_array_t solution_hat;
-        int nx;
-        int ny;
+        int             nx;
+        int             ny;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -108,7 +103,7 @@ public:
                 return;
             }
 
-            const T scale = -T( 1 ) / k2;
+            const T scale         = -T( 1 ) / k2;
             solution_hat( idx ).x = scale * rhs_hat( idx ).x;
             solution_hat( idx ).y = scale * rhs_hat( idx ).y;
         }
@@ -120,8 +115,8 @@ public:
         complex_array_t dx_hat;
         complex_array_t dy_hat;
         complex_array_t dz_hat;
-        int nx;
-        int ny;
+        int             nx;
+        int             ny;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -150,7 +145,7 @@ public:
     struct scale_real_functor
     {
         real_array_t field;
-        T scale;
+        T            scale;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -202,7 +197,8 @@ private:
     void fill_problem_data()
     {
         for_each_(
-            fill_problem_functor{ rhs_, exact_solution_, exact_dx_, exact_dy_, exact_dz_, hx_, hy_, hz_, T( 0 ), T( 0 ), T( 0 ) },
+            fill_problem_functor{
+                rhs_, exact_solution_, exact_dx_, exact_dy_, exact_dz_, hx_, hy_, hz_, T( 0 ), T( 0 ), T( 0 ) },
             real_range_
         );
         for_each_.wait();
@@ -210,10 +206,7 @@ private:
 
     void solve_in_fourier_space()
     {
-        for_each_(
-            solve_fourier_functor{ rhs_hat_, solution_hat_, to_int( nx_ ), to_int( ny_ ) },
-            spectral_range_
-        );
+        for_each_( solve_fourier_functor{ rhs_hat_, solution_hat_, to_int( nx_ ), to_int( ny_ ) }, spectral_range_ );
         for_each_.wait();
     }
 
@@ -301,7 +294,7 @@ private:
     range_t spectral_range_;
 
     for_each_t for_each_;
-    reduce_t reduce_;
+    reduce_t   reduce_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
@@ -388,10 +381,7 @@ int main( int argc, char *argv[] )
                 log.warning_f(
                     "rhs_mean = %.8e for Nx=%zu, Ny=%zu, Nz=%zu; the periodic FFT solve removes the zero Fourier mode,"
                     " so the manufactured rhs should have zero mean.",
-                    rhs_mean,
-                    nx,
-                    ny,
-                    nz
+                    rhs_mean, nx, ny, nz
                 );
             }
 
@@ -407,13 +397,8 @@ int main( int argc, char *argv[] )
             const auto &res  = run.second;
 
             log.info_f(
-                "Nx=%zu, Ny=%zu, Nz=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
-                std::get<0>( grid ),
-                std::get<1>( grid ),
-                std::get<2>( grid ),
-                res.first.first,
-                res.first.second,
-                res.second
+                "Nx=%zu, Ny=%zu, Nz=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e", std::get<0>( grid ), std::get<1>( grid ),
+                std::get<2>( grid ), res.first.first, res.first.second, res.second
             );
         }
 

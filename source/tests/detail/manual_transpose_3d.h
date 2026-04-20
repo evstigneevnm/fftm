@@ -16,9 +16,7 @@ namespace detail
 template <permutation_3d SrcPerm, permutation_3d DstPerm, class Idx, class ArrayIn, class ArrayOut>
 struct manual_transpose_3d_functor
 {
-    manual_transpose_3d_functor( const ArrayIn &_in, ArrayOut &_out )
-        : in( _in )
-        , out( _out )
+    manual_transpose_3d_functor( const ArrayIn &_in, ArrayOut &_out ) : in( _in ), out( _out )
     {
     }
 
@@ -33,11 +31,8 @@ struct manual_transpose_3d_functor
         coords[permutation_3d_traits<SrcPerm>::axis1] = idx[1];
         coords[permutation_3d_traits<SrcPerm>::axis2] = idx[2];
 
-        out(
-            coords[permutation_3d_traits<DstPerm>::axis0],
-            coords[permutation_3d_traits<DstPerm>::axis1],
-            coords[permutation_3d_traits<DstPerm>::axis2]
-        ) = in( idx );
+        out( coords[permutation_3d_traits<DstPerm>::axis0], coords[permutation_3d_traits<DstPerm>::axis1],
+             coords[permutation_3d_traits<DstPerm>::axis2] ) = in( idx );
     }
 };
 
@@ -45,10 +40,7 @@ template <permutation_3d SrcPerm, permutation_3d DstPerm>
 class manual_transpose_3d
 {
 public:
-    manual_transpose_3d( std::size_t nx, std::size_t ny, std::size_t nz )
-        : nx_( nx )
-        , ny_( ny )
-        , nz_( nz )
+    manual_transpose_3d( std::size_t nx, std::size_t ny, std::size_t nz ) : nx_( nx ), ny_( ny ), nz_( nz )
     {
     }
 
@@ -60,14 +52,10 @@ public:
         verify_array_shape<SrcPerm>( in, nx_, ny_, nz_, "manual transpose source" );
         verify_array_shape<DstPerm>( out, nx_, ny_, nz_, "manual transpose destination" );
 
-        const auto src_dims = dims_for_permutation<SrcPerm>( nx_, ny_, nz_ );
+        const auto                           src_dims = dims_for_permutation<SrcPerm>( nx_, ny_, nz_ );
         const scfd::static_vec::rect<int, 3> range(
             idx_t( 0, 0, 0 ),
-            idx_t(
-                static_cast<int>( src_dims[0] ),
-                static_cast<int>( src_dims[1] ),
-                static_cast<int>( src_dims[2] )
-            )
+            idx_t( static_cast<int>( src_dims[0] ), static_cast<int>( src_dims[1] ), static_cast<int>( src_dims[2] ) )
         );
 
         for_each( manual_transpose_3d_functor<SrcPerm, DstPerm, idx_t, ArrayIn, ArrayOut>( in, out ), range );

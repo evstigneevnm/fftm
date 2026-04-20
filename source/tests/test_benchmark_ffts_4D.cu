@@ -55,7 +55,7 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
     reduce_t   reduce;
     for_each.block_size = 128;
 
-    const T normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz * options.nw );
+    const T        normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz * options.nw );
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_norm = T( 0 );
@@ -87,8 +87,7 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
 
         for_each(
             fftm::test::detail::overwrite_with_random_diff_square_4d_functor<T, idx_t, real_array_t>{
-                work, seed, 0, 0, 0, 0
-            },
+                work, seed, 0, 0, 0, 0 },
             fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
         );
         for_each.wait();
@@ -99,10 +98,7 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
         if ( diff_l2 > options.epsilon )
         {
             log.warning_f(
-                "strategy=%s, iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e",
-                ffts_t::strategy_name(),
-                iter,
-                diff_l2,
+                "strategy=%s, iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e", ffts_t::strategy_name(), iter, diff_l2,
                 options.epsilon
             );
         }
@@ -111,36 +107,22 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "benchmark=ffts-4d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
-        ffts_t::strategy_name(),
-        options.nx,
-        options.ny,
-        options.nz,
-        options.nw,
-        options.times,
-        stats.mean,
-        stats.stddev
+        "benchmark=ffts-4d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: avg_wall_ms=%.8e, "
+        "stddev_wall_ms=%.8e",
+        ffts_t::strategy_name(), options.nx, options.ny, options.nz, options.nw, options.times, stats.mean, stats.stddev
     );
 
     std::ostringstream row;
-    row
-        << fftm::test::detail::csv_quote( "ffts-4d" ) << ','
-        << 1 << ','
-        << fftm::test::detail::csv_quote( ffts_t::strategy_name() ) << ','
-        << fftm::test::detail::csv_quote( "none" ) << ','
-        << 1 << ',' << 1 << ',' << 1 << ','
-        << options.nx << ',' << options.ny << ',' << options.nz << ',' << options.nw << ','
-        << options.times << ','
-        << options.epsilon << ','
-        << stats.mean << ','
-        << stats.stddev << ','
-        << max_norm << ','
-        << fftm::test::detail::csv_quote( options.directory );
+    row << fftm::test::detail::csv_quote( "ffts-4d" ) << ',' << 1 << ','
+        << fftm::test::detail::csv_quote( ffts_t::strategy_name() ) << ',' << fftm::test::detail::csv_quote( "none" )
+        << ',' << 1 << ',' << 1 << ',' << 1 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
+        << options.nw << ',' << options.times << ',' << options.epsilon << ',' << stats.mean << ',' << stats.stddev
+        << ',' << max_norm << ',' << fftm::test::detail::csv_quote( options.directory );
 
     fftm::test::detail::append_csv_row(
-        options.directory,
-        "benchmark_ffts_4d.csv",
-        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
+        options.directory, "benchmark_ffts_4d.csv",
+        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,"
+        "directory",
         row.str()
     );
 
@@ -151,14 +133,14 @@ int dispatch_strategy( scfd::utils::log_std &log, const options_t &options, stra
 {
     switch ( strategy )
     {
-        case strategy_kind::pencil_direct:
-            return run_benchmark_case<fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::direct>>( log, options );
-        case strategy_kind::pencil_memcpy:
-            return run_benchmark_case<fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::memcpy>>( log, options );
-        case strategy_kind::slab_direct:
-            return run_benchmark_case<fftm::strategy_4d_slab_slab<fftm::transpose_backend::direct>>( log, options );
-        case strategy_kind::slab_memcpy:
-            return run_benchmark_case<fftm::strategy_4d_slab_slab<fftm::transpose_backend::memcpy>>( log, options );
+    case strategy_kind::pencil_direct:
+        return run_benchmark_case<fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::direct>>( log, options );
+    case strategy_kind::pencil_memcpy:
+        return run_benchmark_case<fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::memcpy>>( log, options );
+    case strategy_kind::slab_direct:
+        return run_benchmark_case<fftm::strategy_4d_slab_slab<fftm::transpose_backend::direct>>( log, options );
+    case strategy_kind::slab_memcpy:
+        return run_benchmark_case<fftm::strategy_4d_slab_slab<fftm::transpose_backend::memcpy>>( log, options );
     }
     return 1;
 }

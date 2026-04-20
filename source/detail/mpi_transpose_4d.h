@@ -26,12 +26,7 @@ namespace detail
 {
 
 template <class Idx>
-__DEVICE_TAG__ inline std::size_t packed_index_4d(
-    const Idx       &idx,
-    std::size_t      d0,
-    std::size_t      d1,
-    std::size_t      d2
-)
+__DEVICE_TAG__ inline std::size_t packed_index_4d( const Idx &idx, std::size_t d0, std::size_t d1, std::size_t d2 )
 {
     return static_cast<std::size_t>( idx[0] ) +
            d0 * ( static_cast<std::size_t>( idx[1] ) +
@@ -39,15 +34,8 @@ __DEVICE_TAG__ inline std::size_t packed_index_4d(
 }
 
 template <class Idx>
-__DEVICE_TAG__ inline std::size_t packed_index_4d(
-    int              i0,
-    int              i1,
-    int              i2,
-    int              i3,
-    std::size_t      d0,
-    std::size_t      d1,
-    std::size_t      d2
-)
+__DEVICE_TAG__ inline std::size_t
+packed_index_4d( int i0, int i1, int i2, int i3, std::size_t d0, std::size_t d1, std::size_t d2 )
 {
     return static_cast<std::size_t>( i0 ) +
            d0 * ( static_cast<std::size_t>( i1 ) +
@@ -67,38 +55,33 @@ inline rect_4d_t<Idx> make_range_4d( std::size_t d0, std::size_t d1, std::size_t
 }
 
 template <
-    class ValueType,
-    class Backend,
-    class MPIComm,
-    class Log        = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api
->
+    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
+    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
 class mpi_transpose_4d_same_xy
 {
 public:
-    using value_type       = ValueType;
-    using backend_t        = Backend;
-    using memory_t         = typename backend_t::memory_type;
-    using partition_t      = ::fftm::partition;
-    using mpi_comm_t       = scfd::communication::mpi_comm;
-    using contiguous_buf_t = scfd::arrays::array_nd<value_type, 1, memory_t>;
-    using mpi_request_t    = scfd::communication::detail::mpi_request;
-    using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
-    using idx_t            = scfd::static_vec::vec<int, 4>;
-    using range_t          = rect_4d_t<idx_t>;
-    using for_each_t       = typename backend_t::template for_each_nd_type<4, int>;
+    using value_type        = ValueType;
+    using backend_t         = Backend;
+    using memory_t          = typename backend_t::memory_type;
+    using partition_t       = ::fftm::partition;
+    using mpi_comm_t        = scfd::communication::mpi_comm;
+    using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
+    using mpi_request_t     = scfd::communication::detail::mpi_request;
+    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
+    using idx_t             = scfd::static_vec::vec<int, 4>;
+    using range_t           = rect_4d_t<idx_t>;
+    using for_each_t        = typename backend_t::template for_each_nd_type<4, int>;
     using runtime_api_t     = RuntimeAPI;
     using profiler_t        = ::fftm::fftm_profiler;
     using profiler_scope_t  = ::fftm::profile_scope<profiler_t>;
     using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
-    mpi_transpose_4d_same_xy( const MPIComm &mpi, const Log &log = Log() )
-        : mpi_( mpi )
-        , log_( log )
+    mpi_transpose_4d_same_xy( const MPIComm &mpi, const Log &log = Log() ) : mpi_( mpi ), log_( log )
     {
         static_assert(
             std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
-            "mpi_transpose_4d_same_xy currently requires a CUDA backend memory type"
+            "mpi_transpose_4d_same_xy currently requires a CUDA backend memory "
+            "type"
         );
         for_each_.block_size = 128;
     }
@@ -120,7 +103,7 @@ public:
 
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
-        auto scope = profile_scope_( "mpi_transpose_4d_same_xy::init" );
+        auto scope  = profile_scope_( "mpi_transpose_4d_same_xy::init" );
         input_dim_  = input_dim;
         output_dim_ = output_dim;
         myid_i_     = myid_i;
@@ -128,13 +111,17 @@ public:
         myid_k_     = myid_k;
 
         if ( input_dim_.size_w.size() != 1 )
-            throw std::logic_error( "mpi_transpose_4d_same_xy expects the source layout to keep W undistributed" );
+            throw std::logic_error( "mpi_transpose_4d_same_xy expects the "
+                                    "source layout to keep W undistributed" );
         if ( output_dim_.size_z.size() != 1 )
-            throw std::logic_error( "mpi_transpose_4d_same_xy expects the destination layout to keep Z undistributed" );
+            throw std::logic_error( "mpi_transpose_4d_same_xy expects the destination layout to "
+                                    "keep Z undistributed" );
         if ( input_dim_.size_x != output_dim_.size_x || input_dim_.size_y != output_dim_.size_y )
-            throw std::logic_error( "mpi_transpose_4d_same_xy requires X/Y ownership to stay unchanged" );
+            throw std::logic_error( "mpi_transpose_4d_same_xy requires X/Y "
+                                    "ownership to stay unchanged" );
         if ( input_dim_.size_z.size() != output_dim_.size_w.size() )
-            throw std::logic_error( "mpi_transpose_4d_same_xy requires matching source-Z and destination-W partition counts" );
+            throw std::logic_error( "mpi_transpose_4d_same_xy requires matching source-Z and "
+                                    "destination-W partition counts" );
 
         nx_local_  = input_dim_.size_x.at( myid_i_ );
         ny_local_  = input_dim_.size_y.at( myid_j_ );
@@ -172,18 +159,18 @@ public:
 
         switch ( mode )
         {
-            case mpi_transpose_3d_mode::p2p_waitall:
-                forward_p2p_waitall_( out );
-                break;
-            case mpi_transpose_3d_mode::p2p_waitany:
-                forward_p2p_waitany_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallv:
-                forward_alltoallv_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallw:
-                forward_alltoallw_( out );
-                break;
+        case mpi_transpose_3d_mode::p2p_waitall:
+            forward_p2p_waitall_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            forward_p2p_waitany_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            forward_alltoallv_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            forward_alltoallw_( out );
+            break;
         }
     }
 
@@ -200,18 +187,18 @@ public:
 
         switch ( mode )
         {
-            case mpi_transpose_3d_mode::p2p_waitall:
-                backward_p2p_waitall_( out );
-                break;
-            case mpi_transpose_3d_mode::p2p_waitany:
-                backward_p2p_waitany_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallv:
-                backward_alltoallv_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallw:
-                backward_alltoallw_( out );
-                break;
+        case mpi_transpose_3d_mode::p2p_waitall:
+            backward_p2p_waitall_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            backward_p2p_waitany_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            backward_alltoallv_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            backward_alltoallw_( out );
+            break;
         }
     }
 
@@ -297,7 +284,8 @@ private:
     void ensure_is_inited_() const
     {
         if ( !is_inited_ )
-            throw std::logic_error( "mpi_transpose_4d_same_xy::init must be called before transpose" );
+            throw std::logic_error( "mpi_transpose_4d_same_xy::init must be "
+                                    "called before transpose" );
     }
 
     void update_memory_profile_()
@@ -448,19 +436,31 @@ private:
 
         for ( int p = 0; p < comm_size; ++p )
         {
-            forward_sendcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_xy forward sendcount" );
-            forward_sdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xy forward sdispl" );
-            forward_recvcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_xy forward recvcount" );
-            forward_rdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xy forward rdispl" );
+            forward_sendcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_xy forward sendcount"
+            );
+            forward_sdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xy forward sdispl" );
+            forward_recvcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_xy forward recvcount"
+            );
+            forward_rdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xy forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
             forward_sdispls_w_[p]    = forward_sdispls_[p];
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
             forward_rdispls_w_[p]    = forward_rdispls_[p];
 
-            backward_sendcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_xy backward sendcount" );
-            backward_sdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xy backward sdispl" );
-            backward_recvcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_xy backward recvcount" );
-            backward_rdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xy backward rdispl" );
+            backward_sendcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_xy backward sendcount"
+            );
+            backward_sdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xy backward sdispl" );
+            backward_recvcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_xy backward recvcount"
+            );
+            backward_rdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xy backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
             backward_sdispls_w_[p]    = backward_sdispls_[p];
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
@@ -476,14 +476,8 @@ private:
         {
             for_each_(
                 pack_forward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_,
-                    in,
-                    forward_send_offsets_[p],
-                    output_dim_.start_w[p],
-                    nx_local_,
-                    ny_local_,
-                    nz_local_
-                },
+                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_w[p], nx_local_, ny_local_,
+                    nz_local_ },
                 make_range_4d<idx_t>( nx_local_, ny_local_, nz_local_, output_dim_.size_w[p] )
             );
             for_each_.wait();
@@ -496,14 +490,8 @@ private:
         auto scope = profile_scope_( "unpack_forward_chunk" );
         for_each_(
             unpack_forward_functor<contiguous_buf_t, ArrayOut>{
-                recv_buffer_,
-                out,
-                forward_recv_offsets_[source_k],
-                input_dim_.start_z[source_k],
-                nx_local_,
-                ny_local_,
-                input_dim_.size_z[source_k]
-            },
+                recv_buffer_, out, forward_recv_offsets_[source_k], input_dim_.start_z[source_k], nx_local_, ny_local_,
+                input_dim_.size_z[source_k] },
             make_range_4d<idx_t>( nx_local_, ny_local_, input_dim_.size_z[source_k], nw_local_ )
         );
         for_each_.wait();
@@ -517,14 +505,8 @@ private:
         {
             for_each_(
                 pack_backward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_,
-                    in,
-                    backward_send_offsets_[p],
-                    input_dim_.start_z[p],
-                    nx_local_,
-                    ny_local_,
-                    input_dim_.size_z[p]
-                },
+                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_z[p], nx_local_, ny_local_,
+                    input_dim_.size_z[p] },
                 make_range_4d<idx_t>( nx_local_, ny_local_, input_dim_.size_z[p], nw_local_ )
             );
             for_each_.wait();
@@ -537,14 +519,8 @@ private:
         auto scope = profile_scope_( "unpack_backward_chunk" );
         for_each_(
             unpack_backward_functor<contiguous_buf_t, ArrayOut>{
-                recv_buffer_,
-                out,
-                backward_recv_offsets_[source_k],
-                output_dim_.start_w[source_k],
-                nx_local_,
-                ny_local_,
-                nz_local_
-            },
+                recv_buffer_, out, backward_recv_offsets_[source_k], output_dim_.start_w[source_k], nx_local_,
+                ny_local_, nz_local_ },
             make_range_4d<idx_t>( nx_local_, ny_local_, nz_local_, output_dim_.size_w[source_k] )
         );
         for_each_.wait();
@@ -554,9 +530,10 @@ private:
     void forward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "forward_p2p_waitall" );
+        auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         {
             auto phase = profile_scope_( "post_recv_send" );
@@ -565,20 +542,12 @@ private:
                 if ( p == myid_k_ )
                     continue;
                 line_comm_info_.irecv(
-                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p],
-                    forward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    p,
-                    recv_requests_[p]
+                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
                 );
                 line_comm_info_.isend(
-                    send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                    forward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    myid_k_,
-                    send_requests_[p]
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, send_requests_[p]
                 );
             }
         }
@@ -588,8 +557,7 @@ private:
             runtime_api_t::memcpy(
                 recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_k_],
                 send_buffer_.raw_ptr() + forward_send_offsets_[myid_k_],
-                bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ),
-                runtime_api_t::device_to_device_kind()
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
 
@@ -613,9 +581,10 @@ private:
     void forward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "forward_p2p_waitany" );
+        auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         {
             auto phase = profile_scope_( "post_recv_send" );
@@ -624,20 +593,12 @@ private:
                 if ( p == myid_k_ )
                     continue;
                 line_comm_info_.irecv(
-                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p],
-                    forward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    p,
-                    recv_requests_[p]
+                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
                 );
                 line_comm_info_.isend(
-                    send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                    forward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    myid_k_,
-                    send_requests_[p]
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, send_requests_[p]
                 );
             }
         }
@@ -647,8 +608,7 @@ private:
             runtime_api_t::memcpy(
                 recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_k_],
                 send_buffer_.raw_ptr() + forward_send_offsets_[myid_k_],
-                bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ),
-                runtime_api_t::device_to_device_kind()
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
         {
@@ -657,8 +617,8 @@ private:
         }
 
         {
-            auto phase = profile_scope_( "waitany_unpack" );
-            int completed = 0;
+            auto phase     = profile_scope_( "waitany_unpack" );
+            int  completed = 0;
             while ( completed < comm_size - 1 )
             {
                 const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
@@ -680,19 +640,16 @@ private:
     void forward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
             line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ),
-                forward_sendcounts_.data(),
-                forward_sdispls_.data(),
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ),
-                forward_recvcounts_.data(),
-                forward_rdispls_.data(),
+                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                forward_sdispls_.data(), scfd::communication::detail::mpi_data_type<char>::mpi_type(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_.data(), forward_rdispls_.data(),
                 scfd::communication::detail::mpi_data_type<char>::mpi_type()
             );
         }
@@ -708,20 +665,16 @@ private:
     void forward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ),
-                forward_sendcounts_w_.data(),
-                forward_sdispls_w_.data(),
-                forward_sendtypes_w_.data(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ),
-                forward_recvcounts_w_.data(),
-                forward_rdispls_w_.data(),
-                forward_recvtypes_w_.data()
+                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+                forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
             );
         }
         {
@@ -736,9 +689,10 @@ private:
     void backward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "backward_p2p_waitall" );
+        auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         {
             auto phase = profile_scope_( "post_recv_send" );
@@ -747,20 +701,12 @@ private:
                 if ( p == myid_k_ )
                     continue;
                 line_comm_info_.irecv(
-                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p],
-                    backward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    myid_k_,
-                    recv_requests_[p]
+                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, recv_requests_[p]
                 );
                 line_comm_info_.isend(
-                    send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                    backward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    p,
-                    send_requests_[p]
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
                 );
             }
         }
@@ -770,8 +716,7 @@ private:
             runtime_api_t::memcpy(
                 recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_k_],
                 send_buffer_.raw_ptr() + backward_send_offsets_[myid_k_],
-                bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ),
-                runtime_api_t::device_to_device_kind()
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
 
@@ -795,9 +740,10 @@ private:
     void backward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "backward_p2p_waitany" );
+        auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         {
             auto phase = profile_scope_( "post_recv_send" );
@@ -806,20 +752,12 @@ private:
                 if ( p == myid_k_ )
                     continue;
                 line_comm_info_.irecv(
-                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p],
-                    backward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    myid_k_,
-                    recv_requests_[p]
+                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, recv_requests_[p]
                 );
                 line_comm_info_.isend(
-                    send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                    backward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                    p,
-                    p,
-                    send_requests_[p]
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
                 );
             }
         }
@@ -829,8 +767,7 @@ private:
             runtime_api_t::memcpy(
                 recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_k_],
                 send_buffer_.raw_ptr() + backward_send_offsets_[myid_k_],
-                bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ),
-                runtime_api_t::device_to_device_kind()
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
         {
@@ -839,8 +776,8 @@ private:
         }
 
         {
-            auto phase = profile_scope_( "waitany_unpack" );
-            int completed = 0;
+            auto phase     = profile_scope_( "waitany_unpack" );
+            int  completed = 0;
             while ( completed < comm_size - 1 )
             {
                 const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
@@ -862,19 +799,16 @@ private:
     void backward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
             line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ),
-                backward_sendcounts_.data(),
-                backward_sdispls_.data(),
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ),
-                backward_recvcounts_.data(),
-                backward_rdispls_.data(),
+                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                backward_sdispls_.data(), scfd::communication::detail::mpi_data_type<char>::mpi_type(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_.data(), backward_rdispls_.data(),
                 scfd::communication::detail::mpi_data_type<char>::mpi_type()
             );
         }
@@ -890,20 +824,16 @@ private:
     void backward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ),
-                backward_sendcounts_w_.data(),
-                backward_sdispls_w_.data(),
-                backward_sendtypes_w_.data(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ),
-                backward_recvcounts_w_.data(),
-                backward_rdispls_w_.data(),
-                backward_recvtypes_w_.data()
+                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+                backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
             );
         }
         {
@@ -915,11 +845,11 @@ private:
     }
 
 private:
-    MPIComm mpi_;
-    Log     log_;
-    profiler_t *profiler_ = nullptr;
+    MPIComm            mpi_;
+    Log                log_;
+    profiler_t        *profiler_        = nullptr;
     memory_profiler_t *memory_profiler_ = nullptr;
-    std::string memory_profile_prefix_;
+    std::string        memory_profile_prefix_;
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
@@ -974,38 +904,33 @@ private:
 };
 
 template <
-    class ValueType,
-    class Backend,
-    class MPIComm,
-    class Log        = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api
->
+    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
+    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
 class mpi_transpose_4d_same_xw
 {
 public:
-    using value_type       = ValueType;
-    using backend_t        = Backend;
-    using memory_t         = typename backend_t::memory_type;
-    using partition_t      = ::fftm::partition;
-    using mpi_comm_t       = scfd::communication::mpi_comm;
-    using contiguous_buf_t = scfd::arrays::array_nd<value_type, 1, memory_t>;
-    using mpi_request_t    = scfd::communication::detail::mpi_request;
-    using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
-    using idx_t            = scfd::static_vec::vec<int, 4>;
-    using range_t          = rect_4d_t<idx_t>;
-    using for_each_t       = typename backend_t::template for_each_nd_type<4, int>;
+    using value_type        = ValueType;
+    using backend_t         = Backend;
+    using memory_t          = typename backend_t::memory_type;
+    using partition_t       = ::fftm::partition;
+    using mpi_comm_t        = scfd::communication::mpi_comm;
+    using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
+    using mpi_request_t     = scfd::communication::detail::mpi_request;
+    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
+    using idx_t             = scfd::static_vec::vec<int, 4>;
+    using range_t           = rect_4d_t<idx_t>;
+    using for_each_t        = typename backend_t::template for_each_nd_type<4, int>;
     using runtime_api_t     = RuntimeAPI;
     using profiler_t        = ::fftm::fftm_profiler;
     using profiler_scope_t  = ::fftm::profile_scope<profiler_t>;
     using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
-    mpi_transpose_4d_same_xw( const MPIComm &mpi, const Log &log = Log() )
-        : mpi_( mpi )
-        , log_( log )
+    mpi_transpose_4d_same_xw( const MPIComm &mpi, const Log &log = Log() ) : mpi_( mpi ), log_( log )
     {
         static_assert(
             std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
-            "mpi_transpose_4d_same_xw currently requires a CUDA backend memory type"
+            "mpi_transpose_4d_same_xw currently requires a CUDA backend memory "
+            "type"
         );
         for_each_.block_size = 128;
     }
@@ -1027,7 +952,7 @@ public:
 
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
-        auto scope = profile_scope_( "mpi_transpose_4d_same_xw::init" );
+        auto scope  = profile_scope_( "mpi_transpose_4d_same_xw::init" );
         input_dim_  = input_dim;
         output_dim_ = output_dim;
         myid_i_     = myid_i;
@@ -1035,13 +960,17 @@ public:
         myid_k_     = myid_k;
 
         if ( input_dim_.size_z.size() != 1 )
-            throw std::logic_error( "mpi_transpose_4d_same_xw expects the source layout to keep Z undistributed" );
+            throw std::logic_error( "mpi_transpose_4d_same_xw expects the "
+                                    "source layout to keep Z undistributed" );
         if ( output_dim_.size_y.size() != 1 )
-            throw std::logic_error( "mpi_transpose_4d_same_xw expects the destination layout to keep Y undistributed" );
+            throw std::logic_error( "mpi_transpose_4d_same_xw expects the destination layout to "
+                                    "keep Y undistributed" );
         if ( input_dim_.size_x != output_dim_.size_x || input_dim_.size_w != output_dim_.size_w )
-            throw std::logic_error( "mpi_transpose_4d_same_xw requires X/W ownership to stay unchanged" );
+            throw std::logic_error( "mpi_transpose_4d_same_xw requires X/W "
+                                    "ownership to stay unchanged" );
         if ( input_dim_.size_y.size() != output_dim_.size_z.size() )
-            throw std::logic_error( "mpi_transpose_4d_same_xw requires matching source-Y and destination-Z partition counts" );
+            throw std::logic_error( "mpi_transpose_4d_same_xw requires matching source-Y and "
+                                    "destination-Z partition counts" );
 
         nx_local_  = input_dim_.size_x.at( myid_i_ );
         ny_local_  = input_dim_.size_y.at( myid_j_ );
@@ -1079,18 +1008,18 @@ public:
 
         switch ( mode )
         {
-            case mpi_transpose_3d_mode::p2p_waitall:
-                forward_p2p_waitall_( out );
-                break;
-            case mpi_transpose_3d_mode::p2p_waitany:
-                forward_p2p_waitany_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallv:
-                forward_alltoallv_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallw:
-                forward_alltoallw_( out );
-                break;
+        case mpi_transpose_3d_mode::p2p_waitall:
+            forward_p2p_waitall_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            forward_p2p_waitany_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            forward_alltoallv_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            forward_alltoallw_( out );
+            break;
         }
     }
 
@@ -1107,18 +1036,18 @@ public:
 
         switch ( mode )
         {
-            case mpi_transpose_3d_mode::p2p_waitall:
-                backward_p2p_waitall_( out );
-                break;
-            case mpi_transpose_3d_mode::p2p_waitany:
-                backward_p2p_waitany_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallv:
-                backward_alltoallv_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallw:
-                backward_alltoallw_( out );
-                break;
+        case mpi_transpose_3d_mode::p2p_waitall:
+            backward_p2p_waitall_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            backward_p2p_waitany_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            backward_alltoallv_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            backward_alltoallw_( out );
+            break;
         }
     }
 
@@ -1204,7 +1133,8 @@ private:
     void ensure_is_inited_() const
     {
         if ( !is_inited_ )
-            throw std::logic_error( "mpi_transpose_4d_same_xw::init must be called before transpose" );
+            throw std::logic_error( "mpi_transpose_4d_same_xw::init must be "
+                                    "called before transpose" );
     }
 
     void update_memory_profile_()
@@ -1355,19 +1285,31 @@ private:
 
         for ( int p = 0; p < comm_size; ++p )
         {
-            forward_sendcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_xw forward sendcount" );
-            forward_sdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xw forward sdispl" );
-            forward_recvcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_xw forward recvcount" );
-            forward_rdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xw forward rdispl" );
+            forward_sendcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_xw forward sendcount"
+            );
+            forward_sdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xw forward sdispl" );
+            forward_recvcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_xw forward recvcount"
+            );
+            forward_rdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xw forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
             forward_sdispls_w_[p]    = forward_sdispls_[p];
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
             forward_rdispls_w_[p]    = forward_rdispls_[p];
 
-            backward_sendcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_xw backward sendcount" );
-            backward_sdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xw backward sdispl" );
-            backward_recvcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_xw backward recvcount" );
-            backward_rdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xw backward rdispl" );
+            backward_sendcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_xw backward sendcount"
+            );
+            backward_sdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xw backward sdispl" );
+            backward_recvcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_xw backward recvcount"
+            );
+            backward_rdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xw backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
             backward_sdispls_w_[p]    = backward_sdispls_[p];
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
@@ -1383,14 +1325,8 @@ private:
         {
             for_each_(
                 pack_forward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_,
-                    in,
-                    forward_send_offsets_[p],
-                    output_dim_.start_z[p],
-                    nx_local_,
-                    output_dim_.size_z[p],
-                    nw_local_
-                },
+                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_z[p], nx_local_,
+                    output_dim_.size_z[p], nw_local_ },
                 make_range_4d<idx_t>( nx_local_, output_dim_.size_z[p], nw_local_, ny_local_ )
             );
             for_each_.wait();
@@ -1403,14 +1339,8 @@ private:
         auto scope = profile_scope_( "unpack_forward_chunk" );
         for_each_(
             unpack_forward_functor<contiguous_buf_t, ArrayOut>{
-                recv_buffer_,
-                out,
-                forward_recv_offsets_[source_j],
-                input_dim_.start_y[source_j],
-                nx_local_,
-                nz_local_,
-                nw_local_
-            },
+                recv_buffer_, out, forward_recv_offsets_[source_j], input_dim_.start_y[source_j], nx_local_, nz_local_,
+                nw_local_ },
             make_range_4d<idx_t>( nx_local_, nz_local_, nw_local_, input_dim_.size_y[source_j] )
         );
         for_each_.wait();
@@ -1424,14 +1354,8 @@ private:
         {
             for_each_(
                 pack_backward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_,
-                    in,
-                    backward_send_offsets_[p],
-                    input_dim_.start_y[p],
-                    nx_local_,
-                    nz_local_,
-                    nw_local_
-                },
+                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_y[p], nx_local_, nz_local_,
+                    nw_local_ },
                 make_range_4d<idx_t>( nx_local_, nz_local_, nw_local_, input_dim_.size_y[p] )
             );
             for_each_.wait();
@@ -1444,14 +1368,8 @@ private:
         auto scope = profile_scope_( "unpack_backward_chunk" );
         for_each_(
             unpack_backward_functor<contiguous_buf_t, ArrayOut>{
-                recv_buffer_,
-                out,
-                backward_recv_offsets_[source_j],
-                output_dim_.start_z[source_j],
-                nx_local_,
-                output_dim_.size_z[source_j],
-                nw_local_
-            },
+                recv_buffer_, out, backward_recv_offsets_[source_j], output_dim_.start_z[source_j], nx_local_,
+                output_dim_.size_z[source_j], nw_local_ },
             make_range_4d<idx_t>( nx_local_, output_dim_.size_z[source_j], nw_local_, ny_local_ )
         );
         for_each_.wait();
@@ -1461,37 +1379,29 @@ private:
     void forward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "forward_p2p_waitall" );
+        auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_j_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p],
-                forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_j_,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
         );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
@@ -1505,37 +1415,29 @@ private:
     void forward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "forward_p2p_waitany" );
+        auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_j_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p],
-                forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_j_,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
         );
         unpack_forward_chunk_( myid_j_, out );
 
@@ -1557,17 +1459,14 @@ private:
     void forward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            forward_sendcounts_.data(),
-            forward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_.data(),
-            forward_rdispls_.data(),
+            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
+            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            forward_recvcounts_.data(), forward_rdispls_.data(),
             scfd::communication::detail::mpi_data_type<char>::mpi_type()
         );
 
@@ -1580,18 +1479,14 @@ private:
     void forward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            forward_sendcounts_w_.data(),
-            forward_sdispls_w_.data(),
-            forward_sendtypes_w_.data(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_w_.data(),
-            forward_rdispls_w_.data(),
-            forward_recvtypes_w_.data()
+            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -1603,37 +1498,29 @@ private:
     void backward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "backward_p2p_waitall" );
+        auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_j_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p],
-                backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_j_,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
         );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
@@ -1647,37 +1534,29 @@ private:
     void backward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "backward_p2p_waitany" );
+        auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_j_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p],
-                backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_j_,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
         );
         unpack_backward_chunk_( myid_j_, out );
 
@@ -1699,17 +1578,14 @@ private:
     void backward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
         line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_.data(),
-            backward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_.data(),
-            backward_rdispls_.data(),
+            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
+            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            backward_recvcounts_.data(), backward_rdispls_.data(),
             scfd::communication::detail::mpi_data_type<char>::mpi_type()
         );
 
@@ -1722,18 +1598,14 @@ private:
     void backward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_w_.data(),
-            backward_sdispls_w_.data(),
-            backward_sendtypes_w_.data(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_w_.data(),
-            backward_rdispls_w_.data(),
-            backward_recvtypes_w_.data()
+            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -1742,11 +1614,11 @@ private:
     }
 
 private:
-    MPIComm mpi_;
-    Log     log_;
-    profiler_t *profiler_ = nullptr;
+    MPIComm            mpi_;
+    Log                log_;
+    profiler_t        *profiler_        = nullptr;
     memory_profiler_t *memory_profiler_ = nullptr;
-    std::string memory_profile_prefix_;
+    std::string        memory_profile_prefix_;
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
@@ -1801,38 +1673,33 @@ private:
 };
 
 template <
-    class ValueType,
-    class Backend,
-    class MPIComm,
-    class Log        = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api
->
+    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
+    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
 class mpi_transpose_4d_same_zw
 {
 public:
-    using value_type       = ValueType;
-    using backend_t        = Backend;
-    using memory_t         = typename backend_t::memory_type;
-    using partition_t      = ::fftm::partition;
-    using mpi_comm_t       = scfd::communication::mpi_comm;
-    using contiguous_buf_t = scfd::arrays::array_nd<value_type, 1, memory_t>;
-    using mpi_request_t    = scfd::communication::detail::mpi_request;
-    using mpi_dtype_t      = scfd::communication::detail::mpi_data_type<>;
-    using idx_t            = scfd::static_vec::vec<int, 4>;
-    using range_t          = rect_4d_t<idx_t>;
-    using for_each_t       = typename backend_t::template for_each_nd_type<4, int>;
+    using value_type        = ValueType;
+    using backend_t         = Backend;
+    using memory_t          = typename backend_t::memory_type;
+    using partition_t       = ::fftm::partition;
+    using mpi_comm_t        = scfd::communication::mpi_comm;
+    using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
+    using mpi_request_t     = scfd::communication::detail::mpi_request;
+    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
+    using idx_t             = scfd::static_vec::vec<int, 4>;
+    using range_t           = rect_4d_t<idx_t>;
+    using for_each_t        = typename backend_t::template for_each_nd_type<4, int>;
     using runtime_api_t     = RuntimeAPI;
     using profiler_t        = ::fftm::fftm_profiler;
     using profiler_scope_t  = ::fftm::profile_scope<profiler_t>;
     using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
-    mpi_transpose_4d_same_zw( const MPIComm &mpi, const Log &log = Log() )
-        : mpi_( mpi )
-        , log_( log )
+    mpi_transpose_4d_same_zw( const MPIComm &mpi, const Log &log = Log() ) : mpi_( mpi ), log_( log )
     {
         static_assert(
             std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
-            "mpi_transpose_4d_same_zw currently requires a CUDA backend memory type"
+            "mpi_transpose_4d_same_zw currently requires a CUDA backend memory "
+            "type"
         );
         for_each_.block_size = 128;
     }
@@ -1854,7 +1721,7 @@ public:
 
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
-        auto scope = profile_scope_( "mpi_transpose_4d_same_zw::init" );
+        auto scope  = profile_scope_( "mpi_transpose_4d_same_zw::init" );
         input_dim_  = input_dim;
         output_dim_ = output_dim;
         myid_i_     = myid_i;
@@ -1862,13 +1729,17 @@ public:
         myid_k_     = myid_k;
 
         if ( input_dim_.size_y.size() != 1 )
-            throw std::logic_error( "mpi_transpose_4d_same_zw expects the source layout to keep Y undistributed" );
+            throw std::logic_error( "mpi_transpose_4d_same_zw expects the "
+                                    "source layout to keep Y undistributed" );
         if ( output_dim_.size_x.size() != 1 )
-            throw std::logic_error( "mpi_transpose_4d_same_zw expects the destination layout to keep X undistributed" );
+            throw std::logic_error( "mpi_transpose_4d_same_zw expects the destination layout to "
+                                    "keep X undistributed" );
         if ( input_dim_.size_z != output_dim_.size_z || input_dim_.size_w != output_dim_.size_w )
-            throw std::logic_error( "mpi_transpose_4d_same_zw requires Z/W ownership to stay unchanged" );
+            throw std::logic_error( "mpi_transpose_4d_same_zw requires Z/W "
+                                    "ownership to stay unchanged" );
         if ( input_dim_.size_x.size() != output_dim_.size_y.size() )
-            throw std::logic_error( "mpi_transpose_4d_same_zw requires matching source-X and destination-Y partition counts" );
+            throw std::logic_error( "mpi_transpose_4d_same_zw requires matching source-X and "
+                                    "destination-Y partition counts" );
 
         nx_local_  = input_dim_.size_x.at( myid_i_ );
         nx_global_ = output_dim_.size_x.at( 0 );
@@ -1906,18 +1777,18 @@ public:
 
         switch ( mode )
         {
-            case mpi_transpose_3d_mode::p2p_waitall:
-                forward_p2p_waitall_( out );
-                break;
-            case mpi_transpose_3d_mode::p2p_waitany:
-                forward_p2p_waitany_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallv:
-                forward_alltoallv_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallw:
-                forward_alltoallw_( out );
-                break;
+        case mpi_transpose_3d_mode::p2p_waitall:
+            forward_p2p_waitall_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            forward_p2p_waitany_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            forward_alltoallv_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            forward_alltoallw_( out );
+            break;
         }
     }
 
@@ -1934,18 +1805,18 @@ public:
 
         switch ( mode )
         {
-            case mpi_transpose_3d_mode::p2p_waitall:
-                backward_p2p_waitall_( out );
-                break;
-            case mpi_transpose_3d_mode::p2p_waitany:
-                backward_p2p_waitany_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallv:
-                backward_alltoallv_( out );
-                break;
-            case mpi_transpose_3d_mode::alltoallw:
-                backward_alltoallw_( out );
-                break;
+        case mpi_transpose_3d_mode::p2p_waitall:
+            backward_p2p_waitall_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            backward_p2p_waitany_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            backward_alltoallv_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            backward_alltoallw_( out );
+            break;
         }
     }
 
@@ -2031,7 +1902,8 @@ private:
     void ensure_is_inited_() const
     {
         if ( !is_inited_ )
-            throw std::logic_error( "mpi_transpose_4d_same_zw::init must be called before transpose" );
+            throw std::logic_error( "mpi_transpose_4d_same_zw::init must be "
+                                    "called before transpose" );
     }
 
     void update_memory_profile_()
@@ -2182,19 +2054,31 @@ private:
 
         for ( int p = 0; p < comm_size; ++p )
         {
-            forward_sendcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_zw forward sendcount" );
-            forward_sdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_zw forward sdispl" );
-            forward_recvcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_zw forward recvcount" );
-            forward_rdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_zw forward rdispl" );
+            forward_sendcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_zw forward sendcount"
+            );
+            forward_sdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_zw forward sdispl" );
+            forward_recvcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_zw forward recvcount"
+            );
+            forward_rdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_zw forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
             forward_sdispls_w_[p]    = forward_sdispls_[p];
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
             forward_rdispls_w_[p]    = forward_rdispls_[p];
 
-            backward_sendcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_zw backward sendcount" );
-            backward_sdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_zw backward sdispl" );
-            backward_recvcounts_[p]   = detail::mpi_int_cast( bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_zw backward recvcount" );
-            backward_rdispls_[p]      = detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_zw backward rdispl" );
+            backward_sendcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_zw backward sendcount"
+            );
+            backward_sdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_zw backward sdispl" );
+            backward_recvcounts_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_zw backward recvcount"
+            );
+            backward_rdispls_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_zw backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
             backward_sdispls_w_[p]    = backward_sdispls_[p];
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
@@ -2210,14 +2094,8 @@ private:
         {
             for_each_(
                 pack_forward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_,
-                    in,
-                    forward_send_offsets_[p],
-                    output_dim_.start_y[p],
-                    output_dim_.size_y[p],
-                    nz_local_,
-                    nw_local_
-                },
+                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_y[p], output_dim_.size_y[p],
+                    nz_local_, nw_local_ },
                 make_range_4d<idx_t>( output_dim_.size_y[p], nz_local_, nw_local_, nx_local_ )
             );
             for_each_.wait();
@@ -2230,14 +2108,8 @@ private:
         auto scope = profile_scope_( "unpack_forward_chunk" );
         for_each_(
             unpack_forward_functor<contiguous_buf_t, ArrayOut>{
-                recv_buffer_,
-                out,
-                forward_recv_offsets_[source_i],
-                input_dim_.start_x[source_i],
-                ny_local_,
-                nz_local_,
-                nw_local_
-            },
+                recv_buffer_, out, forward_recv_offsets_[source_i], input_dim_.start_x[source_i], ny_local_, nz_local_,
+                nw_local_ },
             make_range_4d<idx_t>( ny_local_, nz_local_, nw_local_, input_dim_.size_x[source_i] )
         );
         for_each_.wait();
@@ -2251,14 +2123,8 @@ private:
         {
             for_each_(
                 pack_backward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_,
-                    in,
-                    backward_send_offsets_[p],
-                    input_dim_.start_x[p],
-                    ny_local_,
-                    nz_local_,
-                    nw_local_
-                },
+                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_x[p], ny_local_, nz_local_,
+                    nw_local_ },
                 make_range_4d<idx_t>( ny_local_, nz_local_, nw_local_, input_dim_.size_x[p] )
             );
             for_each_.wait();
@@ -2271,14 +2137,8 @@ private:
         auto scope = profile_scope_( "unpack_backward_chunk" );
         for_each_(
             unpack_backward_functor<contiguous_buf_t, ArrayOut>{
-                recv_buffer_,
-                out,
-                backward_recv_offsets_[source_i],
-                output_dim_.start_y[source_i],
-                output_dim_.size_y[source_i],
-                nz_local_,
-                nw_local_
-            },
+                recv_buffer_, out, backward_recv_offsets_[source_i], output_dim_.start_y[source_i],
+                output_dim_.size_y[source_i], nz_local_, nw_local_ },
             make_range_4d<idx_t>( output_dim_.size_y[source_i], nz_local_, nw_local_, nx_local_ )
         );
         for_each_.wait();
@@ -2288,37 +2148,29 @@ private:
     void forward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "forward_p2p_waitall" );
+        auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_i_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p],
-                forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_i_,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
         );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
@@ -2332,37 +2184,29 @@ private:
     void forward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "forward_p2p_waitany" );
+        auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_i_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p],
-                forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p],
-                forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_i_,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
         );
         unpack_forward_chunk_( myid_i_, out );
 
@@ -2384,17 +2228,14 @@ private:
     void forward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            forward_sendcounts_.data(),
-            forward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_.data(),
-            forward_rdispls_.data(),
+            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
+            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            forward_recvcounts_.data(), forward_rdispls_.data(),
             scfd::communication::detail::mpi_data_type<char>::mpi_type()
         );
 
@@ -2407,18 +2248,14 @@ private:
     void forward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            forward_sendcounts_w_.data(),
-            forward_sdispls_w_.data(),
-            forward_sendtypes_w_.data(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_w_.data(),
-            forward_rdispls_w_.data(),
-            forward_recvtypes_w_.data()
+            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -2430,37 +2267,29 @@ private:
     void backward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "backward_p2p_waitall" );
+        auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_i_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p],
-                backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_i_,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
         );
 
         line_comm_info_.waitall( comm_size, recv_requests_.data() );
@@ -2474,37 +2303,29 @@ private:
     void backward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
-        auto scope = profile_scope_( "backward_p2p_waitany" );
+        auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         for ( int p = 0; p < comm_size; ++p )
         {
             if ( p == myid_i_ )
                 continue;
             line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p],
-                backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                myid_i_,
-                recv_requests_[p]
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, recv_requests_[p]
             );
             line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p],
-                backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                p,
-                p,
-                send_requests_[p]
+                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
             );
         }
 
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
             send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ),
-            runtime_api_t::device_to_device_kind()
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
         );
         unpack_backward_chunk_( myid_i_, out );
 
@@ -2526,17 +2347,14 @@ private:
     void backward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
         line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_.data(),
-            backward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_.data(),
-            backward_rdispls_.data(),
+            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
+            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            backward_recvcounts_.data(), backward_rdispls_.data(),
             scfd::communication::detail::mpi_data_type<char>::mpi_type()
         );
 
@@ -2549,18 +2367,14 @@ private:
     void backward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
+                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ),
-            backward_sendcounts_w_.data(),
-            backward_sdispls_w_.data(),
-            backward_sendtypes_w_.data(),
-            static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_w_.data(),
-            backward_rdispls_w_.data(),
-            backward_recvtypes_w_.data()
+            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
+            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -2569,11 +2383,11 @@ private:
     }
 
 private:
-    MPIComm mpi_;
-    Log     log_;
-    profiler_t *profiler_ = nullptr;
+    MPIComm            mpi_;
+    Log                log_;
+    profiler_t        *profiler_        = nullptr;
     memory_profiler_t *memory_profiler_ = nullptr;
-    std::string memory_profile_prefix_;
+    std::string        memory_profile_prefix_;
 
     bool is_inited_ = false;
     int  myid_i_    = 0;

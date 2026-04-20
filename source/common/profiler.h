@@ -24,14 +24,12 @@ class profiler : public manual_init_singleton<profiler<Event, SHIFT_WIDTH>>
 public:
     typedef double delta_type;
 
-    profiler()
-        : name( "Profile" )
+    profiler() : name( "Profile" )
     {
         init();
     }
 
-    explicit profiler( const std::string &name_ )
-        : name( name_ )
+    explicit profiler( const std::string &name_ ) : name( name_ )
     {
         init();
     }
@@ -40,7 +38,7 @@ public:
     {
         if ( stack.back()->children.find( interval_name ) == stack.back()->children.end() )
         {
-            std::size_t next_call_index                        = stack.back()->children.size();
+            std::size_t next_call_index                      = stack.back()->children.size();
             stack.back()->children[interval_name].call_index = next_call_index;
         }
         stack.back()->children[interval_name].begin_event.record();
@@ -52,7 +50,7 @@ public:
         profile_unit *top = stack.back();
         stack.pop_back();
 
-        Event      current_event;
+        Event current_event;
         current_event.record();
         delta_type delta = current_event.elapsed_time( top->begin_event );
 
@@ -76,8 +74,7 @@ public:
     {
         profiler &prof;
 
-        explicit scoped_ticker( profiler &prof_ )
-            : prof( prof_ )
+        explicit scoped_ticker( profiler &prof_ ) : prof( prof_ )
         {
         }
 
@@ -118,17 +115,15 @@ public:
 private:
     struct profile_unit
     {
-        profile_unit()
-            : length( 0 )
-            , call_index( 0 )
+        profile_unit() : length( 0 ), call_index( 0 )
         {
         }
 
         delta_type children_time() const
         {
             delta_type s = delta_type();
-            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin(); c != children.end();
-                  ++c )
+            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin();
+                  c != children.end(); ++c )
             {
                 s += c->second.length;
             }
@@ -138,15 +133,16 @@ private:
         std::size_t total_width( const std::string &unit_name, int level ) const
         {
             std::size_t w = unit_name.size() + static_cast<std::size_t>( level );
-            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin(); c != children.end();
-                  ++c )
+            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin();
+                  c != children.end(); ++c )
             {
                 w = std::max( w, c->second.total_width( c->first, level + SHIFT_WIDTH ) );
             }
             return w;
         }
 
-        void print( std::ostream &out, const std::string &unit_name, int level, delta_type total, std::size_t width ) const
+        void
+        print( std::ostream &out, const std::string &unit_name, int level, delta_type total, std::size_t width ) const
         {
             using namespace std;
 
@@ -161,26 +157,19 @@ private:
                 if ( perc > 1e-1 )
                 {
                     out << "[" << setw( level + SHIFT_WIDTH ) << "";
-                    print_line(
-                        out,
-                        "self",
-                        val,
-                        perc,
-                        width - static_cast<std::size_t>( level + SHIFT_WIDTH )
-                    );
+                    print_line( out, "self", val, perc, width - static_cast<std::size_t>( level + SHIFT_WIDTH ) );
                 }
             }
 
             std::map<std::size_t, std::pair<std::string, const profile_unit *>> children_sorted;
-            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin(); c != children.end();
-                  ++c )
+            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin();
+                  c != children.end(); ++c )
             {
                 children_sorted[c->second.call_index] = std::make_pair( c->first, &c->second );
             }
             for ( typename std::map<std::size_t, std::pair<std::string, const profile_unit *>>::const_iterator c =
                       children_sorted.begin();
-                  c != children_sorted.end();
-                  ++c )
+                  c != children_sorted.end(); ++c )
             {
                 c->second.second->print( out, c->second.first, level + SHIFT_WIDTH, total, width );
             }
@@ -188,8 +177,8 @@ private:
 
         void add_to_totals( std::map<std::string, delta_type> &total_lengths ) const
         {
-            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin(); c != children.end();
-                  ++c )
+            for ( typename std::map<std::string, profile_unit>::const_iterator c = children.begin();
+                  c != children.end(); ++c )
             {
                 if ( total_lengths.find( c->first ) == total_lengths.end() )
                 {
@@ -201,11 +190,7 @@ private:
         }
 
         void print_line(
-            std::ostream      &out,
-            const std::string &unit_name,
-            delta_type         time,
-            double             perc,
-            std::size_t        width
+            std::ostream &out, const std::string &unit_name, delta_type time, double perc, std::size_t width
         ) const
         {
             using namespace std;
@@ -215,9 +200,9 @@ private:
                 << setprecision( 2 ) << setw( 6 ) << perc << "%)" << endl;
         }
 
-        Event                        begin_event;
-        delta_type                   length;
-        std::size_t                  call_index;
+        Event                               begin_event;
+        delta_type                          length;
+        std::size_t                         call_index;
         std::map<std::string, profile_unit> children;
     };
 
@@ -227,10 +212,7 @@ private:
         std::ios_base::fmtflags f;
         std::streamsize         p;
 
-        explicit ios_saver( std::ios_base &stream )
-            : s( stream )
-            , f( stream.flags() )
-            , p( stream.precision() )
+        explicit ios_saver( std::ios_base &stream ) : s( stream ), f( stream.flags() ), p( stream.precision() )
         {
         }
 
@@ -241,8 +223,8 @@ private:
         }
     };
 
-    std::string               name;
-    profile_unit              root;
+    std::string                 name;
+    profile_unit                root;
     std::vector<profile_unit *> stack;
 
     void init()
@@ -273,11 +255,10 @@ private:
         }
         std::map<std::string, delta_type> total_lengths;
         root.add_to_totals( total_lengths );
-        delta_type total = root.length;
+        delta_type  total = root.length;
         std::size_t width = root.total_width( name, 0 );
         for ( typename std::map<std::string, delta_type>::const_iterator c = total_lengths.begin();
-              c != total_lengths.end();
-              ++c )
+              c != total_lengths.end(); ++c )
         {
             out << "[";
             root.print_line( out, c->first, c->second, 100 * c->second / total, width );

@@ -23,33 +23,26 @@
 namespace
 {
 
-using T           = double;
-using base_fft_t  = fftm::wrap::cufft_wrap_many<T>;
+using T             = double;
+using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
 using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t   = scfd::backend::cuda;
-using reduce_t    = backend_t::reduce_type;
-using for_each_t  = backend_t::template for_each_nd_type<4, int>;
-using idx_t       = scfd::static_vec::vec<int, 4>;
-using rect_t      = scfd::static_vec::rect<int, 4>;
+using backend_t     = scfd::backend::cuda;
+using reduce_t      = backend_t::reduce_type;
+using for_each_t    = backend_t::template for_each_nd_type<4, int>;
+using idx_t         = scfd::static_vec::vec<int, 4>;
+using rect_t        = scfd::static_vec::rect<int, 4>;
 using strategy_kind = fftm::test::detail::fftm_4d_strategy_kind;
 using test_options  = fftm::test::detail::fftm_4d_test_options;
 
 template <class DistStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_poisson(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const test_options                         &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     using fftm_t = fftm::fftm<
-        base_fft_t,
-        scfd::communication::mpi_comm_info,
-        backend_t,
-        fftm::strategy_3d_pencil_pencil<Mode>,
-        scfd::utils::log_mpi,
-        DistStrategy4D
-    >;
+        base_fft_t, scfd::communication::mpi_comm_info, backend_t, fftm::strategy_3d_pencil_pencil<Mode>,
+        scfd::utils::log_mpi, DistStrategy4D>;
 
     using real_array_t = typename fftm_t::template real_array_t<4>;
     using hat_array_t  = typename fftm_t::template complex_array_t<4>;
@@ -75,8 +68,8 @@ int run_poisson(
     fftm_t distributed_fft( comm_info, log );
     distributed_fft.template init<4>( grid, sizes );
 
-    const auto in_sizes   = distributed_fft.get_local_input_sizes_4d();
-    const auto out_sizes  = distributed_fft.get_local_output_sizes_4d();
+    const auto  in_sizes    = distributed_fft.get_local_input_sizes_4d();
+    const auto  out_sizes   = distributed_fft.get_local_output_sizes_4d();
     const auto &input_part  = distributed_fft.input_partition();
     const auto &output_part = distributed_fft.output_partition();
 
@@ -101,24 +94,52 @@ int run_poisson(
     hat_array_t  dw_hat;
 
     rhs.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    exact_solution.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
+    exact_solution.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
     exact_dx.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
     exact_dy.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
     exact_dz.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
     exact_dw.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    numerical_solution.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    numerical_dx.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    numerical_dy.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    numerical_dz.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    numerical_dw.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    solution_error_sq.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    gradient_error_sq.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
-    rhs_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes ) );
-    solution_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes ) );
-    dx_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes ) );
-    dy_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes ) );
-    dz_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes ) );
-    dw_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes ) );
+    numerical_solution.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
+    numerical_dx.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
+    numerical_dy.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
+    numerical_dz.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
+    numerical_dw.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
+    solution_error_sq.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
+    gradient_error_sq.init(
+        std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
+    );
+    rhs_hat.init(
+        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+    );
+    solution_hat.init(
+        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+    );
+    dx_hat.init(
+        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+    );
+    dy_hat.init(
+        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+    );
+    dz_hat.init(
+        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+    );
+    dw_hat.init(
+        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+    );
 
     const T lx            = fftm::test::detail::poisson_4d_problem<T>::domain_length();
     const T hx            = lx / static_cast<T>( options.nx );
@@ -134,21 +155,9 @@ int run_poisson(
 
     for_each(
         fftm::test::detail::fill_poisson_4d_problem_functor<T, idx_t, real_array_t>{
-            rhs,
-            exact_solution,
-            exact_dx,
-            exact_dy,
-            exact_dz,
-            exact_dw,
-            hx,
-            hy,
-            hz,
-            hw,
-            hx * static_cast<T>( input_part.start_x[myid_i] ),
-            hy * static_cast<T>( input_part.start_y[myid_j] ),
-            hz * static_cast<T>( input_part.start_z[myid_k] ),
-            T( 0 )
-        },
+            rhs, exact_solution, exact_dx, exact_dy, exact_dz, exact_dw, hx, hy, hz, hw,
+            hx * static_cast<T>( input_part.start_x[myid_i] ), hy * static_cast<T>( input_part.start_y[myid_j] ),
+            hz * static_cast<T>( input_part.start_z[myid_k] ), T( 0 ) },
         fftm::test::detail::make_range_4d<idx_t, rect_t>( rhs )
     );
     for_each.wait();
@@ -166,15 +175,9 @@ int run_poisson(
     distributed_fft.forward( rhs, rhs_hat );
     for_each(
         fftm::test::detail::solve_poisson_4d_functor<T, idx_t, hat_array_t>{
-            rhs_hat,
-            solution_hat,
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( options.nz ),
-            static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] ),
-            static_cast<int>( output_part.start_w[myid_k] )
-        },
+            rhs_hat, solution_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+            static_cast<int>( options.nz ), static_cast<int>( output_part.start_y[myid_i] ),
+            static_cast<int>( output_part.start_z[myid_j] ), static_cast<int>( output_part.start_w[myid_k] ) },
         fftm::test::detail::make_range_4d<idx_t, rect_t>( rhs_hat )
     );
     for_each.wait();
@@ -191,18 +194,10 @@ int run_poisson(
 
     for_each(
         fftm::test::detail::poisson_4d_derivative_spectra_functor<T, idx_t, hat_array_t>{
-            solution_hat,
-            dx_hat,
-            dy_hat,
-            dz_hat,
-            dw_hat,
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( options.nz ),
-            static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] ),
-            static_cast<int>( output_part.start_w[myid_k] )
-        },
+            solution_hat, dx_hat, dy_hat, dz_hat, dw_hat, static_cast<int>( options.nx ),
+            static_cast<int>( options.ny ), static_cast<int>( options.nz ),
+            static_cast<int>( output_part.start_y[myid_i] ), static_cast<int>( output_part.start_z[myid_j] ),
+            static_cast<int>( output_part.start_w[myid_k] ) },
         fftm::test::detail::make_range_4d<idx_t, rect_t>( solution_hat )
     );
     for_each.wait();
@@ -232,25 +227,14 @@ int run_poisson(
 
     for_each(
         fftm::test::detail::poisson_4d_error_fields_functor<T, idx_t, real_array_t>{
-            numerical_solution,
-            numerical_dx,
-            numerical_dy,
-            numerical_dz,
-            numerical_dw,
-            exact_solution,
-            exact_dx,
-            exact_dy,
-            exact_dz,
-            exact_dw,
-            solution_error_sq,
-            gradient_error_sq
-        },
+            numerical_solution, numerical_dx, numerical_dy, numerical_dz, numerical_dw, exact_solution, exact_dx,
+            exact_dy, exact_dz, exact_dw, solution_error_sq, gradient_error_sq },
         fftm::test::detail::make_range_4d<idx_t, rect_t>( rhs )
     );
     for_each.wait();
 
-    const T local_l2_sq = reduce( solution_error_sq.total_size(), solution_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
-    const T local_h1_sq = reduce( gradient_error_sq.total_size(), gradient_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
+    const T local_l2_sq  = reduce( solution_error_sq.total_size(), solution_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
+    const T local_h1_sq  = reduce( gradient_error_sq.total_size(), gradient_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
     const T global_l2_sq = comm_info.all_reduce_sum( local_l2_sq );
     const T global_h1_sq = comm_info.all_reduce_sum( local_h1_sq );
 
@@ -258,15 +242,8 @@ int run_poisson(
     {
         log.info_f(
             "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
-            fftm_t::strategy_name_4d(),
-            fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ),
-            options.nx,
-            options.ny,
-            options.nz,
-            options.nw,
-            std::sqrt( global_l2_sq ),
-            std::sqrt( global_h1_sq ),
-            wall_ms
+            fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), options.nx,
+            options.ny, options.nz, options.nw, std::sqrt( global_l2_sq ), std::sqrt( global_h1_sq ), wall_ms
         );
     }
 
@@ -275,40 +252,36 @@ int run_poisson(
 
 template <fftm::mpi_transpose_3d_mode Mode>
 int run_for_strategy_kind(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const test_options                         &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( strategy )
     {
-        case strategy_kind::pencil_pencil:
-            return run_poisson<fftm::strategy_4d_pencil_pencil_mpi<Mode>, Mode>( strategy, log, options, comm_info );
-        case strategy_kind::slab_slab:
-            return run_poisson<fftm::strategy_4d_slab_slab_mpi<Mode>, Mode>( strategy, log, options, comm_info );
+    case strategy_kind::pencil_pencil:
+        return run_poisson<fftm::strategy_4d_pencil_pencil_mpi<Mode>, Mode>( strategy, log, options, comm_info );
+    case strategy_kind::slab_slab:
+        return run_poisson<fftm::strategy_4d_slab_slab_mpi<Mode>, Mode>( strategy, log, options, comm_info );
     }
 
     return 1;
 }
 
 int dispatch_mode(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const test_options                         &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( options.mode )
     {
-        case fftm::mpi_transpose_3d_mode::p2p_waitall:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::p2p_waitany:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallv:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallw:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitall:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitany:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallv:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallw:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
     }
 
     return 1;
@@ -326,14 +299,8 @@ int main( int argc, char *argv[] )
     {
         scfd::utils::init_cuda_mpi( log, comm_info );
 
-        const test_options options = fftm::test::detail::parse_fftm_4d_test_options(
-            argc,
-            argv,
-            "test_4D_poisson_mpi.bin",
-            true,
-            false,
-            false
-        );
+        const test_options options =
+            fftm::test::detail::parse_fftm_4d_test_options( argc, argv, "test_4D_poisson_mpi.bin", true, false, false );
 
         int failed = 0;
         if ( options.run_all )

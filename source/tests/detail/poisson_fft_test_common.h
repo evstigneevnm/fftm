@@ -45,20 +45,11 @@ void write_out_pos_file_scal_2D_quad( const std::string &filename, const Array &
             const T           y1 = ly * static_cast<T>( j + 1 ) / static_cast<T>( ny );
 
             std::fprintf(
-                stream,
-                "SQ(%le, %le, 0, %le, %le, 0, %le, %le, 0, %le, %le, 0){%le, %le, %le, %le};\n",
-                static_cast<double>( x0 ),
-                static_cast<double>( y0 ),
-                static_cast<double>( x1 ),
-                static_cast<double>( y0 ),
-                static_cast<double>( x1 ),
-                static_cast<double>( y1 ),
-                static_cast<double>( x0 ),
-                static_cast<double>( y1 ),
-                static_cast<double>( u( i, j ) ),
-                static_cast<double>( u( ip, j ) ),
-                static_cast<double>( u( ip, jp ) ),
-                static_cast<double>( u( i, jp ) )
+                stream, "SQ(%le, %le, 0, %le, %le, 0, %le, %le, 0, %le, %le, 0){%le, %le, %le, %le};\n",
+                static_cast<double>( x0 ), static_cast<double>( y0 ), static_cast<double>( x1 ),
+                static_cast<double>( y0 ), static_cast<double>( x1 ), static_cast<double>( y1 ),
+                static_cast<double>( x0 ), static_cast<double>( y1 ), static_cast<double>( u( i, j ) ),
+                static_cast<double>( u( ip, j ) ), static_cast<double>( u( ip, jp ) ), static_cast<double>( u( i, jp ) )
             );
         }
     }
@@ -112,38 +103,18 @@ void write_out_pos_file_scal_3D_hex( const std::string &filename, const Array &u
                     "SH(%le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, "
                     "%le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le)"
                     "{%le, %le, %le, %le, %le, %le, %le, %le};\n",
-                    static_cast<double>( x0 ),
-                    static_cast<double>( y0 ),
-                    static_cast<double>( z0 ),
-                    static_cast<double>( x1 ),
-                    static_cast<double>( y0 ),
-                    static_cast<double>( z0 ),
-                    static_cast<double>( x1 ),
-                    static_cast<double>( y1 ),
-                    static_cast<double>( z0 ),
-                    static_cast<double>( x0 ),
-                    static_cast<double>( y1 ),
-                    static_cast<double>( z0 ),
-                    static_cast<double>( x0 ),
-                    static_cast<double>( y0 ),
-                    static_cast<double>( z1 ),
-                    static_cast<double>( x1 ),
-                    static_cast<double>( y0 ),
-                    static_cast<double>( z1 ),
-                    static_cast<double>( x1 ),
-                    static_cast<double>( y1 ),
-                    static_cast<double>( z1 ),
-                    static_cast<double>( x0 ),
-                    static_cast<double>( y1 ),
-                    static_cast<double>( z1 ),
-                    static_cast<double>( u( i, j, k ) ),
-                    static_cast<double>( u( ip, j, k ) ),
-                    static_cast<double>( u( ip, jp, k ) ),
-                    static_cast<double>( u( i, jp, k ) ),
-                    static_cast<double>( u( i, j, kp ) ),
-                    static_cast<double>( u( ip, j, kp ) ),
-                    static_cast<double>( u( ip, jp, kp ) ),
-                    static_cast<double>( u( i, jp, kp ) )
+                    static_cast<double>( x0 ), static_cast<double>( y0 ), static_cast<double>( z0 ),
+                    static_cast<double>( x1 ), static_cast<double>( y0 ), static_cast<double>( z0 ),
+                    static_cast<double>( x1 ), static_cast<double>( y1 ), static_cast<double>( z0 ),
+                    static_cast<double>( x0 ), static_cast<double>( y1 ), static_cast<double>( z0 ),
+                    static_cast<double>( x0 ), static_cast<double>( y0 ), static_cast<double>( z1 ),
+                    static_cast<double>( x1 ), static_cast<double>( y0 ), static_cast<double>( z1 ),
+                    static_cast<double>( x1 ), static_cast<double>( y1 ), static_cast<double>( z1 ),
+                    static_cast<double>( x0 ), static_cast<double>( y1 ), static_cast<double>( z1 ),
+                    static_cast<double>( u( i, j, k ) ), static_cast<double>( u( ip, j, k ) ),
+                    static_cast<double>( u( ip, jp, k ) ), static_cast<double>( u( i, jp, k ) ),
+                    static_cast<double>( u( i, j, kp ) ), static_cast<double>( u( ip, j, kp ) ),
+                    static_cast<double>( u( ip, jp, kp ) ), static_cast<double>( u( i, jp, kp ) )
                 );
             }
         }

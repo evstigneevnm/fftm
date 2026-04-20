@@ -40,42 +40,31 @@ using strategy_kind = fftm::test::detail::fftm_4d_strategy_kind;
 
 template <class DistStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_benchmark_case(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const options_t                            &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     using fftm_t = fftm::fftm<
-        base_fft_t,
-        scfd::communication::mpi_comm_info,
-        backend_t,
-        fftm::strategy_3d_pencil_pencil<Mode>,
-        scfd::utils::log_mpi,
-        DistStrategy4D
-    >;
+        base_fft_t, scfd::communication::mpi_comm_info, backend_t, fftm::strategy_3d_pencil_pencil<Mode>,
+        scfd::utils::log_mpi, DistStrategy4D>;
     using real_array_t  = typename fftm_t::template real_array_t<4>;
     using hat_array_t   = typename fftm_t::template complex_array_t<4>;
     using error_array_t = scfd::arrays::array_nd<T, 1, memory_t>;
 
-    std::size_t p1 = 0, p2 = 0, p3 = 0;
+    std::size_t                              p1 = 0, p2 = 0, p3 = 0;
     fftm::test::detail::fftm_4d_test_options base_options;
-    base_options.strategy = strategy;
-    base_options.run_all  = options.run_all;
-    base_options.mode     = options.mode;
-    base_options.nx       = options.nx;
-    base_options.ny       = options.ny;
-    base_options.nz       = options.nz;
-    base_options.nw       = options.nw;
-    base_options.p1       = options.p1;
-    base_options.p2       = options.p2;
-    base_options.p3       = options.p3;
-    base_options.times    = options.times;
-    std::tie( p1, p2, p3 ) = fftm::test::detail::choose_grid_4d(
-        base_options,
-        strategy,
-        comm_info.num_procs
-    );
+    base_options.strategy  = strategy;
+    base_options.run_all   = options.run_all;
+    base_options.mode      = options.mode;
+    base_options.nx        = options.nx;
+    base_options.ny        = options.ny;
+    base_options.nz        = options.nz;
+    base_options.nw        = options.nw;
+    base_options.p1        = options.p1;
+    base_options.p2        = options.p2;
+    base_options.p3        = options.p3;
+    base_options.times     = options.times;
+    std::tie( p1, p2, p3 ) = fftm::test::detail::choose_grid_4d( base_options, strategy, comm_info.num_procs );
 
     fftm::processor_grid grid;
     grid.init( p1, p2, p3 );
@@ -92,8 +81,8 @@ int run_benchmark_case(
     fftm_t distributed_fft( comm_info, log );
     distributed_fft.template init<4>( grid, sizes );
 
-    const auto in_sizes   = distributed_fft.get_local_input_sizes_4d();
-    const auto out_sizes  = distributed_fft.get_local_output_sizes_4d();
+    const auto  in_sizes   = distributed_fft.get_local_input_sizes_4d();
+    const auto  out_sizes  = distributed_fft.get_local_output_sizes_4d();
     const auto &input_part = distributed_fft.input_partition();
 
     real_array_t work;
@@ -106,7 +95,7 @@ int run_benchmark_case(
     reduce_t   reduce;
     for_each.block_size = 128;
 
-    const T normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz * options.nw );
+    const T        normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz * options.nw );
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_norm = T( 0 );
@@ -117,13 +106,8 @@ int run_benchmark_case(
 
         for_each(
             fftm::test::detail::fill_random_real_4d_functor<T, idx_t, real_array_t>{
-                work,
-                seed,
-                static_cast<int>( input_part.start_x[myid_i] ),
-                static_cast<int>( input_part.start_y[myid_j] ),
-                static_cast<int>( input_part.start_z[myid_k] ),
-                0
-            },
+                work, seed, static_cast<int>( input_part.start_x[myid_i] ),
+                static_cast<int>( input_part.start_y[myid_j] ), static_cast<int>( input_part.start_z[myid_k] ), 0 },
             fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
         );
         for_each.wait();
@@ -145,34 +129,24 @@ int run_benchmark_case(
 
         for_each(
             fftm::test::detail::overwrite_with_random_diff_square_4d_functor<T, idx_t, real_array_t>{
-                work,
-                seed,
-                static_cast<int>( input_part.start_x[myid_i] ),
-                static_cast<int>( input_part.start_y[myid_j] ),
-                static_cast<int>( input_part.start_z[myid_k] ),
-                0
-            },
+                work, seed, static_cast<int>( input_part.start_x[myid_i] ),
+                static_cast<int>( input_part.start_y[myid_j] ), static_cast<int>( input_part.start_z[myid_k] ), 0 },
             fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
         );
         for_each.wait();
 
         const T local_diff_sq  = reduce( work.size(), work.raw_ptr(), T( 0 ) );
         const T global_diff_sq = comm_info.all_reduce_sum( local_diff_sq );
-        const T diff_l2        = std::sqrt(
-            global_diff_sq / static_cast<T>( options.nx * options.ny * options.nz * options.nw )
-        );
+        const T diff_l2 =
+            std::sqrt( global_diff_sq / static_cast<T>( options.nx * options.ny * options.nz * options.nw ) );
         if ( diff_l2 > max_norm )
             max_norm = diff_l2;
 
         if ( diff_l2 > options.epsilon && comm_info.myid == 0 )
         {
             log.warning_f(
-                "strategy=%s, mode=%s, iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e",
-                fftm_t::strategy_name_4d(),
-                fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ),
-                iter,
-                diff_l2,
-                options.epsilon
+                "strategy=%s, mode=%s, iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e", fftm_t::strategy_name_4d(),
+                fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), iter, diff_l2, options.epsilon
             );
         }
     }
@@ -182,40 +156,24 @@ int run_benchmark_case(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "benchmark=fftm-4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
-            fftm_t::strategy_name_4d(),
-            fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ),
-            p1,
-            p2,
-            p3,
-            options.nx,
-            options.ny,
-            options.nz,
-            options.nw,
-            options.times,
-            stats.mean,
-            stats.stddev
+            "benchmark=fftm-4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
+            "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
+            options.nx, options.ny, options.nz, options.nw, options.times, stats.mean, stats.stddev
         );
 
         std::ostringstream row;
-        row
-            << fftm::test::detail::csv_quote( "fftm-4d" ) << ','
-            << comm_info.num_procs << ','
+        row << fftm::test::detail::csv_quote( "fftm-4d" ) << ',' << comm_info.num_procs << ','
             << fftm::test::detail::csv_quote( fftm_t::strategy_name_4d() ) << ','
             << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ) ) << ','
-            << p1 << ',' << p2 << ',' << p3 << ','
-            << options.nx << ',' << options.ny << ',' << options.nz << ',' << options.nw << ','
-            << options.times << ','
-            << options.epsilon << ','
-            << stats.mean << ','
-            << stats.stddev << ','
-            << max_norm << ','
-            << fftm::test::detail::csv_quote( options.directory );
+            << p1 << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
+            << options.nw << ',' << options.times << ',' << options.epsilon << ',' << stats.mean << ',' << stats.stddev
+            << ',' << max_norm << ',' << fftm::test::detail::csv_quote( options.directory );
 
         fftm::test::detail::append_csv_row(
-            options.directory,
-            "benchmark_fftm_4d.csv",
-            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
+            options.directory, "benchmark_fftm_4d.csv",
+            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_"
+            "diff,directory",
             row.str()
         );
     }
@@ -225,39 +183,35 @@ int run_benchmark_case(
 
 template <fftm::mpi_transpose_3d_mode Mode>
 int dispatch_mode(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const options_t                            &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( strategy )
     {
-        case strategy_kind::pencil_pencil:
-            return run_benchmark_case<fftm::strategy_4d_pencil_pencil_mpi<Mode>, Mode>( strategy, log, options, comm_info );
-        case strategy_kind::slab_slab:
-            return run_benchmark_case<fftm::strategy_4d_slab_slab_mpi<Mode>, Mode>( strategy, log, options, comm_info );
+    case strategy_kind::pencil_pencil:
+        return run_benchmark_case<fftm::strategy_4d_pencil_pencil_mpi<Mode>, Mode>( strategy, log, options, comm_info );
+    case strategy_kind::slab_slab:
+        return run_benchmark_case<fftm::strategy_4d_slab_slab_mpi<Mode>, Mode>( strategy, log, options, comm_info );
     }
     return 1;
 }
 
 int dispatch_strategy(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const options_t                            &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( options.mode )
     {
-        case fftm::mpi_transpose_3d_mode::p2p_waitall:
-            return dispatch_mode<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::p2p_waitany:
-            return dispatch_mode<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallv:
-            return dispatch_mode<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallw:
-            return dispatch_mode<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitall:
+        return dispatch_mode<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitany:
+        return dispatch_mode<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallv:
+        return dispatch_mode<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallw:
+        return dispatch_mode<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
     }
     return 1;
 }

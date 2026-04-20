@@ -24,18 +24,18 @@ enum class fftm_4d_strategy_kind
 
 struct fftm_4d_test_options
 {
-    fftm_4d_strategy_kind    strategy  = fftm_4d_strategy_kind::pencil_pencil;
-    bool                     run_all   = false;
-    ::fftm::mpi_transpose_3d_mode mode = ::fftm::mpi_transpose_3d_mode::alltoallv;
-    std::size_t              nx        = 12;
-    std::size_t              ny        = 10;
-    std::size_t              nz        = 8;
-    std::size_t              nw        = 10;
-    std::size_t              p1        = 0;
-    std::size_t              p2        = 0;
-    std::size_t              p3        = 0;
-    double                   threshold = 1.0e-11;
-    int                      times     = 1;
+    fftm_4d_strategy_kind         strategy  = fftm_4d_strategy_kind::pencil_pencil;
+    bool                          run_all   = false;
+    ::fftm::mpi_transpose_3d_mode mode      = ::fftm::mpi_transpose_3d_mode::alltoallv;
+    std::size_t                   nx        = 12;
+    std::size_t                   ny        = 10;
+    std::size_t                   nz        = 8;
+    std::size_t                   nw        = 10;
+    std::size_t                   p1        = 0;
+    std::size_t                   p2        = 0;
+    std::size_t                   p3        = 0;
+    double                        threshold = 1.0e-11;
+    int                           times     = 1;
 };
 
 inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d( std::size_t num_procs )
@@ -74,11 +74,8 @@ inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d
     return std::make_tuple( best_p1, best_p2, best_p3 );
 }
 
-inline std::tuple<std::size_t, std::size_t, std::size_t> choose_grid_4d(
-    const fftm_4d_test_options &options,
-    fftm_4d_strategy_kind       strategy,
-    int                         num_procs
-)
+inline std::tuple<std::size_t, std::size_t, std::size_t>
+choose_grid_4d( const fftm_4d_test_options &options, fftm_4d_strategy_kind strategy, int num_procs )
 {
     if ( options.p1 != 0 && options.p2 != 0 && options.p3 != 0 )
         return std::make_tuple( options.p1, options.p2, options.p3 );
@@ -89,12 +86,8 @@ inline std::tuple<std::size_t, std::size_t, std::size_t> choose_grid_4d(
     return choose_balanced_grid_4d( static_cast<std::size_t>( num_procs ) );
 }
 
-inline std::string usage_fftm_4d_test(
-    const std::string &binary_name,
-    bool               allow_strategy_all,
-    bool               allow_threshold,
-    bool               allow_times
-)
+inline std::string
+usage_fftm_4d_test( const std::string &binary_name, bool allow_strategy_all, bool allow_threshold, bool allow_times )
 {
     std::string usage = "USAGE: " + binary_name + " [--strategy pencil-pencil|slab-slab";
     if ( allow_strategy_all )
@@ -109,13 +102,8 @@ inline std::string usage_fftm_4d_test(
 }
 
 inline fftm_4d_test_options parse_fftm_4d_test_options(
-    int                                argc,
-    char                              *argv[],
-    const std::string                 &binary_name,
-    bool                               allow_strategy_all,
-    bool                               allow_threshold,
-    bool                               allow_times,
-    const fftm_4d_test_options        &defaults = fftm_4d_test_options()
+    int argc, char *argv[], const std::string &binary_name, bool allow_strategy_all, bool allow_threshold,
+    bool allow_times, const fftm_4d_test_options &defaults = fftm_4d_test_options()
 )
 {
     fftm_4d_test_options options = defaults;

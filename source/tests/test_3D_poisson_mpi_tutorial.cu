@@ -24,26 +24,25 @@
 namespace
 {
 
-using T          = double;
-using base_fft_t = fftm::wrap::cufft_wrap_many<T>;
+using T             = double;
+using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
 using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t  = scfd::backend::cuda;
-using memory_t   = backend_t::memory_type;
-using reduce_t   = backend_t::reduce_type;
-using for_each_t = backend_t::template for_each_nd_type<3, int>;
-using idx_t      = scfd::static_vec::vec<int, 3>;
-using rect_t     = scfd::static_vec::rect<int, 3>;
+using backend_t     = scfd::backend::cuda;
+using memory_t      = backend_t::memory_type;
+using reduce_t      = backend_t::reduce_type;
+using for_each_t    = backend_t::template for_each_nd_type<3, int>;
+using idx_t         = scfd::static_vec::vec<int, 3>;
+using rect_t        = scfd::static_vec::rect<int, 3>;
 using strategy_kind = fftm::test::detail::fftm_3d_strategy_kind;
 using test_options  = fftm::test::detail::fftm_3d_test_options;
 
 template <class Strategy>
 int run_tutorial_case(
-    scfd::utils::log_mpi                      &log,
-    const test_options                        &options,
-    const scfd::communication::mpi_comm_info  &comm_info
+    scfd::utils::log_mpi &log, const test_options &options, const scfd::communication::mpi_comm_info &comm_info
 )
 {
-    using fftm_t       = fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
+    using fftm_t =
+        fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
     using real_array_t = typename fftm_t::template real_array_t<3>;
     using hat_array_t  = typename fftm_t::template complex_array_t<3>;
 
@@ -61,8 +60,8 @@ int run_tutorial_case(
     fftm_t distributed_fft( comm_info, log );
     distributed_fft.template init<3>( grid, sizes );
 
-    const auto in_sizes  = distributed_fft.get_local_input_sizes();
-    const auto out_sizes = distributed_fft.get_local_output_sizes();
+    const auto  in_sizes    = distributed_fft.get_local_input_sizes();
+    const auto  out_sizes   = distributed_fft.get_local_output_sizes();
     const auto &input_part  = distributed_fft.input_partition();
     const auto &output_part = distributed_fft.output_partition();
 
@@ -71,11 +70,11 @@ int run_tutorial_case(
     field.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ) );
     field_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ) );
 
-    const T lx = fftm::test::detail::poisson_3d_problem<T>::domain_length();
-    const T hx = lx / static_cast<T>( options.nx );
-    const T hy = lx / static_cast<T>( options.ny );
-    const T hz = lx / static_cast<T>( options.nz );
-    const T cell_volume = hx * hy * hz;
+    const T lx            = fftm::test::detail::poisson_3d_problem<T>::domain_length();
+    const T hx            = lx / static_cast<T>( options.nx );
+    const T hy            = lx / static_cast<T>( options.ny );
+    const T hz            = lx / static_cast<T>( options.nz );
+    const T cell_volume   = hx * hy * hz;
     const T normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz );
 
     for_each_t for_each;
@@ -85,20 +84,15 @@ int run_tutorial_case(
     // Step 1: fill the owned real-space chunk with the manufactured Poisson RHS.
     for_each(
         fftm::test::detail::fill_poisson_3d_rhs_functor<T, idx_t, real_array_t>{
-            field,
-            hx,
-            hy,
-            hz,
-            hx * static_cast<T>( input_part.start_x[myid_i] ),
-            hy * static_cast<T>( input_part.start_y[myid_j] ),
-            T( 0 )
-        },
+            field, hx, hy, hz, hx * static_cast<T>( input_part.start_x[myid_i] ),
+            hy * static_cast<T>( input_part.start_y[myid_j] ), T( 0 ) },
         fftm::test::detail::make_range_3d<idx_t, rect_t>( field )
     );
     for_each.wait();
 
     const T local_rhs_sum = reduce( field.size(), field.raw_ptr(), T( 0 ) );
-    const T rhs_mean = comm_info.all_reduce_sum( local_rhs_sum ) / static_cast<T>( options.nx * options.ny * options.nz );
+    const T rhs_mean =
+        comm_info.all_reduce_sum( local_rhs_sum ) / static_cast<T>( options.nx * options.ny * options.nz );
     if ( comm_info.myid == 0 && std::abs( rhs_mean ) > T( 1.0e-12 ) )
     {
         log.warning_f( "rhs_mean = %.8e", rhs_mean );
@@ -110,14 +104,8 @@ int run_tutorial_case(
         // Refill the RHS so each iteration solves the same problem without storing an extra copy.
         for_each(
             fftm::test::detail::fill_poisson_3d_rhs_functor<T, idx_t, real_array_t>{
-                field,
-                hx,
-                hy,
-                hz,
-                hx * static_cast<T>( input_part.start_x[myid_i] ),
-                hy * static_cast<T>( input_part.start_y[myid_j] ),
-                T( 0 )
-            },
+                field, hx, hy, hz, hx * static_cast<T>( input_part.start_x[myid_i] ),
+                hy * static_cast<T>( input_part.start_y[myid_j] ), T( 0 ) },
             fftm::test::detail::make_range_3d<idx_t, rect_t>( field )
         );
         for_each.wait();
@@ -132,12 +120,8 @@ int run_tutorial_case(
         // Step 3: solve -k^2 u_hat = f_hat directly on the local spectral chunk.
         for_each(
             fftm::test::detail::solve_poisson_3d_in_place_functor<T, idx_t, hat_array_t>{
-                field_hat,
-                static_cast<int>( options.nx ),
-                static_cast<int>( options.ny ),
-                static_cast<int>( output_part.start_y[myid_i] ),
-                static_cast<int>( output_part.start_z[myid_j] )
-            },
+                field_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+                static_cast<int>( output_part.start_y[myid_i] ), static_cast<int>( output_part.start_z[myid_j] ) },
             fftm::test::detail::make_range_3d<idx_t, rect_t>( field_hat )
         );
         for_each.wait();
@@ -171,14 +155,8 @@ int run_tutorial_case(
     {
         log.info_f(
             "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: solution_l2=%.8e, wall_ms=%.8e",
-            fftm_t::strategy_name(),
-            fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ),
-            options.nx,
-            options.ny,
-            options.nz,
-            options.times,
-            std::sqrt( global_l2_sq ),
-            wall_ms
+            fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.nx,
+            options.ny, options.nz, options.times, std::sqrt( global_l2_sq ), wall_ms
         );
     }
 
@@ -187,41 +165,37 @@ int run_tutorial_case(
 
 template <fftm::mpi_transpose_3d_mode Mode>
 int run_for_strategy_kind(
-    strategy_kind                              strategy,
-    scfd::utils::log_mpi                      &log,
-    const test_options                        &options,
-    const scfd::communication::mpi_comm_info  &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( strategy )
     {
-        case strategy_kind::slab_pencil:
-            return run_tutorial_case<fftm::strategy_3d_slab_pencil<Mode>>( log, options, comm_info );
-        case strategy_kind::pencil_slab:
-            return run_tutorial_case<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
-        case strategy_kind::pencil_pencil:
-            return run_tutorial_case<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
+    case strategy_kind::slab_pencil:
+        return run_tutorial_case<fftm::strategy_3d_slab_pencil<Mode>>( log, options, comm_info );
+    case strategy_kind::pencil_slab:
+        return run_tutorial_case<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
+    case strategy_kind::pencil_pencil:
+        return run_tutorial_case<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
     }
     return 1;
 }
 
 int dispatch_mode(
-    strategy_kind                              strategy,
-    scfd::utils::log_mpi                      &log,
-    const test_options                        &options,
-    const scfd::communication::mpi_comm_info  &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( options.mode )
     {
-        case fftm::mpi_transpose_3d_mode::p2p_waitall:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::p2p_waitany:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallv:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallw:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitall:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitany:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallv:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallw:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
     }
     return 1;
 }
@@ -239,13 +213,8 @@ int main( int argc, char *argv[] )
         scfd::utils::init_cuda_mpi( log, comm_info );
 
         const test_options options = fftm::test::detail::parse_fftm_3d_test_options(
-            argc,
-            argv,
-            comm_info.num_procs,
-            "test_3D_poisson_mpi_tutorial.bin",
-            false,
-            true,
-            []{
+            argc, argv, comm_info.num_procs, "test_3D_poisson_mpi_tutorial.bin", false, true,
+            [] {
                 test_options defaults;
                 defaults.nx = 128;
                 defaults.ny = 128;

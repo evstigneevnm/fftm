@@ -21,15 +21,9 @@ public:
     using memcpy_kind_t = typename runtime_api_t::memcpy_kind_t;
 
     cuda_memcpy_3d_transposer(
-        std::size_t    nx,
-        std::size_t    ny,
-        std::size_t    nz,
-        memcpy_kind_t  kind = runtime_api_t::device_to_device_kind()
+        std::size_t nx, std::size_t ny, std::size_t nz, memcpy_kind_t kind = runtime_api_t::device_to_device_kind()
     )
-        : nx_( nx )
-        , ny_( ny )
-        , nz_( nz )
-        , kind_( kind )
+        : nx_( nx ), ny_( ny ), nz_( nz ), kind_( kind )
     {
     }
 
@@ -94,10 +88,10 @@ private:
     }
 
 private:
-    std::size_t    nx_;
-    std::size_t    ny_;
-    std::size_t    nz_;
-    memcpy_kind_t  kind_;
+    std::size_t   nx_;
+    std::size_t   ny_;
+    std::size_t   nz_;
+    memcpy_kind_t kind_;
 };
 
 } // namespace detail

@@ -45,22 +45,22 @@ using yzwx_flag_t = scfd::arrays::tensor_array_nd<int, 4, memory_t, scfd::arrays
 
 struct test_options
 {
-    fftm::mpi_transpose_3d_mode mode = fftm::mpi_transpose_3d_mode::alltoallv;
+    fftm::mpi_transpose_3d_mode mode    = fftm::mpi_transpose_3d_mode::alltoallv;
     bool                        run_all = false;
-    std::size_t                 nx = 12;
-    std::size_t                 ny = 10;
-    std::size_t                 nz = 8;
-    std::size_t                 nw = 10;
-    std::size_t                 p1 = 0;
-    std::size_t                 p2 = 0;
-    std::size_t                 p3 = 0;
+    std::size_t                 nx      = 12;
+    std::size_t                 ny      = 10;
+    std::size_t                 nz      = 8;
+    std::size_t                 nw      = 10;
+    std::size_t                 p1      = 0;
+    std::size_t                 p2      = 0;
+    std::size_t                 p3      = 0;
 };
 
 std::tuple<std::size_t, std::size_t, std::size_t> choose_default_grid( std::size_t num_procs )
 {
-    std::size_t best_p1 = 1;
-    std::size_t best_p2 = 1;
-    std::size_t best_p3 = num_procs;
+    std::size_t best_p1   = 1;
+    std::size_t best_p2   = 1;
+    std::size_t best_p3   = num_procs;
     std::size_t best_span = best_p3 - best_p1;
 
     for ( std::size_t p1 = 1; p1 <= num_procs; ++p1 )
@@ -72,17 +72,17 @@ std::tuple<std::size_t, std::size_t, std::size_t> choose_default_grid( std::size
         {
             if ( rem1 % p2 != 0 )
                 continue;
-            const std::size_t p3 = rem1 / p2;
+            const std::size_t p3      = rem1 / p2;
             const std::size_t max_dim = std::max( p1, std::max( p2, p3 ) );
             const std::size_t min_dim = std::min( p1, std::min( p2, p3 ) );
-            const std::size_t span = max_dim - min_dim;
+            const std::size_t span    = max_dim - min_dim;
 
             if ( span < best_span )
             {
                 best_span = span;
-                best_p1 = p1;
-                best_p2 = p2;
-                best_p3 = p3;
+                best_p1   = p1;
+                best_p2   = p2;
+                best_p3   = p3;
             }
         }
     }
@@ -93,7 +93,7 @@ std::tuple<std::size_t, std::size_t, std::size_t> choose_default_grid( std::size
 test_options parse_options( int argc, char *argv[], int num_procs )
 {
     test_options options;
-    int argi = 1;
+    int          argi = 1;
 
     while ( argi < argc )
     {
@@ -150,8 +150,7 @@ test_options parse_options( int argc, char *argv[], int num_procs )
 
     if ( options.p1 == 0 || options.p2 == 0 || options.p3 == 0 )
     {
-        std::tie( options.p1, options.p2, options.p3 ) =
-            choose_default_grid( static_cast<std::size_t>( num_procs ) );
+        std::tie( options.p1, options.p2, options.p3 ) = choose_default_grid( static_cast<std::size_t>( num_procs ) );
     }
 
     return options;
@@ -162,13 +161,10 @@ rect_t make_range_for_array( const Array &array )
 {
     const auto size = array.size_nd();
     return rect_t(
-        idx_t( 0, 0, 0, 0 ),
-        idx_t(
-            static_cast<int>( size[0] ),
-            static_cast<int>( size[1] ),
-            static_cast<int>( size[2] ),
-            static_cast<int>( size[3] )
-        )
+        idx_t( 0, 0, 0, 0 ), idx_t(
+                                 static_cast<int>( size[0] ), static_cast<int>( size[1] ), static_cast<int>( size[2] ),
+                                 static_cast<int>( size[3] )
+                             )
     );
 }
 
@@ -208,7 +204,7 @@ struct verify_xywz_functor
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
         const complex_t expected = reference( x0 + idx[0], y0 + idx[1], w0 + idx[2], idx[3] );
-        flags( idx ) = ( array( idx ) == expected ) ? 0 : 1;
+        flags( idx )             = ( array( idx ) == expected ) ? 0 : 1;
     }
 };
 
@@ -225,7 +221,7 @@ struct verify_xzwy_functor
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
         const complex_t expected = reference( x0 + idx[0], z0 + idx[1], w0 + idx[2], idx[3] );
-        flags( idx ) = ( array( idx ) == expected ) ? 0 : 1;
+        flags( idx )             = ( array( idx ) == expected ) ? 0 : 1;
     }
 };
 
@@ -242,7 +238,7 @@ struct verify_yzwx_functor
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
         const complex_t expected = reference( y0 + idx[0], z0 + idx[1], w0 + idx[2], idx[3] );
-        flags( idx ) = ( array( idx ) == expected ) ? 0 : 1;
+        flags( idx )             = ( array( idx ) == expected ) ? 0 : 1;
     }
 };
 
@@ -259,43 +255,38 @@ struct verify_xyzw_functor
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
         const complex_t expected = reference( x0 + idx[0], y0 + idx[1], z0 + idx[2], idx[3] );
-        flags( idx ) = ( array( idx ) == expected ) ? 0 : 1;
+        flags( idx )             = ( array( idx ) == expected ) ? 0 : 1;
     }
 };
 
 void log_first_mismatch_xywz(
-    scfd::utils::log_mpi &log,
-    const xywz_array_t   &array,
-    const xywz_flag_t    &flags,
-    const xywz_array_t   &reference,
-    int                   x0,
-    int                   y0,
-    int                   w0
+    scfd::utils::log_mpi &log, const xywz_array_t &array, const xywz_flag_t &flags, const xywz_array_t &reference,
+    int x0, int y0, int w0
 )
 {
     typename xywz_array_t::view_type out_view( array );
-    typename xywz_flag_t::view_type flag_view( flags );
+    typename xywz_flag_t::view_type  flag_view( flags );
     typename xywz_array_t::view_type ref_view( reference );
-    const auto size = array.size_nd();
+    const auto                       size = array.size_nd();
 
     for ( int i = 0; i < size[0]; ++i )
-    for ( int j = 0; j < size[1]; ++j )
-    for ( int k = 0; k < size[2]; ++k )
-    for ( int l = 0; l < size[3]; ++l )
-    {
-        if ( flag_view( i, j, k, l ) == 0 )
-            continue;
-        const complex_t actual = out_view( i, j, k, l );
-        const complex_t expected = ref_view( x0 + i, y0 + j, w0 + k, l );
-        log.error_f(
-            "xywz mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)",
-            i, j, k, l, actual.real(), actual.imag(), expected.real(), expected.imag()
-        );
-        out_view.release( false );
-        flag_view.release( false );
-        ref_view.release( false );
-        return;
-    }
+        for ( int j = 0; j < size[1]; ++j )
+            for ( int k = 0; k < size[2]; ++k )
+                for ( int l = 0; l < size[3]; ++l )
+                {
+                    if ( flag_view( i, j, k, l ) == 0 )
+                        continue;
+                    const complex_t actual   = out_view( i, j, k, l );
+                    const complex_t expected = ref_view( x0 + i, y0 + j, w0 + k, l );
+                    log.error_f(
+                        "xywz mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)", i, j, k,
+                        l, actual.real(), actual.imag(), expected.real(), expected.imag()
+                    );
+                    out_view.release( false );
+                    flag_view.release( false );
+                    ref_view.release( false );
+                    return;
+                }
 
     out_view.release( false );
     flag_view.release( false );
@@ -303,38 +294,33 @@ void log_first_mismatch_xywz(
 }
 
 void log_first_mismatch_xzwy(
-    scfd::utils::log_mpi &log,
-    const xzwy_array_t   &array,
-    const xzwy_flag_t    &flags,
-    const xzwy_array_t   &reference,
-    int                   x0,
-    int                   z0,
-    int                   w0
+    scfd::utils::log_mpi &log, const xzwy_array_t &array, const xzwy_flag_t &flags, const xzwy_array_t &reference,
+    int x0, int z0, int w0
 )
 {
     typename xzwy_array_t::view_type out_view( array );
-    typename xzwy_flag_t::view_type flag_view( flags );
+    typename xzwy_flag_t::view_type  flag_view( flags );
     typename xzwy_array_t::view_type ref_view( reference );
-    const auto size = array.size_nd();
+    const auto                       size = array.size_nd();
 
     for ( int i = 0; i < size[0]; ++i )
-    for ( int j = 0; j < size[1]; ++j )
-    for ( int k = 0; k < size[2]; ++k )
-    for ( int l = 0; l < size[3]; ++l )
-    {
-        if ( flag_view( i, j, k, l ) == 0 )
-            continue;
-        const complex_t actual = out_view( i, j, k, l );
-        const complex_t expected = ref_view( x0 + i, z0 + j, w0 + k, l );
-        log.error_f(
-            "xzwy mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)",
-            i, j, k, l, actual.real(), actual.imag(), expected.real(), expected.imag()
-        );
-        out_view.release( false );
-        flag_view.release( false );
-        ref_view.release( false );
-        return;
-    }
+        for ( int j = 0; j < size[1]; ++j )
+            for ( int k = 0; k < size[2]; ++k )
+                for ( int l = 0; l < size[3]; ++l )
+                {
+                    if ( flag_view( i, j, k, l ) == 0 )
+                        continue;
+                    const complex_t actual   = out_view( i, j, k, l );
+                    const complex_t expected = ref_view( x0 + i, z0 + j, w0 + k, l );
+                    log.error_f(
+                        "xzwy mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)", i, j, k,
+                        l, actual.real(), actual.imag(), expected.real(), expected.imag()
+                    );
+                    out_view.release( false );
+                    flag_view.release( false );
+                    ref_view.release( false );
+                    return;
+                }
 
     out_view.release( false );
     flag_view.release( false );
@@ -342,38 +328,33 @@ void log_first_mismatch_xzwy(
 }
 
 void log_first_mismatch_yzwx(
-    scfd::utils::log_mpi &log,
-    const yzwx_array_t   &array,
-    const yzwx_flag_t    &flags,
-    const yzwx_array_t   &reference,
-    int                   y0,
-    int                   z0,
-    int                   w0
+    scfd::utils::log_mpi &log, const yzwx_array_t &array, const yzwx_flag_t &flags, const yzwx_array_t &reference,
+    int y0, int z0, int w0
 )
 {
     typename yzwx_array_t::view_type out_view( array );
-    typename yzwx_flag_t::view_type flag_view( flags );
+    typename yzwx_flag_t::view_type  flag_view( flags );
     typename yzwx_array_t::view_type ref_view( reference );
-    const auto size = array.size_nd();
+    const auto                       size = array.size_nd();
 
     for ( int i = 0; i < size[0]; ++i )
-    for ( int j = 0; j < size[1]; ++j )
-    for ( int k = 0; k < size[2]; ++k )
-    for ( int l = 0; l < size[3]; ++l )
-    {
-        if ( flag_view( i, j, k, l ) == 0 )
-            continue;
-        const complex_t actual = out_view( i, j, k, l );
-        const complex_t expected = ref_view( y0 + i, z0 + j, w0 + k, l );
-        log.error_f(
-            "yzwx mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)",
-            i, j, k, l, actual.real(), actual.imag(), expected.real(), expected.imag()
-        );
-        out_view.release( false );
-        flag_view.release( false );
-        ref_view.release( false );
-        return;
-    }
+        for ( int j = 0; j < size[1]; ++j )
+            for ( int k = 0; k < size[2]; ++k )
+                for ( int l = 0; l < size[3]; ++l )
+                {
+                    if ( flag_view( i, j, k, l ) == 0 )
+                        continue;
+                    const complex_t actual   = out_view( i, j, k, l );
+                    const complex_t expected = ref_view( y0 + i, z0 + j, w0 + k, l );
+                    log.error_f(
+                        "yzwx mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)", i, j, k,
+                        l, actual.real(), actual.imag(), expected.real(), expected.imag()
+                    );
+                    out_view.release( false );
+                    flag_view.release( false );
+                    ref_view.release( false );
+                    return;
+                }
 
     out_view.release( false );
     flag_view.release( false );
@@ -381,38 +362,33 @@ void log_first_mismatch_yzwx(
 }
 
 void log_first_mismatch_xyzw(
-    scfd::utils::log_mpi &log,
-    const xyzw_array_t   &array,
-    const xyzw_flag_t    &flags,
-    const xyzw_array_t   &reference,
-    int                   x0,
-    int                   y0,
-    int                   z0
+    scfd::utils::log_mpi &log, const xyzw_array_t &array, const xyzw_flag_t &flags, const xyzw_array_t &reference,
+    int x0, int y0, int z0
 )
 {
     typename xyzw_array_t::view_type out_view( array );
-    typename xyzw_flag_t::view_type flag_view( flags );
+    typename xyzw_flag_t::view_type  flag_view( flags );
     typename xyzw_array_t::view_type ref_view( reference );
-    const auto size = array.size_nd();
+    const auto                       size = array.size_nd();
 
     for ( int i = 0; i < size[0]; ++i )
-    for ( int j = 0; j < size[1]; ++j )
-    for ( int k = 0; k < size[2]; ++k )
-    for ( int l = 0; l < size[3]; ++l )
-    {
-        if ( flag_view( i, j, k, l ) == 0 )
-            continue;
-        const complex_t actual = out_view( i, j, k, l );
-        const complex_t expected = ref_view( x0 + i, y0 + j, z0 + k, l );
-        log.error_f(
-            "xyzw mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)",
-            i, j, k, l, actual.real(), actual.imag(), expected.real(), expected.imag()
-        );
-        out_view.release( false );
-        flag_view.release( false );
-        ref_view.release( false );
-        return;
-    }
+        for ( int j = 0; j < size[1]; ++j )
+            for ( int k = 0; k < size[2]; ++k )
+                for ( int l = 0; l < size[3]; ++l )
+                {
+                    if ( flag_view( i, j, k, l ) == 0 )
+                        continue;
+                    const complex_t actual   = out_view( i, j, k, l );
+                    const complex_t expected = ref_view( x0 + i, y0 + j, z0 + k, l );
+                    log.error_f(
+                        "xyzw mismatch at local=(%d,%d,%d,%d): actual=(%.17e, %.17e), expected=(%.17e, %.17e)", i, j, k,
+                        l, actual.real(), actual.imag(), expected.real(), expected.imag()
+                    );
+                    out_view.release( false );
+                    flag_view.release( false );
+                    ref_view.release( false );
+                    return;
+                }
 
     out_view.release( false );
     flag_view.release( false );
@@ -420,22 +396,13 @@ void log_first_mismatch_xyzw(
 }
 
 int check_xywz_stage(
-    scfd::utils::log_mpi                        &log,
-    const scfd::communication::mpi_comm_info    &comm_info,
-    for_each_t                                  &for_each,
-    reduce_t                                    &reduce,
-    const xywz_array_t                          &array,
-    const xywz_array_t                          &reference,
-    int                                          x0,
-    int                                          y0,
-    int                                          w0,
-    const std::string                           &stage_name,
-    fftm::mpi_transpose_3d_mode                  mode,
-    const test_options                          &options
+    scfd::utils::log_mpi &log, const scfd::communication::mpi_comm_info &comm_info, for_each_t &for_each,
+    reduce_t &reduce, const xywz_array_t &array, const xywz_array_t &reference, int x0, int y0, int w0,
+    const std::string &stage_name, fftm::mpi_transpose_3d_mode mode, const test_options &options
 )
 {
     xywz_flag_t flags;
-    const auto size = array.size_nd();
+    const auto  size = array.size_nd();
     flags.init( size[0], size[1], size[2], size[3] );
 
     for_each(
@@ -444,7 +411,7 @@ int check_xywz_stage(
     );
     for_each.wait();
 
-    const int local_errors = reduce( flags.total_size(), flags.raw_ptr(), 0 );
+    const int local_errors  = reduce( flags.total_size(), flags.raw_ptr(), 0 );
     const int global_errors = comm_info.all_reduce_sum( local_errors );
 
     if ( global_errors != 0 && local_errors != 0 )
@@ -454,11 +421,8 @@ int check_xywz_stage(
     {
         log.info_f(
             "mode=%s, stage=%s, grid=(%zu,%zu,%zu), sizes=(%zu,%zu,%zu,%zu), global_errors=%d",
-            fftm::mpi_transpose_3d_mode_name( mode ),
-            stage_name.c_str(),
-            options.p1, options.p2, options.p3,
-            options.nx, options.ny, options.nz, options.nw,
-            global_errors
+            fftm::mpi_transpose_3d_mode_name( mode ), stage_name.c_str(), options.p1, options.p2, options.p3,
+            options.nx, options.ny, options.nz, options.nw, global_errors
         );
     }
 
@@ -466,22 +430,13 @@ int check_xywz_stage(
 }
 
 int check_xzwy_stage(
-    scfd::utils::log_mpi                        &log,
-    const scfd::communication::mpi_comm_info    &comm_info,
-    for_each_t                                  &for_each,
-    reduce_t                                    &reduce,
-    const xzwy_array_t                          &array,
-    const xzwy_array_t                          &reference,
-    int                                          x0,
-    int                                          z0,
-    int                                          w0,
-    const std::string                           &stage_name,
-    fftm::mpi_transpose_3d_mode                  mode,
-    const test_options                          &options
+    scfd::utils::log_mpi &log, const scfd::communication::mpi_comm_info &comm_info, for_each_t &for_each,
+    reduce_t &reduce, const xzwy_array_t &array, const xzwy_array_t &reference, int x0, int z0, int w0,
+    const std::string &stage_name, fftm::mpi_transpose_3d_mode mode, const test_options &options
 )
 {
     xzwy_flag_t flags;
-    const auto size = array.size_nd();
+    const auto  size = array.size_nd();
     flags.init( size[0], size[1], size[2], size[3] );
 
     for_each(
@@ -490,7 +445,7 @@ int check_xzwy_stage(
     );
     for_each.wait();
 
-    const int local_errors = reduce( flags.total_size(), flags.raw_ptr(), 0 );
+    const int local_errors  = reduce( flags.total_size(), flags.raw_ptr(), 0 );
     const int global_errors = comm_info.all_reduce_sum( local_errors );
 
     if ( global_errors != 0 && local_errors != 0 )
@@ -500,11 +455,8 @@ int check_xzwy_stage(
     {
         log.info_f(
             "mode=%s, stage=%s, grid=(%zu,%zu,%zu), sizes=(%zu,%zu,%zu,%zu), global_errors=%d",
-            fftm::mpi_transpose_3d_mode_name( mode ),
-            stage_name.c_str(),
-            options.p1, options.p2, options.p3,
-            options.nx, options.ny, options.nz, options.nw,
-            global_errors
+            fftm::mpi_transpose_3d_mode_name( mode ), stage_name.c_str(), options.p1, options.p2, options.p3,
+            options.nx, options.ny, options.nz, options.nw, global_errors
         );
     }
 
@@ -512,22 +464,13 @@ int check_xzwy_stage(
 }
 
 int check_yzwx_stage(
-    scfd::utils::log_mpi                        &log,
-    const scfd::communication::mpi_comm_info    &comm_info,
-    for_each_t                                  &for_each,
-    reduce_t                                    &reduce,
-    const yzwx_array_t                          &array,
-    const yzwx_array_t                          &reference,
-    int                                          y0,
-    int                                          z0,
-    int                                          w0,
-    const std::string                           &stage_name,
-    fftm::mpi_transpose_3d_mode                  mode,
-    const test_options                          &options
+    scfd::utils::log_mpi &log, const scfd::communication::mpi_comm_info &comm_info, for_each_t &for_each,
+    reduce_t &reduce, const yzwx_array_t &array, const yzwx_array_t &reference, int y0, int z0, int w0,
+    const std::string &stage_name, fftm::mpi_transpose_3d_mode mode, const test_options &options
 )
 {
     yzwx_flag_t flags;
-    const auto size = array.size_nd();
+    const auto  size = array.size_nd();
     flags.init( size[0], size[1], size[2], size[3] );
 
     for_each(
@@ -536,7 +479,7 @@ int check_yzwx_stage(
     );
     for_each.wait();
 
-    const int local_errors = reduce( flags.total_size(), flags.raw_ptr(), 0 );
+    const int local_errors  = reduce( flags.total_size(), flags.raw_ptr(), 0 );
     const int global_errors = comm_info.all_reduce_sum( local_errors );
 
     if ( global_errors != 0 && local_errors != 0 )
@@ -546,11 +489,8 @@ int check_yzwx_stage(
     {
         log.info_f(
             "mode=%s, stage=%s, grid=(%zu,%zu,%zu), sizes=(%zu,%zu,%zu,%zu), global_errors=%d",
-            fftm::mpi_transpose_3d_mode_name( mode ),
-            stage_name.c_str(),
-            options.p1, options.p2, options.p3,
-            options.nx, options.ny, options.nz, options.nw,
-            global_errors
+            fftm::mpi_transpose_3d_mode_name( mode ), stage_name.c_str(), options.p1, options.p2, options.p3,
+            options.nx, options.ny, options.nz, options.nw, global_errors
         );
     }
 
@@ -558,22 +498,13 @@ int check_yzwx_stage(
 }
 
 int check_xyzw_stage(
-    scfd::utils::log_mpi                        &log,
-    const scfd::communication::mpi_comm_info    &comm_info,
-    for_each_t                                  &for_each,
-    reduce_t                                    &reduce,
-    const xyzw_array_t                          &array,
-    const xyzw_array_t                          &reference,
-    int                                          x0,
-    int                                          y0,
-    int                                          z0,
-    const std::string                           &stage_name,
-    fftm::mpi_transpose_3d_mode                  mode,
-    const test_options                          &options
+    scfd::utils::log_mpi &log, const scfd::communication::mpi_comm_info &comm_info, for_each_t &for_each,
+    reduce_t &reduce, const xyzw_array_t &array, const xyzw_array_t &reference, int x0, int y0, int z0,
+    const std::string &stage_name, fftm::mpi_transpose_3d_mode mode, const test_options &options
 )
 {
     xyzw_flag_t flags;
-    const auto size = array.size_nd();
+    const auto  size = array.size_nd();
     flags.init( size[0], size[1], size[2], size[3] );
 
     for_each(
@@ -582,7 +513,7 @@ int check_xyzw_stage(
     );
     for_each.wait();
 
-    const int local_errors = reduce( flags.total_size(), flags.raw_ptr(), 0 );
+    const int local_errors  = reduce( flags.total_size(), flags.raw_ptr(), 0 );
     const int global_errors = comm_info.all_reduce_sum( local_errors );
 
     if ( global_errors != 0 && local_errors != 0 )
@@ -592,11 +523,8 @@ int check_xyzw_stage(
     {
         log.info_f(
             "mode=%s, stage=%s, grid=(%zu,%zu,%zu), sizes=(%zu,%zu,%zu,%zu), global_errors=%d",
-            fftm::mpi_transpose_3d_mode_name( mode ),
-            stage_name.c_str(),
-            options.p1, options.p2, options.p3,
-            options.nx, options.ny, options.nz, options.nw,
-            global_errors
+            fftm::mpi_transpose_3d_mode_name( mode ), stage_name.c_str(), options.p1, options.p2, options.p3,
+            options.nx, options.ny, options.nz, options.nw, global_errors
         );
     }
 
@@ -604,15 +532,16 @@ int check_xyzw_stage(
 }
 
 int run_mode(
-    scfd::utils::log_mpi                         &log,
-    const test_options                           &options,
-    fftm::mpi_transpose_3d_mode                   mode,
-    const scfd::communication::mpi_comm_info     &comm_info
+    scfd::utils::log_mpi &log, const test_options &options, fftm::mpi_transpose_3d_mode mode,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
-    using same_xy_t = fftm::detail::mpi_transpose_4d_same_xy<complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
-    using same_xw_t = fftm::detail::mpi_transpose_4d_same_xw<complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
-    using same_zw_t = fftm::detail::mpi_transpose_4d_same_zw<complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+    using same_xy_t = fftm::detail::mpi_transpose_4d_same_xy<
+        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+    using same_xw_t = fftm::detail::mpi_transpose_4d_same_xw<
+        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+    using same_zw_t = fftm::detail::mpi_transpose_4d_same_zw<
+        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
 
     if ( options.nw % 2 != 0 )
         throw std::logic_error( "Nw must be even for the half-spectrum transpose test" );
@@ -636,7 +565,7 @@ int run_mode(
     std::tie( input_dim, transpose1_dim, transpose2_dim, transpose3_dim ) = partitioning.get_partitioning_4D();
 
     fftm::partition half_input_dim = input_dim;
-    half_input_dim.size_w[0] = options.nw / 2 + 1;
+    half_input_dim.size_w[0]       = options.nw / 2 + 1;
     half_input_dim.compute_offsets( true );
 
     xyzw_array_t stage0_ref;
@@ -655,14 +584,8 @@ int run_mode(
 
     for_each(
         fill_stage0_functor<idx_t, xyzw_array_t>{
-            stage0_ref,
-            0,
-            0,
-            0,
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( options.nz )
-        },
+            stage0_ref, 0, 0, 0, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+            static_cast<int>( options.nz ) },
         make_range_for_array( stage0_ref )
     );
     for_each.wait();
@@ -684,58 +607,39 @@ int run_mode(
     xyzw_array_t stage0_back;
 
     stage0_local.init(
-        half_input_dim.size_x[myid_i],
-        half_input_dim.size_y[myid_j],
-        half_input_dim.size_z[myid_k],
+        half_input_dim.size_x[myid_i], half_input_dim.size_y[myid_j], half_input_dim.size_z[myid_k],
         half_input_dim.size_w[0]
     );
     stage1_local.init(
-        transpose1_dim.size_x[myid_i],
-        transpose1_dim.size_y[myid_j],
-        transpose1_dim.size_w[myid_k],
+        transpose1_dim.size_x[myid_i], transpose1_dim.size_y[myid_j], transpose1_dim.size_w[myid_k],
         transpose1_dim.size_z[0]
     );
     stage2_local.init(
-        transpose2_dim.size_x[myid_i],
-        transpose2_dim.size_z[myid_j],
-        transpose2_dim.size_w[myid_k],
+        transpose2_dim.size_x[myid_i], transpose2_dim.size_z[myid_j], transpose2_dim.size_w[myid_k],
         transpose2_dim.size_y[0]
     );
     stage3_local.init(
-        transpose3_dim.size_y[myid_i],
-        transpose3_dim.size_z[myid_j],
-        transpose3_dim.size_w[myid_k],
+        transpose3_dim.size_y[myid_i], transpose3_dim.size_z[myid_j], transpose3_dim.size_w[myid_k],
         transpose3_dim.size_x[0]
     );
     stage2_back.init(
-        transpose2_dim.size_x[myid_i],
-        transpose2_dim.size_z[myid_j],
-        transpose2_dim.size_w[myid_k],
+        transpose2_dim.size_x[myid_i], transpose2_dim.size_z[myid_j], transpose2_dim.size_w[myid_k],
         transpose2_dim.size_y[0]
     );
     stage1_back.init(
-        transpose1_dim.size_x[myid_i],
-        transpose1_dim.size_y[myid_j],
-        transpose1_dim.size_w[myid_k],
+        transpose1_dim.size_x[myid_i], transpose1_dim.size_y[myid_j], transpose1_dim.size_w[myid_k],
         transpose1_dim.size_z[0]
     );
     stage0_back.init(
-        half_input_dim.size_x[myid_i],
-        half_input_dim.size_y[myid_j],
-        half_input_dim.size_z[myid_k],
+        half_input_dim.size_x[myid_i], half_input_dim.size_y[myid_j], half_input_dim.size_z[myid_k],
         half_input_dim.size_w[0]
     );
 
     for_each(
         fill_stage0_functor<idx_t, xyzw_array_t>{
-            stage0_local,
-            static_cast<int>( half_input_dim.start_x[myid_i] ),
-            static_cast<int>( half_input_dim.start_y[myid_j] ),
-            static_cast<int>( half_input_dim.start_z[myid_k] ),
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( options.nz )
-        },
+            stage0_local, static_cast<int>( half_input_dim.start_x[myid_i] ),
+            static_cast<int>( half_input_dim.start_y[myid_j] ), static_cast<int>( half_input_dim.start_z[myid_k] ),
+            static_cast<int>( options.nx ), static_cast<int>( options.ny ), static_cast<int>( options.nz ) },
         make_range_for_array( stage0_local )
     );
     for_each.wait();
@@ -756,18 +660,9 @@ int run_mode(
     failed = std::max(
         failed,
         check_xywz_stage(
-            log,
-            comm_info,
-            for_each,
-            reduce,
-            stage1_local,
-            stage1_ref,
-            static_cast<int>( transpose1_dim.start_x[myid_i] ),
-            static_cast<int>( transpose1_dim.start_y[myid_j] ),
-            static_cast<int>( transpose1_dim.start_w[myid_k] ),
-            "xyzw->xywz",
-            mode,
-            options
+            log, comm_info, for_each, reduce, stage1_local, stage1_ref,
+            static_cast<int>( transpose1_dim.start_x[myid_i] ), static_cast<int>( transpose1_dim.start_y[myid_j] ),
+            static_cast<int>( transpose1_dim.start_w[myid_k] ), "xyzw->xywz", mode, options
         )
     );
 
@@ -777,18 +672,9 @@ int run_mode(
     failed = std::max(
         failed,
         check_xzwy_stage(
-            log,
-            comm_info,
-            for_each,
-            reduce,
-            stage2_local,
-            stage2_ref,
-            static_cast<int>( transpose2_dim.start_x[myid_i] ),
-            static_cast<int>( transpose2_dim.start_z[myid_j] ),
-            static_cast<int>( transpose2_dim.start_w[myid_k] ),
-            "xywz->xzwy",
-            mode,
-            options
+            log, comm_info, for_each, reduce, stage2_local, stage2_ref,
+            static_cast<int>( transpose2_dim.start_x[myid_i] ), static_cast<int>( transpose2_dim.start_z[myid_j] ),
+            static_cast<int>( transpose2_dim.start_w[myid_k] ), "xywz->xzwy", mode, options
         )
     );
 
@@ -798,18 +684,9 @@ int run_mode(
     failed = std::max(
         failed,
         check_yzwx_stage(
-            log,
-            comm_info,
-            for_each,
-            reduce,
-            stage3_local,
-            stage3_ref,
-            static_cast<int>( transpose3_dim.start_y[myid_i] ),
-            static_cast<int>( transpose3_dim.start_z[myid_j] ),
-            static_cast<int>( transpose3_dim.start_w[myid_k] ),
-            "xzwy->yzwx",
-            mode,
-            options
+            log, comm_info, for_each, reduce, stage3_local, stage3_ref,
+            static_cast<int>( transpose3_dim.start_y[myid_i] ), static_cast<int>( transpose3_dim.start_z[myid_j] ),
+            static_cast<int>( transpose3_dim.start_w[myid_k] ), "xzwy->yzwx", mode, options
         )
     );
 
@@ -819,18 +696,9 @@ int run_mode(
     failed = std::max(
         failed,
         check_xzwy_stage(
-            log,
-            comm_info,
-            for_each,
-            reduce,
-            stage2_back,
-            stage2_ref,
-            static_cast<int>( transpose2_dim.start_x[myid_i] ),
-            static_cast<int>( transpose2_dim.start_z[myid_j] ),
-            static_cast<int>( transpose2_dim.start_w[myid_k] ),
-            "yzwx->xzwy",
-            mode,
-            options
+            log, comm_info, for_each, reduce, stage2_back, stage2_ref,
+            static_cast<int>( transpose2_dim.start_x[myid_i] ), static_cast<int>( transpose2_dim.start_z[myid_j] ),
+            static_cast<int>( transpose2_dim.start_w[myid_k] ), "yzwx->xzwy", mode, options
         )
     );
 
@@ -840,18 +708,9 @@ int run_mode(
     failed = std::max(
         failed,
         check_xywz_stage(
-            log,
-            comm_info,
-            for_each,
-            reduce,
-            stage1_back,
-            stage1_ref,
-            static_cast<int>( transpose1_dim.start_x[myid_i] ),
-            static_cast<int>( transpose1_dim.start_y[myid_j] ),
-            static_cast<int>( transpose1_dim.start_w[myid_k] ),
-            "xzwy->xywz",
-            mode,
-            options
+            log, comm_info, for_each, reduce, stage1_back, stage1_ref,
+            static_cast<int>( transpose1_dim.start_x[myid_i] ), static_cast<int>( transpose1_dim.start_y[myid_j] ),
+            static_cast<int>( transpose1_dim.start_w[myid_k] ), "xzwy->xywz", mode, options
         )
     );
 
@@ -861,18 +720,9 @@ int run_mode(
     failed = std::max(
         failed,
         check_xyzw_stage(
-            log,
-            comm_info,
-            for_each,
-            reduce,
-            stage0_back,
-            stage0_ref,
-            static_cast<int>( half_input_dim.start_x[myid_i] ),
-            static_cast<int>( half_input_dim.start_y[myid_j] ),
-            static_cast<int>( half_input_dim.start_z[myid_k] ),
-            "xywz->xyzw",
-            mode,
-            options
+            log, comm_info, for_each, reduce, stage0_back, stage0_ref,
+            static_cast<int>( half_input_dim.start_x[myid_i] ), static_cast<int>( half_input_dim.start_y[myid_j] ),
+            static_cast<int>( half_input_dim.start_z[myid_k] ), "xywz->xyzw", mode, options
         )
     );
 

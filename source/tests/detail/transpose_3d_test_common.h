@@ -186,13 +186,8 @@ inline void init_permuted_array( Array &array, std::size_t nx, std::size_t ny, s
 }
 
 template <permutation_3d Perm, class Array>
-inline void verify_array_shape(
-    const Array &array,
-    std::size_t  nx,
-    std::size_t  ny,
-    std::size_t  nz,
-    const std::string &array_name
-)
+inline void
+verify_array_shape( const Array &array, std::size_t nx, std::size_t ny, std::size_t nz, const std::string &array_name )
 {
     const auto expected = dims_for_permutation<Perm>( nx, ny, nz );
     const auto actual   = array.size_nd();
@@ -214,11 +209,7 @@ inline void verify_array_shape(
 
 template <class T, class Array>
 void write_out_pos_file_scal_3D_point(
-    const std::string &filename,
-    const Array       &u_in,
-    std::size_t        nx,
-    std::size_t        ny,
-    std::size_t        nz
+    const std::string &filename, const Array &u_in, std::size_t nx, std::size_t ny, std::size_t nz
 )
 {
     using view_t = typename Array::view_type;
@@ -263,38 +254,10 @@ void write_out_pos_file_scal_3D_point(
                     "SH(%le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, "
                     "%le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le, %le)"
                     "{%le, %le, %le, %le, %le, %le, %le, %le};\n",
-                    x0,
-                    y0,
-                    z0,
-                    x1,
-                    y0,
-                    z0,
-                    x1,
-                    y1,
-                    z0,
-                    x0,
-                    y1,
-                    z0,
-                    x0,
-                    y0,
-                    z1,
-                    x1,
-                    y0,
-                    z1,
-                    x1,
-                    y1,
-                    z1,
-                    x0,
-                    y1,
-                    z1,
-                    static_cast<double>( value ),
-                    static_cast<double>( value ),
-                    static_cast<double>( value ),
-                    static_cast<double>( value ),
-                    static_cast<double>( value ),
-                    static_cast<double>( value ),
-                    static_cast<double>( value ),
-                    static_cast<double>( value )
+                    x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
+                    static_cast<double>( value ), static_cast<double>( value ), static_cast<double>( value ),
+                    static_cast<double>( value ), static_cast<double>( value ), static_cast<double>( value ),
+                    static_cast<double>( value ), static_cast<double>( value )
                 );
             }
         }

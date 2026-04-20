@@ -130,15 +130,12 @@ inline std::string csv_quote( const std::string &value )
 }
 
 inline void append_csv_row(
-    const std::string &directory,
-    const std::string &filename,
-    const std::string &header,
-    const std::string &row
+    const std::string &directory, const std::string &filename, const std::string &header, const std::string &row
 )
 {
     ensure_directory_exists( directory );
-    const std::string path = join_path( directory, filename );
-    const bool write_header = !path_exists( path );
+    const std::string path         = join_path( directory, filename );
+    const bool        write_header = !path_exists( path );
 
     std::ofstream out( path.c_str(), std::ios::out | std::ios::app );
     if ( !out )
@@ -161,7 +158,7 @@ template <class T>
 __DEVICE_TAG__ inline T unit_random_from_state( unsigned long long state )
 {
     const unsigned long long bits = splitmix64( state );
-    const double unit = static_cast<double>( bits >> 11 ) * ( 1.0 / 9007199254740992.0 );
+    const double             unit = static_cast<double>( bits >> 11 ) * ( 1.0 / 9007199254740992.0 );
     return static_cast<T>( T( 2 ) * static_cast<T>( unit ) - T( 1 ) );
 }
 
@@ -180,10 +177,7 @@ struct fill_random_real_3d_functor
         const unsigned long long gy = static_cast<unsigned long long>( start_y + idx[1] );
         const unsigned long long gz = static_cast<unsigned long long>( start_z + idx[2] );
         const unsigned long long state =
-            seed ^
-            ( gx * 0xD6E8FEB86659FD93ull ) ^
-            ( gy * 0xA5A3564E27F886A5ull ) ^
-            ( gz * 0x9E3779B97F4A7C15ull );
+            seed ^ ( gx * 0xD6E8FEB86659FD93ull ) ^ ( gy * 0xA5A3564E27F886A5ull ) ^ ( gz * 0x9E3779B97F4A7C15ull );
         array( idx ) = unit_random_from_state<T>( state );
     }
 };
@@ -200,16 +194,12 @@ struct fill_random_real_4d_functor
 
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
-        const unsigned long long gx = static_cast<unsigned long long>( start_x + idx[0] );
-        const unsigned long long gy = static_cast<unsigned long long>( start_y + idx[1] );
-        const unsigned long long gz = static_cast<unsigned long long>( start_z + idx[2] );
-        const unsigned long long gw = static_cast<unsigned long long>( start_w + idx[3] );
-        const unsigned long long state =
-            seed ^
-            ( gx * 0xD6E8FEB86659FD93ull ) ^
-            ( gy * 0xA5A3564E27F886A5ull ) ^
-            ( gz * 0x9E3779B97F4A7C15ull ) ^
-            ( gw * 0x94D049BB133111EBull );
+        const unsigned long long gx    = static_cast<unsigned long long>( start_x + idx[0] );
+        const unsigned long long gy    = static_cast<unsigned long long>( start_y + idx[1] );
+        const unsigned long long gz    = static_cast<unsigned long long>( start_z + idx[2] );
+        const unsigned long long gw    = static_cast<unsigned long long>( start_w + idx[3] );
+        const unsigned long long state = seed ^ ( gx * 0xD6E8FEB86659FD93ull ) ^ ( gy * 0xA5A3564E27F886A5ull ) ^
+                                         ( gz * 0x9E3779B97F4A7C15ull ) ^ ( gw * 0x94D049BB133111EBull );
         array( idx ) = unit_random_from_state<T>( state );
     }
 };
@@ -247,7 +237,7 @@ struct diff_square_real_3d_functor
 
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
-        const T diff = actual( idx ) - reference( idx );
+        const T diff                                               = actual( idx ) - reference( idx );
         diff_sq( actual.calc_lin_index( idx[0], idx[1], idx[2] ) ) = diff * diff;
     }
 };
@@ -261,7 +251,7 @@ struct diff_square_real_4d_functor
 
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
-        const T diff = actual( idx ) - reference( idx );
+        const T diff                                                       = actual( idx ) - reference( idx );
         diff_sq( actual.calc_lin_index( idx[0], idx[1], idx[2], idx[3] ) ) = diff * diff;
     }
 };
@@ -281,13 +271,10 @@ struct overwrite_with_random_diff_square_3d_functor
         const unsigned long long gy = static_cast<unsigned long long>( start_y + idx[1] );
         const unsigned long long gz = static_cast<unsigned long long>( start_z + idx[2] );
         const unsigned long long state =
-            seed ^
-            ( gx * 0xD6E8FEB86659FD93ull ) ^
-            ( gy * 0xA5A3564E27F886A5ull ) ^
-            ( gz * 0x9E3779B97F4A7C15ull );
+            seed ^ ( gx * 0xD6E8FEB86659FD93ull ) ^ ( gy * 0xA5A3564E27F886A5ull ) ^ ( gz * 0x9E3779B97F4A7C15ull );
         const T expected = unit_random_from_state<T>( state );
-        const T diff = actual( idx ) - expected;
-        actual( idx ) = diff * diff;
+        const T diff     = actual( idx ) - expected;
+        actual( idx )    = diff * diff;
     }
 };
 
@@ -303,19 +290,15 @@ struct overwrite_with_random_diff_square_4d_functor
 
     __DEVICE_TAG__ void operator()( const Idx &idx ) const
     {
-        const unsigned long long gx = static_cast<unsigned long long>( start_x + idx[0] );
-        const unsigned long long gy = static_cast<unsigned long long>( start_y + idx[1] );
-        const unsigned long long gz = static_cast<unsigned long long>( start_z + idx[2] );
-        const unsigned long long gw = static_cast<unsigned long long>( start_w + idx[3] );
-        const unsigned long long state =
-            seed ^
-            ( gx * 0xD6E8FEB86659FD93ull ) ^
-            ( gy * 0xA5A3564E27F886A5ull ) ^
-            ( gz * 0x9E3779B97F4A7C15ull ) ^
-            ( gw * 0x94D049BB133111EBull );
+        const unsigned long long gx    = static_cast<unsigned long long>( start_x + idx[0] );
+        const unsigned long long gy    = static_cast<unsigned long long>( start_y + idx[1] );
+        const unsigned long long gz    = static_cast<unsigned long long>( start_z + idx[2] );
+        const unsigned long long gw    = static_cast<unsigned long long>( start_w + idx[3] );
+        const unsigned long long state = seed ^ ( gx * 0xD6E8FEB86659FD93ull ) ^ ( gy * 0xA5A3564E27F886A5ull ) ^
+                                         ( gz * 0x9E3779B97F4A7C15ull ) ^ ( gw * 0x94D049BB133111EBull );
         const T expected = unit_random_from_state<T>( state );
-        const T diff = actual( idx ) - expected;
-        actual( idx ) = diff * diff;
+        const T diff     = actual( idx ) - expected;
+        actual( idx )    = diff * diff;
     }
 };
 
@@ -324,12 +307,7 @@ inline Rect make_range_3d( const Array &array )
 {
     const auto sz = array.size_nd();
     return Rect(
-        Idx( 0, 0, 0 ),
-        Idx(
-            static_cast<int>( sz[0] ),
-            static_cast<int>( sz[1] ),
-            static_cast<int>( sz[2] )
-        )
+        Idx( 0, 0, 0 ), Idx( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) )
     );
 }
 
@@ -338,13 +316,8 @@ inline Rect make_range_4d( const Array &array )
 {
     const auto sz = array.size_nd();
     return Rect(
-        Idx( 0, 0, 0, 0 ),
-        Idx(
-            static_cast<int>( sz[0] ),
-            static_cast<int>( sz[1] ),
-            static_cast<int>( sz[2] ),
-            static_cast<int>( sz[3] )
-        )
+        Idx( 0, 0, 0, 0 ), Idx( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ),
+                                static_cast<int>( sz[3] ) )
     );
 }
 

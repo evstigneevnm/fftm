@@ -30,10 +30,10 @@ inline const char *transpose_backend_name( transpose_backend backend )
 {
     switch ( backend )
     {
-        case transpose_backend::direct:
-            return "direct";
-        case transpose_backend::memcpy:
-            return "memcpy";
+    case transpose_backend::direct:
+        return "direct";
+    case transpose_backend::memcpy:
+        return "memcpy";
     }
 
     return "unknown";
@@ -93,12 +93,8 @@ struct ffts_4d_strategy_traits<strategy_4d_slab_slab<Backend>>
 };
 
 template <
-    class       Real,
-    class       Complex,
-    class       Memory,
-    std::size_t Dim,
-    class       Strategy4D = strategy_4d_pencil_pencil<transpose_backend::direct>
->
+    class Real, class Complex, class Memory, std::size_t Dim,
+    class Strategy4D = strategy_4d_pencil_pencil<transpose_backend::direct>>
 struct ffts_array_traits;
 
 template <class Real, class Complex, class Memory, class Strategy4D>
@@ -118,56 +114,60 @@ struct ffts_array_traits<Real, Complex, Memory, 3, Strategy4D>
 template <class Real, class Complex, class Memory, transpose_backend Backend>
 struct ffts_array_traits<Real, Complex, Memory, 4, strategy_4d_pencil_pencil<Backend>>
 {
-    using real_array_t         = scfd::arrays::tensor_array_nd<Real, 4, Memory, scfd::arrays::custom_arranger_0123_t>;
-    using xyzw_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_0123_t>;
-    using xywz_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_0123_t>;
-    using xzwy_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_0213_t>;
-    using yzwx_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
+    using real_array_t = scfd::arrays::tensor_array_nd<Real, 4, Memory, scfd::arrays::custom_arranger_0123_t>;
+    using xyzw_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_0123_t>;
+    using xywz_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_0123_t>;
+    using xzwy_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_0213_t>;
+    using yzwx_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
     using stage0_complex_array_t = xyzw_complex_array_t;
     using stage1_complex_array_t = xywz_complex_array_t;
     using stage2_complex_array_t = xzwy_complex_array_t;
-    using complex_array_t      = yzwx_complex_array_t;
+    using complex_array_t        = yzwx_complex_array_t;
 };
 
 template <class Real, class Complex, class Memory, transpose_backend Backend>
 struct ffts_array_traits<Real, Complex, Memory, 4, strategy_4d_slab_slab<Backend>>
 {
-    using real_array_t         = scfd::arrays::tensor_array_nd<Real, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
-    using xyzw_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
-    using zwxy_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_1032_t>;
-    using yzwx_complex_array_t = scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_2103_t>;
+    using real_array_t = scfd::arrays::tensor_array_nd<Real, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
+    using xyzw_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_3210_t>;
+    using zwxy_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_1032_t>;
+    using yzwx_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 4, Memory, scfd::arrays::custom_arranger_2103_t>;
     using stage0_complex_array_t = xyzw_complex_array_t;
     using stage1_complex_array_t = zwxy_complex_array_t;
     using stage2_complex_array_t = zwxy_complex_array_t;
-    using complex_array_t      = yzwx_complex_array_t;
+    using complex_array_t        = yzwx_complex_array_t;
 };
 
 } // namespace detail
 
-template <
-    class BaseFFT,
-    class Backend,
-    class Strategy4D = strategy_4d_pencil_pencil<transpose_backend::direct>
->
+template <class BaseFFT, class Backend, class Strategy4D = strategy_4d_pencil_pencil<transpose_backend::direct>>
 class ffts
 {
 public:
-    using real     = typename BaseFFT::real;
-    using complex  = typename BaseFFT::complex;
-    using memory_t = typename Backend::memory_type;
-    using runtime_api = typename BaseFFT::runtime_api;
-    using strategy_4d_t = Strategy4D;
-    using memory_profiler_t = ffts_memory_profiler;
+    using real                       = typename BaseFFT::real;
+    using complex                    = typename BaseFFT::complex;
+    using memory_t                   = typename Backend::memory_type;
+    using runtime_api                = typename BaseFFT::runtime_api;
+    using strategy_4d_t              = Strategy4D;
+    using memory_profiler_t          = ffts_memory_profiler;
     using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
 
     template <std::size_t Dim>
     using real_array_t = typename detail::ffts_array_traits<real, complex, memory_t, Dim, Strategy4D>::real_array_t;
 
     template <std::size_t Dim>
-    using complex_array_t = typename detail::ffts_array_traits<real, complex, memory_t, Dim, Strategy4D>::complex_array_t;
+    using complex_array_t =
+        typename detail::ffts_array_traits<real, complex, memory_t, Dim, Strategy4D>::complex_array_t;
 
-    static constexpr transform_strategy_4d strategy_family_4d = detail::ffts_4d_strategy_traits<Strategy4D>::family;
-    static constexpr transpose_backend transpose_backend_4d   = detail::ffts_4d_strategy_traits<Strategy4D>::backend;
+    static constexpr transform_strategy_4d strategy_family_4d   = detail::ffts_4d_strategy_traits<Strategy4D>::family;
+    static constexpr transpose_backend     transpose_backend_4d = detail::ffts_4d_strategy_traits<Strategy4D>::backend;
 
     static const char *strategy_name()
     {
@@ -175,15 +175,8 @@ public:
     }
 
     ffts()
-        : init_done_( false )
-        , dim_( 0 )
-        , nx_( 0 )
-        , ny_( 0 )
-        , nz_( 0 )
-        , nw_( 0 )
-        , ny_half_( 0 )
-        , nz_half_( 0 )
-        , nw_half_( 0 )
+        : init_done_( false ), dim_( 0 ), nx_( 0 ), ny_( 0 ), nz_( 0 ), nw_( 0 ), ny_half_( 0 ), nz_half_( 0 ),
+          nw_half_( 0 )
     {
         for_each_4d_.block_size = 128;
     }
@@ -236,7 +229,10 @@ public:
         init_done_ = true;
     }
 
-    void init( std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw, const ffts_init_options &options = ffts_init_options() )
+    void init(
+        std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw,
+        const ffts_init_options &options = ffts_init_options()
+    )
     {
         ensure_can_init_();
         configure_memory_profiling_( options );
@@ -323,9 +319,9 @@ public:
     }
 
 private:
-    using backend_t     = Backend;
-    using runtime_api_t = typename BaseFFT::runtime_api;
-    using for_each_4d_t = typename backend_t::template for_each_nd_type<4, int>;
+    using backend_t             = Backend;
+    using runtime_api_t         = typename BaseFFT::runtime_api;
+    using for_each_4d_t         = typename backend_t::template for_each_nd_type<4, int>;
     using strategy_family_tag   = std::integral_constant<transform_strategy_4d, strategy_family_4d>;
     using transpose_backend_tag = std::integral_constant<transpose_backend, transpose_backend_4d>;
 
@@ -366,20 +362,16 @@ private:
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
         profiler->set_bytes(
-            "ffts/stage0_4d",
-            bytes_of_elems_( static_cast<std::size_t>( stage0_.total_size() ), sizeof( complex ) )
+            "ffts/stage0_4d", bytes_of_elems_( static_cast<std::size_t>( stage0_.total_size() ), sizeof( complex ) )
         );
         profiler->set_bytes(
-            "ffts/stage1_4d",
-            bytes_of_elems_( static_cast<std::size_t>( stage1_.total_size() ), sizeof( complex ) )
+            "ffts/stage1_4d", bytes_of_elems_( static_cast<std::size_t>( stage1_.total_size() ), sizeof( complex ) )
         );
         profiler->set_bytes(
-            "ffts/stage2_4d",
-            bytes_of_elems_( static_cast<std::size_t>( stage2_.total_size() ), sizeof( complex ) )
+            "ffts/stage2_4d", bytes_of_elems_( static_cast<std::size_t>( stage2_.total_size() ), sizeof( complex ) )
         );
         profiler->set_bytes(
-            "ffts/work_hat_4d",
-            bytes_of_elems_( static_cast<std::size_t>( work_hat_.total_size() ), sizeof( complex ) )
+            "ffts/work_hat_4d", bytes_of_elems_( static_cast<std::size_t>( work_hat_.total_size() ), sizeof( complex ) )
         );
     }
 
@@ -422,7 +414,8 @@ private:
         if ( dim_ != expected_dim )
         {
             throw std::logic_error(
-                "ffts: initialized for " + std::to_string( dim_ ) + "D but used as " + std::to_string( expected_dim ) + "D."
+                "ffts: initialized for " + std::to_string( dim_ ) + "D but used as " + std::to_string( expected_dim ) +
+                "D."
             );
         }
     }
@@ -430,72 +423,36 @@ private:
     void add_2d_plans_()
     {
         base_fft_.template add_plan_2D<::fftm::direction::R2C>(
-            "forward_2d",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_half_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_half_ ),
-            1
+            "forward_2d", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ), 1,
+            static_cast<long long int>( nx_ * ny_ ), static_cast<long long int>( nx_ ),
+            static_cast<long long int>( ny_half_ ), 1, static_cast<long long int>( nx_ * ny_half_ ), 1
         );
 
         base_fft_.template add_plan_2D<::fftm::direction::C2R>(
-            "inverse_2d",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_half_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_half_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ ),
-            1
+            "inverse_2d", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_half_ ), 1,
+            static_cast<long long int>( nx_ * ny_half_ ), static_cast<long long int>( nx_ ),
+            static_cast<long long int>( ny_ ), 1, static_cast<long long int>( nx_ * ny_ ), 1
         );
     }
 
     void add_3d_plans_()
     {
         base_fft_.template add_plan_3D<::fftm::direction::R2C>(
-            "forward_3d",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nz_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ * nz_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nz_half_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ * nz_half_ ),
-            1
+            "forward_3d", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nz_ ), 1, static_cast<long long int>( nx_ * ny_ * nz_ ),
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nz_half_ ), 1, static_cast<long long int>( nx_ * ny_ * nz_half_ ), 1
         );
 
         base_fft_.template add_plan_3D<::fftm::direction::C2R>(
-            "inverse_3d",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nz_half_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ * nz_half_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nz_ ),
-            1,
-            static_cast<long long int>( nx_ * ny_ * nz_ ),
-            1
+            "inverse_3d", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nz_half_ ), 1, static_cast<long long int>( nx_ * ny_ * nz_half_ ),
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ), static_cast<long long int>( nz_ ), 1,
+            static_cast<long long int>( nx_ * ny_ * nz_ ), 1
         );
     }
 
@@ -511,166 +468,70 @@ private:
         const long long int y_stride = static_cast<long long int>( nx_ * nz_ * nw_half_ );
 
         base_fft_.template add_plan_1D<::fftm::direction::R2C>(
-            "forward_w",
-            static_cast<long long int>( nw_ ),
-            1,
-            w_stride,
-            1,
-            1,
-            w_stride,
-            1,
-            real_batch
+            "forward_w", static_cast<long long int>( nw_ ), 1, w_stride, 1, 1, w_stride, 1, real_batch
         );
 
         base_fft_.template add_plan_1D<::fftm::direction::C2R>(
-            "inverse_w",
-            static_cast<long long int>( nw_ ),
-            1,
-            w_stride,
-            1,
-            1,
-            w_stride,
-            1,
-            real_batch
+            "inverse_w", static_cast<long long int>( nw_ ), 1, w_stride, 1, 1, w_stride, 1, real_batch
         );
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
-            "forward_z",
-            static_cast<long long int>( nz_ ),
-            1,
-            z_stride,
-            1,
-            1,
-            z_stride,
-            1,
-            z_batch
+            "forward_z", static_cast<long long int>( nz_ ), 1, z_stride, 1, 1, z_stride, 1, z_batch
         );
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
-            "inverse_z",
-            static_cast<long long int>( nz_ ),
-            1,
-            z_stride,
-            1,
-            1,
-            z_stride,
-            1,
-            z_batch
+            "inverse_z", static_cast<long long int>( nz_ ), 1, z_stride, 1, 1, z_stride, 1, z_batch
         );
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
-            "forward_y",
-            static_cast<long long int>( ny_ ),
-            1,
-            y_stride,
-            1,
-            1,
-            y_stride,
-            1,
-            y_batch
+            "forward_y", static_cast<long long int>( ny_ ), 1, y_stride, 1, 1, y_stride, 1, y_batch
         );
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
-            "inverse_y",
-            static_cast<long long int>( ny_ ),
-            1,
-            y_stride,
-            1,
-            1,
-            y_stride,
-            1,
-            y_batch
+            "inverse_y", static_cast<long long int>( ny_ ), 1, y_stride, 1, 1, y_stride, 1, y_batch
         );
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
-            "forward_x",
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            x_batch
+            "forward_x", static_cast<long long int>( nx_ ), 1, 1, static_cast<long long int>( nx_ ), 1, 1,
+            static_cast<long long int>( nx_ ), x_batch
         );
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
-            "inverse_x",
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            1,
-            1,
-            static_cast<long long int>( nx_ ),
-            x_batch
+            "inverse_x", static_cast<long long int>( nx_ ), 1, 1, static_cast<long long int>( nx_ ), 1, 1,
+            static_cast<long long int>( nx_ ), x_batch
         );
     }
 
     void add_4d_plans_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab> )
     {
-        const long long int zw_batch = static_cast<long long int>( nx_ * ny_ );
-        const long long int xy_batch = static_cast<long long int>( nz_ * nw_half_ );
+        const long long int zw_batch  = static_cast<long long int>( nx_ * ny_ );
+        const long long int xy_batch  = static_cast<long long int>( nz_ * nw_half_ );
         const long long int xy_stride = static_cast<long long int>( nz_ * nw_half_ );
 
         base_fft_.template add_plan_2D<::fftm::direction::R2C>(
-            "forward_zw",
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nw_ ),
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nw_ ),
-            1,
-            static_cast<long long int>( nz_ * nw_ ),
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nw_half_ ),
-            1,
-            static_cast<long long int>( nz_ * nw_half_ ),
-            zw_batch
+            "forward_zw", static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ),
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), 1,
+            static_cast<long long int>( nz_ * nw_ ), static_cast<long long int>( nz_ ),
+            static_cast<long long int>( nw_half_ ), 1, static_cast<long long int>( nz_ * nw_half_ ), zw_batch
         );
 
         base_fft_.template add_plan_2D<::fftm::direction::C2R>(
-            "inverse_zw",
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nw_ ),
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nw_half_ ),
-            1,
-            static_cast<long long int>( nz_ * nw_half_ ),
-            static_cast<long long int>( nz_ ),
-            static_cast<long long int>( nw_ ),
-            1,
-            static_cast<long long int>( nz_ * nw_ ),
-            zw_batch
+            "inverse_zw", static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ),
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_half_ ), 1,
+            static_cast<long long int>( nz_ * nw_half_ ), static_cast<long long int>( nz_ ),
+            static_cast<long long int>( nw_ ), 1, static_cast<long long int>( nz_ * nw_ ), zw_batch
         );
 
         base_fft_.template add_plan_2D<::fftm::direction::C2CF>(
-            "forward_xy",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            xy_stride,
-            1,
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            xy_stride,
-            1,
-            xy_batch
+            "forward_xy", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ), xy_stride, 1,
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ), xy_stride, 1, xy_batch
         );
 
         base_fft_.template add_plan_2D<::fftm::direction::C2CB>(
-            "inverse_xy",
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            xy_stride,
-            1,
-            static_cast<long long int>( nx_ ),
-            static_cast<long long int>( ny_ ),
-            xy_stride,
-            1,
-            xy_batch
+            "inverse_xy", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ), xy_stride, 1,
+            static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ), xy_stride, 1, xy_batch
         );
     }
 
@@ -697,13 +558,14 @@ private:
 
     void init_memcpy_transposer_( std::integral_constant<transpose_backend, transpose_backend::memcpy> )
     {
-        memcpy_transposer_.reset( new detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>( nx_, ny_, nz_, nw_half_ ) );
+        memcpy_transposer_.reset(
+            new detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>( nx_, ny_, nz_, nw_half_ )
+        );
     }
 
     void forward_4d_(
-        std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil>,
-        const real_array_t<4> &in,
-        complex_array_t<4>    &out
+        std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil>, const real_array_t<4> &in,
+        complex_array_t<4> &out
     )
     {
         base_fft_.template exec<real_array_t<4>, stage0_complex_array_t>( "forward_w", in, stage0_ );
@@ -719,9 +581,8 @@ private:
     }
 
     void forward_4d_(
-        std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab>,
-        const real_array_t<4> &in,
-        complex_array_t<4>    &out
+        std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab>, const real_array_t<4> &in,
+        complex_array_t<4> &out
     )
     {
         base_fft_.template exec<real_array_t<4>, stage0_complex_array_t>( "forward_zw", in, stage0_ );
@@ -731,9 +592,8 @@ private:
     }
 
     void backward_4d_(
-        std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil>,
-        const complex_array_t<4> &,
-        real_array_t<4>          &out
+        std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil>, const complex_array_t<4> &,
+        real_array_t<4> &out
     )
     {
         base_fft_.template exec<complex_array_t<4>, complex_array_t<4>>( "inverse_x", work_hat_, work_hat_ );
@@ -749,9 +609,8 @@ private:
     }
 
     void backward_4d_(
-        std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab>,
-        const complex_array_t<4> &,
-        real_array_t<4>          &out
+        std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab>, const complex_array_t<4> &,
+        real_array_t<4> &out
     )
     {
         transpose_yzwx_to_zwxy_( work_hat_, stage1_ );
@@ -762,9 +621,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xyzw_to_xywz_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->xyzw_to_xywz( for_each_4d_, src, dst );
@@ -772,9 +629,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xyzw_to_xywz_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->xyzw_to_xywz( for_each_4d_, src, dst );
@@ -782,9 +637,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xywz_to_xzwy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->xywz_to_xzwy( for_each_4d_, src, dst );
@@ -792,9 +645,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xywz_to_xzwy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->xywz_to_xzwy( for_each_4d_, src, dst );
@@ -802,9 +653,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xzwy_to_yzwx_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->xzwy_to_yzwx( for_each_4d_, src, dst );
@@ -812,9 +661,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xzwy_to_yzwx_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->xzwy_to_yzwx( for_each_4d_, src, dst );
@@ -822,9 +669,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_yzwx_to_xzwy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->yzwx_to_xzwy( for_each_4d_, src, dst );
@@ -832,9 +677,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_yzwx_to_xzwy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->yzwx_to_xzwy( for_each_4d_, src, dst );
@@ -842,9 +685,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xzwy_to_xywz_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->xzwy_to_xywz( for_each_4d_, src, dst );
@@ -852,9 +693,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xzwy_to_xywz_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->xzwy_to_xywz( for_each_4d_, src, dst );
@@ -862,9 +701,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xywz_to_xyzw_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->xywz_to_xyzw( for_each_4d_, src, dst );
@@ -872,9 +709,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xywz_to_xyzw_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->xywz_to_xyzw( for_each_4d_, src, dst );
@@ -882,9 +717,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xyzw_to_zwxy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->xyzw_to_zwxy( for_each_4d_, src, dst );
@@ -892,9 +725,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_xyzw_to_zwxy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->xyzw_to_zwxy( for_each_4d_, src, dst );
@@ -902,9 +733,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_xyzw_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->zwxy_to_xyzw( for_each_4d_, src, dst );
@@ -912,9 +741,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_xyzw_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->zwxy_to_xyzw( for_each_4d_, src, dst );
@@ -922,9 +749,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_yzwx_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->zwxy_to_yzwx( for_each_4d_, src, dst );
@@ -932,9 +757,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_yzwx_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->zwxy_to_yzwx( for_each_4d_, src, dst );
@@ -942,9 +765,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_yzwx_to_zwxy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::direct>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::direct>, const SrcArray &src, DstArray &dst
     )
     {
         direct_transposer_->yzwx_to_zwxy( for_each_4d_, src, dst );
@@ -952,9 +773,7 @@ private:
 
     template <class SrcArray, class DstArray>
     void transpose_yzwx_to_zwxy_backend_(
-        std::integral_constant<transpose_backend, transpose_backend::memcpy>,
-        const SrcArray &src,
-        DstArray &dst
+        std::integral_constant<transpose_backend, transpose_backend::memcpy>, const SrcArray &src, DstArray &dst
     )
     {
         memcpy_transposer_->yzwx_to_zwxy( for_each_4d_, src, dst );
@@ -1023,42 +842,31 @@ private:
     void copy_spectral_field_( const complex_array_t<4> &src, complex_array_t<4> &dst )
     {
         runtime_api_t::memcpy(
-            dst.raw_ptr(),
-            src.raw_ptr(),
-            sizeof( complex ) * static_cast<std::size_t>( src.total_size() ),
+            dst.raw_ptr(), src.raw_ptr(), sizeof( complex ) * static_cast<std::size_t>( src.total_size() ),
             runtime_api_t::device_to_device_kind()
         );
     }
 
-    void init_array_(
-        const std::array<std::size_t, 2> &grid,
-        const ffts_init_options          &options,
-        std::integral_constant<std::size_t, 2>
-    )
+    void
+    init_array_( const std::array<std::size_t, 2> &grid, const ffts_init_options &options, std::integral_constant<std::size_t, 2> )
     {
         init( grid[0], grid[1], options );
     }
 
-    void init_array_(
-        const std::array<std::size_t, 3> &grid,
-        const ffts_init_options          &options,
-        std::integral_constant<std::size_t, 3>
-    )
+    void
+    init_array_( const std::array<std::size_t, 3> &grid, const ffts_init_options &options, std::integral_constant<std::size_t, 3> )
     {
         init( grid[0], grid[1], grid[2], options );
     }
 
-    void init_array_(
-        const std::array<std::size_t, 4> &grid,
-        const ffts_init_options          &options,
-        std::integral_constant<std::size_t, 4>
-    )
+    void
+    init_array_( const std::array<std::size_t, 4> &grid, const ffts_init_options &options, std::integral_constant<std::size_t, 4> )
     {
         init( grid[0], grid[1], grid[2], grid[3], options );
     }
 
-    BaseFFT base_fft_;
-    ffts_init_options init_options_;
+    BaseFFT                    base_fft_;
+    ffts_init_options          init_options_;
     optional_memory_profiler_t memory_profiler_;
 
     bool        init_done_;

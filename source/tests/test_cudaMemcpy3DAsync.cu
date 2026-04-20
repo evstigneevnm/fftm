@@ -21,10 +21,7 @@
 template <class Idx, class ArrayLhs, class ArrayRhs, class ArrayRes>
 struct diff_functor
 {
-    diff_functor( const ArrayLhs &_lhs, const ArrayRhs &_rhs, ArrayRes &_res )
-        : lhs( _lhs )
-        , rhs( _rhs )
-        , res( _res )
+    diff_functor( const ArrayLhs &_lhs, const ArrayRhs &_rhs, ArrayRes &_res ) : lhs( _lhs ), rhs( _rhs ), res( _res )
     {
     }
 
@@ -46,7 +43,7 @@ T abs_sum_norm( const Array &array )
     view_t view( array );
 
     T norm = 0;
-    #pragma omp parallel for reduction(+:norm)
+#pragma omp parallel for reduction( + : norm )
     for ( std::size_t i = 0; i < static_cast<std::size_t>( array.total_size() ); ++i )
     {
         norm += thrust::abs( view.raw_ptr()[i] );
@@ -61,8 +58,7 @@ scfd::static_vec::rect<int, 3> make_range_for_array( const Array &array )
 {
     const auto sz = array.size_nd();
     return scfd::static_vec::rect<int, 3>(
-        Idx( 0, 0, 0 ),
-        Idx( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) )
+        Idx( 0, 0, 0 ), Idx( static_cast<int>( sz[0] ), static_cast<int>( sz[1] ), static_cast<int>( sz[2] ) )
     );
 }
 
@@ -80,7 +76,7 @@ void fill_unique_values_xyz( Array &array, std::size_t nx, std::size_t ny, std::
         {
             for ( std::size_t k = 0; k < nz; ++k )
             {
-                const T value = static_cast<T>( 1 + i + nx * ( j + ny * k ) );
+                const T value   = static_cast<T>( 1 + i + nx * ( j + ny * k ) );
                 view( i, j, k ) = complex_t( value, 0 );
             }
         }
@@ -91,12 +87,8 @@ void fill_unique_values_xyz( Array &array, std::size_t nx, std::size_t ny, std::
 
 template <fftm::tests::detail::permutation_3d Perm, class T, class Array>
 void write_pos_if_requested(
-    bool               write_pos_files,
-    const std::string &filename,
-    const Array       &array,
-    std::size_t        nx,
-    std::size_t        ny,
-    std::size_t        nz
+    bool write_pos_files, const std::string &filename, const Array &array, std::size_t nx, std::size_t ny,
+    std::size_t nz
 )
 {
     if ( !write_pos_files )
@@ -109,26 +101,12 @@ void write_pos_if_requested(
 }
 
 template <
-    class T,
-    class Idx,
-    fftm::tests::detail::permutation_3d SrcPerm,
-    fftm::tests::detail::permutation_3d DstPerm,
-    class ForEach,
-    class Transposer,
-    class SrcArray,
-    class DstArray,
-    class DiffArray>
+    class T, class Idx, fftm::tests::detail::permutation_3d SrcPerm, fftm::tests::detail::permutation_3d DstPerm,
+    class ForEach, class Transposer, class SrcArray, class DstArray, class DiffArray>
 void execute_verified_step(
-    const std::string                  &label,
-    const ForEach                      &for_each,
-    const Transposer                   &cuda_transposer,
-    scfd::utils::cuda_timer_event      &timer_begin,
-    scfd::utils::cuda_timer_event      &timer_end,
-    const SrcArray                     &src_actual,
-    const SrcArray                     &src_reference,
-    DstArray                           &dst_actual,
-    DstArray                           &dst_reference,
-    DiffArray                          &diff_array
+    const std::string &label, const ForEach &for_each, const Transposer &cuda_transposer,
+    scfd::utils::cuda_timer_event &timer_begin, scfd::utils::cuda_timer_event &timer_end, const SrcArray &src_actual,
+    const SrcArray &src_reference, DstArray &dst_actual, DstArray &dst_reference, DiffArray &diff_array
 )
 {
     using manual_t = fftm::tests::detail::manual_transpose_3d<SrcPerm, DstPerm>;
@@ -148,7 +126,7 @@ void execute_verified_step(
 
     const T reference_norm = abs_sum_norm<T>( dst_reference );
     const T diff_norm      = abs_sum_norm<T>( diff_array );
-    const T tolerance      = 10 * std::numeric_limits<T>::epsilon() * ( reference_norm > T( 1 ) ? reference_norm : T( 1 ) );
+    const T tolerance = 10 * std::numeric_limits<T>::epsilon() * ( reference_norm > T( 1 ) ? reference_norm : T( 1 ) );
 
     std::cout << label << ": " << fftm::tests::detail::permutation_3d_traits<SrcPerm>::label() << " -> "
               << fftm::tests::detail::permutation_3d_traits<DstPerm>::label() << ", diff=" << diff_norm
@@ -162,11 +140,7 @@ void execute_verified_step(
 
 template <class T, class Idx, class ForEach, class Array, class DiffArray>
 void verify_arrays_equal(
-    const std::string &label,
-    const ForEach     &for_each,
-    const Array       &lhs,
-    const Array       &rhs,
-    DiffArray         &diff_array
+    const std::string &label, const ForEach &for_each, const Array &lhs, const Array &rhs, DiffArray &diff_array
 )
 {
     const auto diff_range = make_range_for_array<Idx>( lhs );
@@ -175,7 +149,7 @@ void verify_arrays_equal(
 
     const T reference_norm = abs_sum_norm<T>( rhs );
     const T diff_norm      = abs_sum_norm<T>( diff_array );
-    const T tolerance      = 10 * std::numeric_limits<T>::epsilon() * ( reference_norm > T( 1 ) ? reference_norm : T( 1 ) );
+    const T tolerance = 10 * std::numeric_limits<T>::epsilon() * ( reference_norm > T( 1 ) ? reference_norm : T( 1 ) );
 
     std::cout << label << ": diff=" << diff_norm << std::endl;
 
@@ -189,11 +163,11 @@ int main( int argc, char const *argv[] )
 {
     static const int dim = 3;
 
-    using T         = double;
-    using complex_t = thrust::complex<T>;
-    using idx_t     = scfd::static_vec::vec<int, dim>;
-    using backend_t = scfd::backend::cuda;
-    using memory_t  = backend_t::memory_type;
+    using T          = double;
+    using complex_t  = thrust::complex<T>;
+    using idx_t      = scfd::static_vec::vec<int, dim>;
+    using backend_t  = scfd::backend::cuda;
+    using memory_t   = backend_t::memory_type;
     using for_each_t = backend_t::for_each_nd_type<dim>;
     using timer_t    = scfd::utils::cuda_timer_event;
     using perm_t     = fftm::tests::detail::permutation_3d;
@@ -205,9 +179,9 @@ int main( int argc, char const *argv[] )
     using yzx_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::yzx>;
     using yxz_array_t = fftm::tests::detail::permuted_tensor_3d_t<complex_t, memory_t, perm_t::yxz>;
 
-    std::size_t nx = 20;
-    std::size_t ny = 30;
-    std::size_t nz = 50;
+    std::size_t nx              = 20;
+    std::size_t ny              = 30;
+    std::size_t nz              = 50;
     bool        write_pos_files = false;
 
     int argi = 1;
@@ -289,81 +263,33 @@ int main( int argc, char const *argv[] )
     fill_unique_values_xyz<T>( xyz_initial, nx, ny, nz );
 
     execute_verified_step<T, idx_t, perm_t::xyz, perm_t::xzy>(
-        "Step 1",
-        for_each,
-        cuda_transposer,
-        timer_begin,
-        timer_end,
-        xyz_initial,
-        xyz_initial,
-        xzy_actual,
-        xzy_reference,
-        xzy_diff
+        "Step 1", for_each, cuda_transposer, timer_begin, timer_end, xyz_initial, xyz_initial, xzy_actual,
+        xzy_reference, xzy_diff
     );
 
     execute_verified_step<T, idx_t, perm_t::xzy, perm_t::zxy>(
-        "Step 2",
-        for_each,
-        cuda_transposer,
-        timer_begin,
-        timer_end,
-        xzy_actual,
-        xzy_reference,
-        zxy_actual,
-        zxy_reference,
-        zxy_diff
+        "Step 2", for_each, cuda_transposer, timer_begin, timer_end, xzy_actual, xzy_reference, zxy_actual,
+        zxy_reference, zxy_diff
     );
 
     execute_verified_step<T, idx_t, perm_t::zxy, perm_t::zyx>(
-        "Step 3",
-        for_each,
-        cuda_transposer,
-        timer_begin,
-        timer_end,
-        zxy_actual,
-        zxy_reference,
-        zyx_actual,
-        zyx_reference,
-        zyx_diff
+        "Step 3", for_each, cuda_transposer, timer_begin, timer_end, zxy_actual, zxy_reference, zyx_actual,
+        zyx_reference, zyx_diff
     );
 
     execute_verified_step<T, idx_t, perm_t::zyx, perm_t::yzx>(
-        "Step 4",
-        for_each,
-        cuda_transposer,
-        timer_begin,
-        timer_end,
-        zyx_actual,
-        zyx_reference,
-        yzx_actual,
-        yzx_reference,
-        yzx_diff
+        "Step 4", for_each, cuda_transposer, timer_begin, timer_end, zyx_actual, zyx_reference, yzx_actual,
+        yzx_reference, yzx_diff
     );
 
     execute_verified_step<T, idx_t, perm_t::yzx, perm_t::yxz>(
-        "Step 5",
-        for_each,
-        cuda_transposer,
-        timer_begin,
-        timer_end,
-        yzx_actual,
-        yzx_reference,
-        yxz_actual,
-        yxz_reference,
-        yxz_diff
+        "Step 5", for_each, cuda_transposer, timer_begin, timer_end, yzx_actual, yzx_reference, yxz_actual,
+        yxz_reference, yxz_diff
     );
 
     execute_verified_step<T, idx_t, perm_t::yxz, perm_t::xyz>(
-        "Step 6",
-        for_each,
-        cuda_transposer,
-        timer_begin,
-        timer_end,
-        yxz_actual,
-        yxz_reference,
-        xyz_roundtrip_actual,
-        xyz_roundtrip_reference,
-        xyz_diff
+        "Step 6", for_each, cuda_transposer, timer_begin, timer_end, yxz_actual, yxz_reference, xyz_roundtrip_actual,
+        xyz_roundtrip_reference, xyz_diff
     );
 
     verify_arrays_equal<T, idx_t>( "Round-trip", for_each, xyz_roundtrip_actual, xyz_initial, xyz_diff );
@@ -380,7 +306,9 @@ int main( int argc, char const *argv[] )
     write_pos_if_requested<perm_t::yxz, T>( write_pos_files, "step5_yxz_actual.pos", yxz_actual, nx, ny, nz );
     write_pos_if_requested<perm_t::yxz, T>( write_pos_files, "step5_yxz_manual.pos", yxz_reference, nx, ny, nz );
     write_pos_if_requested<perm_t::xyz, T>( write_pos_files, "step6_xyz_actual.pos", xyz_roundtrip_actual, nx, ny, nz );
-    write_pos_if_requested<perm_t::xyz, T>( write_pos_files, "step6_xyz_manual.pos", xyz_roundtrip_reference, nx, ny, nz );
+    write_pos_if_requested<perm_t::xyz, T>(
+        write_pos_files, "step6_xyz_manual.pos", xyz_roundtrip_reference, nx, ny, nz
+    );
 
     return EXIT_SUCCESS;
 }

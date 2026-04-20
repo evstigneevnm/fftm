@@ -25,26 +25,25 @@
 namespace
 {
 
-using T          = double;
-using base_fft_t = fftm::wrap::cufft_wrap_many<T>;
+using T             = double;
+using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
 using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t  = scfd::backend::cuda;
-using memory_t   = backend_t::memory_type;
-using reduce_t   = backend_t::reduce_type;
-using for_each_t = backend_t::template for_each_nd_type<3, int>;
-using idx_t      = scfd::static_vec::vec<int, 3>;
-using rect_t     = scfd::static_vec::rect<int, 3>;
+using backend_t     = scfd::backend::cuda;
+using memory_t      = backend_t::memory_type;
+using reduce_t      = backend_t::reduce_type;
+using for_each_t    = backend_t::template for_each_nd_type<3, int>;
+using idx_t         = scfd::static_vec::vec<int, 3>;
+using rect_t        = scfd::static_vec::rect<int, 3>;
 using strategy_kind = fftm::test::detail::fftm_3d_strategy_kind;
 using test_options  = fftm::test::detail::fftm_3d_test_options;
 
 template <class Strategy>
 int run_poisson(
-    scfd::utils::log_mpi                        &log,
-    const test_options                          &options,
-    const scfd::communication::mpi_comm_info    &comm_info
+    scfd::utils::log_mpi &log, const test_options &options, const scfd::communication::mpi_comm_info &comm_info
 )
 {
-    using fftm_t      = fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
+    using fftm_t =
+        fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
     using real_array_t = typename fftm_t::template real_array_t<3>;
     using hat_array_t  = typename fftm_t::template complex_array_t<3>;
     using err_array_t  = scfd::arrays::array_nd<T, 3, memory_t, scfd::arrays::custom_arranger_102_t>;
@@ -100,11 +99,11 @@ int run_poisson(
     dy_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ) );
     dz_hat.init( std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ) );
 
-    const T lx = fftm::test::detail::poisson_3d_problem<T>::domain_length();
-    const T hx = lx / static_cast<T>( options.nx );
-    const T hy = lx / static_cast<T>( options.ny );
-    const T hz = lx / static_cast<T>( options.nz );
-    const T cell_volume = hx * hy * hz;
+    const T lx            = fftm::test::detail::poisson_3d_problem<T>::domain_length();
+    const T hx            = lx / static_cast<T>( options.nx );
+    const T hy            = lx / static_cast<T>( options.ny );
+    const T hz            = lx / static_cast<T>( options.nz );
+    const T cell_volume   = hx * hy * hz;
     const T normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz );
 
     for_each_t for_each;
@@ -116,24 +115,16 @@ int run_poisson(
 
     for_each(
         fftm::test::detail::fill_poisson_3d_problem_functor<T, idx_t, real_array_t>{
-            rhs,
-            exact_solution,
-            exact_dx,
-            exact_dy,
-            exact_dz,
-            hx,
-            hy,
-            hz,
-            hx * static_cast<T>( input_part.start_x[myid_i] ),
-            hy * static_cast<T>( input_part.start_y[myid_j] ),
-            T( 0 )
-        },
+            rhs, exact_solution, exact_dx, exact_dy, exact_dz, hx, hy, hz,
+            hx * static_cast<T>( input_part.start_x[myid_i] ), hy * static_cast<T>( input_part.start_y[myid_j] ),
+            T( 0 ) },
         fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs )
     );
     for_each.wait();
 
     const T local_rhs_sum = reduce( rhs.size(), rhs.raw_ptr(), T( 0 ) );
-    const T rhs_mean = comm_info.all_reduce_sum( local_rhs_sum ) / static_cast<T>( options.nx * options.ny * options.nz );
+    const T rhs_mean =
+        comm_info.all_reduce_sum( local_rhs_sum ) / static_cast<T>( options.nx * options.ny * options.nz );
     if ( comm_info.myid == 0 && std::abs( rhs_mean ) > T( 1.0e-12 ) )
     {
         log.warning_f( "rhs_mean = %.8e", rhs_mean );
@@ -146,13 +137,8 @@ int run_poisson(
     distributed_fft.forward( rhs, rhs_hat );
     for_each(
         fftm::test::detail::solve_poisson_3d_functor<T, idx_t, hat_array_t>{
-            rhs_hat,
-            solution_hat,
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] )
-        },
+            rhs_hat, solution_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+            static_cast<int>( output_part.start_y[myid_i] ), static_cast<int>( output_part.start_z[myid_j] ) },
         fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs_hat )
     );
     for_each.wait();
@@ -169,15 +155,8 @@ int run_poisson(
 
     for_each(
         fftm::test::detail::poisson_3d_derivative_spectra_functor<T, idx_t, hat_array_t>{
-            solution_hat,
-            dx_hat,
-            dy_hat,
-            dz_hat,
-            static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ),
-            static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] )
-        },
+            solution_hat, dx_hat, dy_hat, dz_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+            static_cast<int>( output_part.start_y[myid_i] ), static_cast<int>( output_part.start_z[myid_j] ) },
         fftm::test::detail::make_range_3d<idx_t, rect_t>( solution_hat )
     );
     for_each.wait();
@@ -201,38 +180,23 @@ int run_poisson(
 
     for_each(
         fftm::test::detail::poisson_3d_error_fields_functor<T, idx_t, real_array_t>{
-            numerical_solution,
-            numerical_dx,
-            numerical_dy,
-            numerical_dz,
-            exact_solution,
-            exact_dx,
-            exact_dy,
-            exact_dz,
-            solution_error_sq,
-            gradient_error_sq
-        },
+            numerical_solution, numerical_dx, numerical_dy, numerical_dz, exact_solution, exact_dx, exact_dy, exact_dz,
+            solution_error_sq, gradient_error_sq },
         fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs )
     );
     for_each.wait();
 
-    const T local_l2_sq = reduce( solution_error_sq.size(), solution_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
-    const T local_h1_sq = reduce( gradient_error_sq.size(), gradient_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
+    const T local_l2_sq  = reduce( solution_error_sq.size(), solution_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
+    const T local_h1_sq  = reduce( gradient_error_sq.size(), gradient_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
     const T global_l2_sq = comm_info.all_reduce_sum( local_l2_sq );
     const T global_h1_sq = comm_info.all_reduce_sum( local_h1_sq );
 
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
-            fftm_t::strategy_name(),
-            fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ),
-            options.nx,
-            options.ny,
-            options.nz,
-            std::sqrt( global_l2_sq ),
-            std::sqrt( global_h1_sq ),
-            wall_ms
+            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e", fftm_t::strategy_name(),
+            fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.nx, options.ny, options.nz,
+            std::sqrt( global_l2_sq ), std::sqrt( global_h1_sq ), wall_ms
         );
     }
 
@@ -241,41 +205,37 @@ int run_poisson(
 
 template <fftm::mpi_transpose_3d_mode Mode>
 int run_for_strategy_kind(
-    strategy_kind                               strategy,
-    scfd::utils::log_mpi                       &log,
-    const test_options                         &options,
-    const scfd::communication::mpi_comm_info   &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( strategy )
     {
-        case strategy_kind::slab_pencil:
-            return run_poisson<fftm::strategy_3d_slab_pencil<Mode>>( log, options, comm_info );
-        case strategy_kind::pencil_slab:
-            return run_poisson<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
-        case strategy_kind::pencil_pencil:
-            return run_poisson<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
+    case strategy_kind::slab_pencil:
+        return run_poisson<fftm::strategy_3d_slab_pencil<Mode>>( log, options, comm_info );
+    case strategy_kind::pencil_slab:
+        return run_poisson<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
+    case strategy_kind::pencil_pencil:
+        return run_poisson<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
     }
     return 1;
 }
 
 int dispatch_mode(
-    strategy_kind                              strategy,
-    scfd::utils::log_mpi                      &log,
-    const test_options                        &options,
-    const scfd::communication::mpi_comm_info  &comm_info
+    strategy_kind strategy, scfd::utils::log_mpi &log, const test_options &options,
+    const scfd::communication::mpi_comm_info &comm_info
 )
 {
     switch ( options.mode )
     {
-        case fftm::mpi_transpose_3d_mode::p2p_waitall:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::p2p_waitany:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallv:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
-        case fftm::mpi_transpose_3d_mode::alltoallw:
-            return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitall:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitall>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::p2p_waitany:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::p2p_waitany>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallv:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallv>( strategy, log, options, comm_info );
+    case fftm::mpi_transpose_3d_mode::alltoallw:
+        return run_for_strategy_kind<fftm::mpi_transpose_3d_mode::alltoallw>( strategy, log, options, comm_info );
     }
     return 1;
 }
@@ -293,12 +253,7 @@ int main( int argc, char *argv[] )
         scfd::utils::init_cuda_mpi( log, comm_info );
 
         const test_options options = fftm::test::detail::parse_fftm_3d_test_options(
-            argc,
-            argv,
-            comm_info.num_procs,
-            "test_3D_poisson_mpi.bin",
-            true,
-            false
+            argc, argv, comm_info.num_procs, "test_3D_poisson_mpi.bin", true, false
         );
         if ( options.p1 * options.p2 != static_cast<std::size_t>( comm_info.num_procs ) )
             throw std::logic_error( "P1*P2 must equal the number of MPI processes" );

@@ -21,30 +21,18 @@ template <class FFTS>
 class poisson_4d_fft_case
 {
 public:
-    using T         = typename FFTS::real;
-    using results_t = std::pair<std::pair<T, T>, T>;
+    using T             = typename FFTS::real;
+    using results_t     = std::pair<std::pair<T, T>, T>;
     using runtime_api_t = typename FFTS::runtime_api;
 
-    poisson_4d_fft_case(
-        std::size_t             nx,
-        std::size_t             ny,
-        std::size_t             nz,
-        std::size_t             nw
-    )
-        : nx_( nx )
-        , ny_( ny )
-        , nz_( nz )
-        , nw_( nw )
-        , nw_half_( nw / 2 + 1 )
-        , hx_( domain_length() / static_cast<T>( nx_ ) )
-        , hy_( domain_length() / static_cast<T>( ny_ ) )
-        , hz_( domain_length() / static_cast<T>( nz_ ) )
-        , hw_( domain_length() / static_cast<T>( nw_ ) )
-        , cell_volume_( hx_ * hy_ * hz_ * hw_ )
-        , real_range_( idx_t( 0, 0, 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ), to_int( nz_ ), to_int( nw_ ) ) )
-        , spectral_range_yzwx_(
-              idx_t( 0, 0, 0, 0 ),
-              idx_t( to_int( ny_ ), to_int( nz_ ), to_int( nw_half_ ), to_int( nx_ ) )
+    poisson_4d_fft_case( std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw )
+        : nx_( nx ), ny_( ny ), nz_( nz ), nw_( nw ), nw_half_( nw / 2 + 1 ),
+          hx_( domain_length() / static_cast<T>( nx_ ) ), hy_( domain_length() / static_cast<T>( ny_ ) ),
+          hz_( domain_length() / static_cast<T>( nz_ ) ), hw_( domain_length() / static_cast<T>( nw_ ) ),
+          cell_volume_( hx_ * hy_ * hz_ * hw_ ),
+          real_range_( idx_t( 0, 0, 0, 0 ), idx_t( to_int( nx_ ), to_int( ny_ ), to_int( nz_ ), to_int( nw_ ) ) ),
+          spectral_range_yzwx_(
+              idx_t( 0, 0, 0, 0 ), idx_t( to_int( ny_ ), to_int( nz_ ), to_int( nw_half_ ), to_int( nx_ ) )
           )
     {
         if ( nx_ < 2 || ny_ < 2 || nz_ < 2 || nw_ < 2 )
@@ -72,12 +60,12 @@ public:
 private:
     static constexpr int dim = 4;
 
-    using backend_t      = scfd::backend::cuda;
-    using for_each_t     = typename backend_t::template for_each_nd_type<dim, int>;
-    using reduce_t       = typename backend_t::reduce_type;
-    using idx_t          = scfd::static_vec::vec<int, dim>;
-    using range_t        = scfd::static_vec::rect<int, dim>;
-    using real_array_t   = typename FFTS::template real_array_t<4>;
+    using backend_t       = scfd::backend::cuda;
+    using for_each_t      = typename backend_t::template for_each_nd_type<dim, int>;
+    using reduce_t        = typename backend_t::reduce_type;
+    using idx_t           = scfd::static_vec::vec<int, dim>;
+    using range_t         = scfd::static_vec::rect<int, dim>;
+    using real_array_t    = typename FFTS::template real_array_t<4>;
     using complex_array_t = typename FFTS::template complex_array_t<4>;
 
 public:
@@ -89,10 +77,10 @@ public:
         real_array_t exact_dy;
         real_array_t exact_dz;
         real_array_t exact_dw;
-        T hx;
-        T hy;
-        T hz;
-        T hw;
+        T            hx;
+        T            hy;
+        T            hz;
+        T            hw;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -102,10 +90,10 @@ public:
             const T w  = hw * static_cast<T>( idx[3] );
             const T pi = scfd::utils::scalar_traits<T>::pi();
 
-            const T dx = x - pi;
-            const T dy = y - pi;
-            const T dz = z - pi;
-            const T dw = w - pi;
+            const T dx       = x - pi;
+            const T dy       = y - pi;
+            const T dz       = z - pi;
+            const T dw       = w - pi;
             const T exponent = -( dx * dx + dy * dy + dz * dz + dw * dw );
 
             const T gaussian = scfd::utils::scalar_traits<T>::exp( exponent );
@@ -128,19 +116,17 @@ public:
             rhs( idx ) = T( 100 ) * gaussian *
                          ( ( T( 4 ) * dx * dx + T( 4 ) * dy * dy + T( 4 ) * dz * dz + T( 4 ) * dw * dw - T( 12 ) ) *
                                sin_x * sin_y * sin_z * sin_w -
-                           T( 4 ) * dx * cos_x * sin_y * sin_z * sin_w -
-                           T( 4 ) * dy * sin_x * cos_y * sin_z * sin_w -
-                           T( 4 ) * dz * sin_x * sin_y * cos_z * sin_w -
-                           T( 4 ) * dw * sin_x * sin_y * sin_z * cos_w );
+                           T( 4 ) * dx * cos_x * sin_y * sin_z * sin_w - T( 4 ) * dy * sin_x * cos_y * sin_z * sin_w -
+                           T( 4 ) * dz * sin_x * sin_y * cos_z * sin_w - T( 4 ) * dw * sin_x * sin_y * sin_z * cos_w );
         }
     };
 
     struct solve_fourier_functor
     {
         complex_array_t field_hat;
-        int nx;
-        int ny;
-        int nz;
+        int             nx;
+        int             ny;
+        int             nz;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -172,10 +158,10 @@ public:
     {
         complex_array_t solution_hat;
         complex_array_t field_hat;
-        int axis;
-        int nx;
-        int ny;
-        int nz;
+        int             axis;
+        int             nx;
+        int             ny;
+        int             nz;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -213,7 +199,7 @@ public:
     struct scale_real_functor
     {
         real_array_t field;
-        T scale;
+        T            scale;
 
         __DEVICE_TAG__ void operator()( const idx_t &idx )
         {
@@ -311,8 +297,7 @@ private:
     void solve_in_fourier_space()
     {
         for_each_(
-            solve_fourier_functor{ solution_hat_, to_int( nx_ ), to_int( ny_ ), to_int( nz_ ) },
-            spectral_range_yzwx_
+            solve_fourier_functor{ solution_hat_, to_int( nx_ ), to_int( ny_ ), to_int( nz_ ) }, spectral_range_yzwx_
         );
         for_each_.wait();
     }
@@ -405,8 +390,7 @@ private:
     void copy_spectral_field( const complex_array_t &src, complex_array_t &dst )
     {
         runtime_api_t::memcpy(
-            dst.raw_ptr(),
-            src.raw_ptr(),
+            dst.raw_ptr(), src.raw_ptr(),
             sizeof( typename FFTS::complex ) * static_cast<std::size_t>( src.total_size() ),
             runtime_api_t::device_to_device_kind()
         );
@@ -430,7 +414,7 @@ private:
     range_t spectral_range_yzwx_;
 
     for_each_t for_each_;
-    reduce_t reduce_;
+    reduce_t   reduce_;
 
     real_array_t rhs_;
     real_array_t exact_solution_;
@@ -565,8 +549,7 @@ test_options_4d parse_options_4d( int argc, char *argv[] )
 
 template <class FFTS>
 void run_strategy_4d(
-    scfd::utils::log_std &log,
-    const std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> &grids
+    scfd::utils::log_std &log, const std::vector<std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>> &grids
 )
 {
     using grid_t = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
@@ -589,14 +572,10 @@ void run_strategy_4d(
         if ( std::abs( rhs_mean ) > 1.0e-12 )
         {
             log.warning_f(
-                "rhs_mean = %.8e for strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the zero Fourier mode,"
+                "rhs_mean = %.8e for strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu; the periodic FFT solve removes the "
+                "zero Fourier mode,"
                 " so the manufactured rhs should have zero mean.",
-                rhs_mean,
-                FFTS::strategy_name(),
-                nx,
-                ny,
-                nz,
-                nw
+                rhs_mean, FFTS::strategy_name(), nx, ny, nz, nw
             );
         }
 
@@ -609,15 +588,9 @@ void run_strategy_4d(
         const auto &res  = run.second;
 
         log.info_f(
-            "strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
-            FFTS::strategy_name(),
-            std::get<0>( grid ),
-            std::get<1>( grid ),
-            std::get<2>( grid ),
-            std::get<3>( grid ),
-            res.first.first,
-            res.first.second,
-            res.second
+            "strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e", FFTS::strategy_name(),
+            std::get<0>( grid ), std::get<1>( grid ), std::get<2>( grid ), std::get<3>( grid ), res.first.first,
+            res.first.second, res.second
         );
     }
 }
@@ -628,11 +601,11 @@ int main( int argc, char *argv[] )
 
     try
     {
-        using base_fft_t = fftm::wrap::cufft_wrap_many<double>;
-        using pencil_direct_ffts_t =
-            fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::direct>>;
-        using pencil_memcpy_ffts_t =
-            fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::memcpy>>;
+        using base_fft_t           = fftm::wrap::cufft_wrap_many<double>;
+        using pencil_direct_ffts_t = fftm::ffts<
+            base_fft_t, scfd::backend::cuda, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::direct>>;
+        using pencil_memcpy_ffts_t = fftm::ffts<
+            base_fft_t, scfd::backend::cuda, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::memcpy>>;
         using slab_direct_ffts_t =
             fftm::ffts<base_fft_t, scfd::backend::cuda, fftm::strategy_4d_slab_slab<fftm::transpose_backend::direct>>;
         using slab_memcpy_ffts_t =
@@ -644,24 +617,24 @@ int main( int argc, char *argv[] )
 
         switch ( options.strategy )
         {
-            case test_options_4d::strategy_selector::pencil_direct:
-                run_strategy_4d<pencil_direct_ffts_t>( log, options.grids );
-                break;
-            case test_options_4d::strategy_selector::pencil_memcpy:
-                run_strategy_4d<pencil_memcpy_ffts_t>( log, options.grids );
-                break;
-            case test_options_4d::strategy_selector::slab_direct:
-                run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
-                break;
-            case test_options_4d::strategy_selector::slab_memcpy:
-                run_strategy_4d<slab_memcpy_ffts_t>( log, options.grids );
-                break;
-            case test_options_4d::strategy_selector::all:
-                run_strategy_4d<pencil_direct_ffts_t>( log, options.grids );
-                run_strategy_4d<pencil_memcpy_ffts_t>( log, options.grids );
-                run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
-                run_strategy_4d<slab_memcpy_ffts_t>( log, options.grids );
-                break;
+        case test_options_4d::strategy_selector::pencil_direct:
+            run_strategy_4d<pencil_direct_ffts_t>( log, options.grids );
+            break;
+        case test_options_4d::strategy_selector::pencil_memcpy:
+            run_strategy_4d<pencil_memcpy_ffts_t>( log, options.grids );
+            break;
+        case test_options_4d::strategy_selector::slab_direct:
+            run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
+            break;
+        case test_options_4d::strategy_selector::slab_memcpy:
+            run_strategy_4d<slab_memcpy_ffts_t>( log, options.grids );
+            break;
+        case test_options_4d::strategy_selector::all:
+            run_strategy_4d<pencil_direct_ffts_t>( log, options.grids );
+            run_strategy_4d<pencil_memcpy_ffts_t>( log, options.grids );
+            run_strategy_4d<slab_direct_ffts_t>( log, options.grids );
+            run_strategy_4d<slab_memcpy_ffts_t>( log, options.grids );
+            break;
         }
 
         return 0;

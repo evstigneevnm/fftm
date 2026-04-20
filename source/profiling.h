@@ -13,8 +13,8 @@
 namespace fftm
 {
 
-using fftm_profiler = scfd::utils::profiler<scfd::utils::mpi_timer_event>;
-using ffts_profiler = scfd::utils::profiler<scfd::utils::system_timer_event>;
+using fftm_profiler        = scfd::utils::profiler<scfd::utils::mpi_timer_event>;
+using ffts_profiler        = scfd::utils::profiler<scfd::utils::system_timer_event>;
 using fftm_memory_profiler = memory_profiler;
 using ffts_memory_profiler = memory_profiler;
 
@@ -22,8 +22,7 @@ template <class Profiler>
 class profile_scope
 {
 public:
-    profile_scope( Profiler *profiler, const std::string &name )
-        : profiler_( profiler )
+    profile_scope( Profiler *profiler, const std::string &name ) : profiler_( profiler )
     {
         if ( profiler_ != nullptr )
         {
@@ -39,11 +38,10 @@ public:
         }
     }
 
-    profile_scope( const profile_scope & ) = delete;
+    profile_scope( const profile_scope & )            = delete;
     profile_scope &operator=( const profile_scope & ) = delete;
 
-    profile_scope( profile_scope &&other ) noexcept
-        : profiler_( other.profiler_ )
+    profile_scope( profile_scope &&other ) noexcept : profiler_( other.profiler_ )
     {
         other.profiler_ = nullptr;
     }
@@ -181,7 +179,8 @@ private:
 
 #define __FFTM_PROFILE_CONCAT_IMPL( a, b ) a##b
 #define __FFTM_PROFILE_CONCAT( a, b ) __FFTM_PROFILE_CONCAT_IMPL( a, b )
-#define FFTM_PROFILE_SCOPED_TIC( name ) auto __FFTM_PROFILE_CONCAT( _fftm_profile_scope_, __LINE__ ) = this->profile_scope_( name )
+#define FFTM_PROFILE_SCOPED_TIC( name )                                                                                \
+    auto __FFTM_PROFILE_CONCAT( _fftm_profile_scope_, __LINE__ ) = this->profile_scope_( name )
 
 } // namespace fftm
 
