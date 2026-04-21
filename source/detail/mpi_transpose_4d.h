@@ -785,13 +785,19 @@ private:
             line_comm_info_.waitall( comm_size, recv_requests_.data() );
         }
         {
-            auto phase = profile_scope_( "stage_recv_to_device_unpack" );
+            auto phase = profile_scope_( "stage_recv_to_device" );
             for ( int p = 0; p < comm_size; ++p )
             {
                 if ( p != myid_k_ )
                 {
                     copy_host_forward_chunk_to_device_( p );
                 }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
                 unpack_forward_chunk_( p, out );
             }
         }
@@ -885,15 +891,24 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                copy_host_forward_chunk_to_device_( p );
-                unpack_forward_chunk_( p, out );
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_forward_chunk_to_device_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_( p, out );
+                }
                 completed++;
             }
         }
@@ -936,14 +951,20 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                unpack_forward_chunk_( p, out );
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_( p, out );
+                }
                 completed++;
             }
         }
@@ -1087,13 +1108,19 @@ private:
             line_comm_info_.waitall( comm_size, recv_requests_.data() );
         }
         {
-            auto phase = profile_scope_( "stage_recv_to_device_unpack" );
+            auto phase = profile_scope_( "stage_recv_to_device" );
             for ( int p = 0; p < comm_size; ++p )
             {
                 if ( p != myid_k_ )
                 {
                     copy_host_backward_chunk_to_device_( p );
                 }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
                 unpack_backward_chunk_( p, out );
             }
         }
@@ -1187,15 +1214,24 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                copy_host_backward_chunk_to_device_( p );
-                unpack_backward_chunk_( p, out );
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_backward_chunk_to_device_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_( p, out );
+                }
                 completed++;
             }
         }
@@ -1238,14 +1274,20 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                unpack_backward_chunk_( p, out );
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_( p, out );
+                }
                 completed++;
             }
         }
@@ -2121,63 +2163,97 @@ private:
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
         }
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_j_, send_requests_[p]
-            );
-        }
-
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
-        {
-            if ( p != myid_j_ )
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
             {
-                copy_host_forward_chunk_to_device_( p );
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_j_, send_requests_[p]
+                );
             }
-            unpack_forward_chunk_( p, out );
         }
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p != myid_j_ )
+                {
+                    copy_host_forward_chunk_to_device_( p );
+                }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_forward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_j_, send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_j_, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
-            unpack_forward_chunk_( p, out );
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_forward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -2191,74 +2267,119 @@ private:
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
         }
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_j_, send_requests_[p]
-            );
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_j_, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_forward_chunk_( myid_j_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            copy_host_forward_chunk_to_device_( p );
-            unpack_forward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_forward_chunk_( myid_j_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_forward_chunk_to_device_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_j_, send_requests_[p]
-            );
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_j_, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_forward_chunk_( myid_j_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            unpack_forward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_forward_chunk_( myid_j_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -2267,26 +2388,42 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallv" );
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
-            forward_rdispls_.data(), mpi_value_type_
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
-            forward_rdispls_.data(), mpi_value_type_
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #endif
     }
 
@@ -2296,27 +2433,45 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallw" );
         ensure_forward_alltoallw_layout_();
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
-            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
-            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         ensure_forward_alltoallw_layout_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
-            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #endif
     }
 
@@ -2326,64 +2481,101 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        copy_send_buffer_to_host_();
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_j_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
-            );
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
         }
-
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p != myid_j_ )
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
             {
-                copy_host_backward_chunk_to_device_( p );
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_j_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
             }
-            unpack_backward_chunk_( p, out );
         }
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p != myid_j_ )
+                {
+                    copy_host_backward_chunk_to_device_( p );
+                }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_backward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_j_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_j_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
-            unpack_backward_chunk_( p, out );
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_backward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -2393,75 +2585,123 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        copy_send_buffer_to_host_();
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_j_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
-            );
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_j_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_backward_chunk_( myid_j_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            copy_host_backward_chunk_to_device_( p );
-            unpack_backward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_backward_chunk_( myid_j_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_backward_chunk_to_device_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_j_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_j_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
-            );
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_j_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_backward_chunk_( myid_j_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            unpack_backward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_backward_chunk_( myid_j_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -2470,26 +2710,42 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallv" );
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
-            backward_rdispls_.data(), mpi_value_type_
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
-            backward_rdispls_.data(), mpi_value_type_
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #endif
     }
 
@@ -2499,27 +2755,45 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallw" );
         ensure_backward_alltoallw_layout_();
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
-            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
-            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         ensure_backward_alltoallw_layout_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
-            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #endif
     }
 
@@ -3292,64 +3566,101 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        copy_send_buffer_to_host_();
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_i_, send_requests_[p]
-            );
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
         }
-
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p != myid_i_ )
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
             {
-                copy_host_forward_chunk_to_device_( p );
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_i_, send_requests_[p]
+                );
             }
-            unpack_forward_chunk_( p, out );
         }
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p != myid_i_ )
+                {
+                    copy_host_forward_chunk_to_device_( p );
+                }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_forward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_i_, send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_i_, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
-            unpack_forward_chunk_( p, out );
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_forward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -3359,75 +3670,123 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        copy_send_buffer_to_host_();
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_i_, send_requests_[p]
-            );
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_i_, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_forward_chunk_( myid_i_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            copy_host_forward_chunk_to_device_( p );
-            unpack_forward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_forward_chunk_( myid_i_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_forward_chunk_to_device_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                mpi_value_type_, p, p, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                mpi_value_type_, p, myid_i_, send_requests_[p]
-            );
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_i_, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
-            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_forward_chunk_( myid_i_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            unpack_forward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_forward_chunk_( myid_i_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -3436,26 +3795,42 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallv" );
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
-            forward_rdispls_.data(), mpi_value_type_
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
-            forward_rdispls_.data(), mpi_value_type_
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #endif
     }
 
@@ -3465,27 +3840,45 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallw" );
         ensure_forward_alltoallw_layout_();
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
-            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
-            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         ensure_forward_alltoallw_layout_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
-            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_forward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #endif
     }
 
@@ -3495,64 +3888,101 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        copy_send_buffer_to_host_();
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_i_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
-            );
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
         }
-
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p != myid_i_ )
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
             {
-                copy_host_backward_chunk_to_device_( p );
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_i_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
             }
-            unpack_backward_chunk_( p, out );
         }
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p != myid_i_ )
+                {
+                    copy_host_backward_chunk_to_device_( p );
+                }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_backward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_i_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_i_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
             );
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-
-        line_comm_info_.waitall( comm_size, recv_requests_.data() );
-        for ( int p = 0; p < comm_size; ++p )
-            unpack_backward_chunk_( p, out );
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+                unpack_backward_chunk_( p, out );
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -3562,75 +3992,123 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        copy_send_buffer_to_host_();
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_i_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
-            );
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_i_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_backward_chunk_( myid_i_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            copy_host_backward_chunk_to_device_( p );
-            unpack_backward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_backward_chunk_( myid_i_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_backward_chunk_to_device_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-        for ( int p = 0; p < comm_size; ++p )
         {
-            if ( p == myid_i_ )
-                continue;
-            line_comm_info_.irecv(
-                recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                mpi_value_type_, p, myid_i_, recv_requests_[p]
-            );
-            line_comm_info_.isend(
-                send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                mpi_value_type_, p, p, send_requests_[p]
-            );
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_i_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
         }
 
-        runtime_api_t::memcpy(
-            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
-            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
-            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
-        );
-        unpack_backward_chunk_( myid_i_, out );
-
-        int completed = 0;
-        while ( completed < comm_size - 1 )
         {
-            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
-            if ( p == MPI_UNDEFINED )
-                break;
-            unpack_backward_chunk_( p, out );
-            completed++;
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_backward_chunk_( myid_i_, out );
         }
 
-        line_comm_info_.waitall( comm_size, send_requests_.data() );
+        {
+            int completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
+                if ( p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_( p, out );
+                }
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #endif
     }
 
@@ -3639,26 +4117,42 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallv" );
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
-            backward_rdispls_.data(), mpi_value_type_
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
-        line_comm_info_.alltoallv(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
-            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
-            backward_rdispls_.data(), mpi_value_type_
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #endif
     }
 
@@ -3668,27 +4162,45 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallw" );
         ensure_backward_alltoallw_layout_();
-        copy_send_buffer_to_host_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
-            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
-            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
-        );
-
-        copy_recv_buffer_from_host_();
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         ensure_backward_alltoallw_layout_();
-        line_comm_info_.alltoallw(
-            static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
-            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
-        );
-
-        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-            unpack_backward_chunk_( p, out );
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #endif
     }
 
