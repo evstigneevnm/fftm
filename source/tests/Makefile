@@ -1,4 +1,4 @@
-TARGET_GCC = -g -G
+TARGET_GCC = -g
 TARGET_NVCC = -g -G #-O3
 CPPSTD = c++14
 
@@ -13,6 +13,7 @@ lib_mpi=$(mpi_dir)/lib
 OMP=-fopenmp -lpthread
 CUDA_ARCH=-gencode arch=compute_52,code=sm_52 -gencode arch=compute_61,code=sm_61 #-gencode arch=compute_35,code=sm_35 
 NVCCFLAGS = -Wno-deprecated-gpu-targets $(CUDA_ARCH) -std=$(CPPSTD) $(TARGET_NVCC) --expt-relaxed-constexpr
+GCCFLAGS = -std=$(CPPSTD) $(TARGET_GCC) 
 NVCCFLAGS_NO_DEVICE_DEBUG = $(filter-out -G,$(NVCCFLAGS))
 
 

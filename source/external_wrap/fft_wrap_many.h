@@ -36,7 +36,7 @@ public:
     using runtime_api       = typename wrap_t::runtime_api;
     using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
-    fft_wrap_many() : work_area_size_( 0 ), activated_( false )
+    fft_wrap_many() : work_area_size_( 0 ), activated_( false ), external_activated_( false )
     {
     }
 
@@ -97,19 +97,18 @@ public:
         );
     }
 
-    void activate( std::size_t additional_size )
+    void activate()
     {
         if ( activated_ )
         {
             throw std::logic_error( "fft_wrap_many::activate: cannot activate again." );
         }
-
-        work_area_size_ = 0;
-        for ( const auto &el : container_ )
+        if ( external_activated_ )
         {
-            work_area_size_ = std::max( work_area_size_, el.second->get_work_size() );
+            throw std::logic_error( "fft_wrap_many::activate: cannot use external and internal activation, the class "
+                                    "is externally activated." );
         }
-
+        activate_work_size();
         if ( work_area_size_ > 0 )
         {
             work_area_.init( ordinal_cast_( work_area_size_ ) );
@@ -122,7 +121,29 @@ public:
         update_memory_profile_();
         activated_ = true;
     }
+    std::size_t activate_work_size()
+    {
+        for ( const auto &el : container_ )
+        {
+            work_area_size_ = std::max( work_area_size_, el.second->get_work_size() );
+        }
+        return work_area_size_;
+    }
 
+    void set_external_work_area( void *external_work_area )
+    {
+        if ( activated_ )
+        {
+            throw std::logic_error(
+                "fft_wrap_many::set_external_work_area: cannot set external work_area with activated local work_area."
+            );
+        }
+        for ( auto &el : container_ )
+        {
+            el.second->set_work_area( external_work_area );
+        }
+        external_activated_ = true;
+    }
     std::size_t get_work_size() const
     {
         return work_area_size_;
@@ -169,7 +190,7 @@ private:
 
     work_array_t                                   work_area_;
     std::size_t                                    work_area_size_;
-    bool                                           activated_;
+    bool                                           activated_, external_activated_;
     std::map<std::string, std::unique_ptr<wrap_t>> container_;
     memory_profiler_t                             *memory_profiler_ = nullptr;
     std::string                                    memory_profile_prefix_;
