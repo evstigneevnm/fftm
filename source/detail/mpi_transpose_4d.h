@@ -62,9 +62,11 @@ public:
     using value_type        = ValueType;
     using backend_t         = Backend;
     using memory_t          = typename backend_t::memory_type;
+    using host_memory_t     = typename memory_t::host_memory_type;
     using partition_t       = ::fftm::partition;
     using mpi_comm_t        = scfd::communication::mpi_comm;
     using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
+    using host_buf_t        = scfd::arrays::array_nd<value_type, 1, host_memory_t>;
     using mpi_request_t     = scfd::communication::detail::mpi_request;
     using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
     using idx_t             = scfd::static_vec::vec<int, 4>;
@@ -128,6 +130,33 @@ public:
         update_memory_profile_();
     }
 
+    void use_external_host_work_area()
+    {
+        use_external_host_work_area_ = true;
+    }
+
+    std::size_t get_host_work_size_bytes() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return 0;
+#else
+        return bytes_from_elems_( host_send_buffer_elems_ ) + bytes_from_elems_( host_recv_buffer_elems_ );
+#endif
+    }
+
+    void set_external_host_work_area( void *external_host_work_area )
+    {
+        if ( !use_external_host_work_area_ )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_xy::set_external_host_work_area: external host work area was not enabled."
+            );
+        }
+        external_host_work_area_ = external_host_work_area;
+        bind_external_host_work_area_();
+        update_memory_profile_();
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_xy::init" );
@@ -169,11 +198,20 @@ public:
         init_layouts_();
         send_buffer_elems_ = max_buffer_elems_;
         recv_buffer_elems_ = max_buffer_elems_;
+        host_send_buffer_elems_ = send_buffer_elems_;
+        host_recv_buffer_elems_ = recv_buffer_elems_;
         if ( !use_external_work_area_ )
         {
             send_buffer_.init( send_buffer_elems_ );
             recv_buffer_.init( recv_buffer_elems_ );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( !use_external_host_work_area_ )
+        {
+            host_send_buffer_.init( host_send_buffer_elems_ );
+            host_recv_buffer_.init( host_recv_buffer_elems_ );
+        }
+#endif
         send_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         recv_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         is_inited_ = true;
@@ -324,6 +362,12 @@ private:
         {
             throw std::logic_error( "mpi_transpose_4d_same_xy: external work area was not bound." );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( use_external_host_work_area_ && get_host_work_size_bytes() != 0 && external_host_work_area_ == nullptr )
+        {
+            throw std::logic_error( "mpi_transpose_4d_same_xy: external host work area was not bound." );
+        }
+#endif
     }
 
     void update_memory_profile_()
@@ -345,6 +389,26 @@ private:
                                     : static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
                                           static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
         );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/host_send_buffer",
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            0
+#else
+            use_external_host_work_area_ ? 0
+                                         : static_cast<memory_profiler_t::bytes_type>( host_send_buffer_.size() ) *
+                                               static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+#endif
+        );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/host_recv_buffer",
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            0
+#else
+            use_external_host_work_area_ ? 0
+                                         : static_cast<memory_profiler_t::bytes_type>( host_recv_buffer_.size() ) *
+                                               static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+#endif
+        );
     }
 
     void bind_external_work_area_()
@@ -358,6 +422,24 @@ private:
         recv_buffer_.init_by_raw_data(
             reinterpret_cast<value_type *>( raw + bytes_from_elems_( send_buffer_elems_ ) ), recv_buffer_elems_
         );
+    }
+
+    void bind_external_host_work_area_()
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return;
+#else
+        if ( external_host_work_area_ == nullptr )
+        {
+            return;
+        }
+        char *raw = static_cast<char *>( external_host_work_area_ );
+        host_send_buffer_.init_by_raw_data( reinterpret_cast<value_type *>( raw ), host_send_buffer_elems_ );
+        host_recv_buffer_.init_by_raw_data(
+            reinterpret_cast<value_type *>( raw + bytes_from_elems_( host_send_buffer_elems_ ) ),
+            host_recv_buffer_elems_
+        );
+#endif
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -403,6 +485,48 @@ private:
     std::size_t bytes_from_elems_( std::size_t elems ) const
     {
         return elems * sizeof( value_type );
+    }
+
+    void copy_send_buffer_to_host_()
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            host_send_buffer_.raw_ptr(), send_buffer_.raw_ptr(), bytes_from_elems_( send_buffer_elems_ ),
+            runtime_api_t::device_to_host_kind()
+        );
+#endif
+    }
+
+    void copy_recv_buffer_from_host_()
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr(), host_recv_buffer_.raw_ptr(), bytes_from_elems_( recv_buffer_elems_ ),
+            runtime_api_t::host_to_device_kind()
+        );
+#endif
+    }
+
+    void copy_host_forward_chunk_to_device_( int source_k )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + forward_recv_offsets_[source_k],
+            host_recv_buffer_.raw_ptr() + forward_recv_offsets_[source_k],
+            bytes_from_elems_( forward_recv_chunk_elems_( source_k ) ), runtime_api_t::host_to_device_kind()
+        );
+#endif
+    }
+
+    void copy_host_backward_chunk_to_device_( int source_k )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + backward_recv_offsets_[source_k],
+            host_recv_buffer_.raw_ptr() + backward_recv_offsets_[source_k],
+            bytes_from_elems_( backward_recv_chunk_elems_( source_k ) ), runtime_api_t::host_to_device_kind()
+        );
+#endif
     }
 
     void init_value_type_()
@@ -624,8 +748,57 @@ private:
     void forward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "forward_p2p_waitall" );
+        const int comm_size = line_comm_info_.num_procs;
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_k_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_k_, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_k_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_k_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device_unpack" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p != myid_k_ )
+                {
+                    copy_host_forward_chunk_to_device_( p );
+                }
+                unpack_forward_chunk_( p, out );
+            }
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
@@ -675,8 +848,60 @@ private:
     void forward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "forward_p2p_waitany" );
+        const int comm_size = line_comm_info_.num_procs;
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_k_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                    mpi_value_type_, p, p, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                    mpi_value_type_, p, myid_k_, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_k_],
+                send_buffer_.raw_ptr() + forward_send_offsets_[myid_k_],
+                bytes_from_elems_( forward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_forward_chunk_( myid_k_, out );
+        }
+
+        {
+            auto phase     = profile_scope_( "waitany_unpack" );
+            int  completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                if ( p == MPI_UNDEFINED )
+                    break;
+                copy_host_forward_chunk_to_device_( p );
+                unpack_forward_chunk_( p, out );
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
@@ -734,8 +959,28 @@ private:
     void forward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "forward_alltoallv" );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         {
@@ -758,8 +1003,30 @@ private:
     void forward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "forward_alltoallw" );
+        ensure_forward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         ensure_forward_alltoallw_layout_();
@@ -783,8 +1050,57 @@ private:
     void backward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "backward_p2p_waitall" );
+        const int comm_size = line_comm_info_.num_procs;
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_k_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_k_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_k_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_k_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+
+        {
+            auto phase = profile_scope_( "wait_recv" );
+            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device_unpack" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p != myid_k_ )
+                {
+                    copy_host_backward_chunk_to_device_( p );
+                }
+                unpack_backward_chunk_( p, out );
+            }
+        }
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
@@ -834,8 +1150,60 @@ private:
     void backward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "backward_p2p_waitany" );
+        const int comm_size = line_comm_info_.num_procs;
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "post_recv_send" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_k_ )
+                    continue;
+                line_comm_info_.irecv(
+                    host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                    mpi_value_type_, p, myid_k_, recv_requests_[p]
+                );
+                line_comm_info_.isend(
+                    host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                    mpi_value_type_, p, p, send_requests_[p]
+                );
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "self_copy" );
+            runtime_api_t::memcpy(
+                recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_k_],
+                send_buffer_.raw_ptr() + backward_send_offsets_[myid_k_],
+                bytes_from_elems_( backward_recv_chunk_elems_( myid_k_ ) ), runtime_api_t::device_to_device_kind()
+            );
+        }
+        {
+            auto phase = profile_scope_( "unpack_self" );
+            unpack_backward_chunk_( myid_k_, out );
+        }
+
+        {
+            auto phase     = profile_scope_( "waitany_unpack" );
+            int  completed = 0;
+            while ( completed < comm_size - 1 )
+            {
+                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                if ( p == MPI_UNDEFINED )
+                    break;
+                copy_host_backward_chunk_to_device_( p );
+                unpack_backward_chunk_( p, out );
+                completed++;
+            }
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
@@ -893,8 +1261,28 @@ private:
     void backward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "backward_alltoallv" );
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallv" );
+            line_comm_info_.alltoallv(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
         {
@@ -917,8 +1305,30 @@ private:
     void backward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xy currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "backward_alltoallw" );
+        ensure_backward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        {
+            auto phase = profile_scope_( "mpi_alltoallw" );
+            line_comm_info_.alltoallw(
+                static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            );
+        }
+        {
+            auto phase = profile_scope_( "stage_recv_to_device" );
+            copy_recv_buffer_from_host_();
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_chunk_( p, out );
+        }
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         ensure_backward_alltoallw_layout_();
@@ -966,8 +1376,14 @@ private:
     contiguous_buf_t                   recv_buffer_;
     std::size_t                        send_buffer_elems_      = 0;
     std::size_t                        recv_buffer_elems_      = 0;
+    host_buf_t                         host_send_buffer_;
+    host_buf_t                         host_recv_buffer_;
+    std::size_t                        host_send_buffer_elems_ = 0;
+    std::size_t                        host_recv_buffer_elems_ = 0;
     bool                               use_external_work_area_ = false;
     void                              *external_work_area_     = nullptr;
+    bool                               use_external_host_work_area_ = false;
+    void                              *external_host_work_area_     = nullptr;
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;
@@ -1013,9 +1429,11 @@ public:
     using value_type        = ValueType;
     using backend_t         = Backend;
     using memory_t          = typename backend_t::memory_type;
+    using host_memory_t     = typename memory_t::host_memory_type;
     using partition_t       = ::fftm::partition;
     using mpi_comm_t        = scfd::communication::mpi_comm;
     using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
+    using host_buf_t        = scfd::arrays::array_nd<value_type, 1, host_memory_t>;
     using mpi_request_t     = scfd::communication::detail::mpi_request;
     using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
     using idx_t             = scfd::static_vec::vec<int, 4>;
@@ -1079,6 +1497,33 @@ public:
         update_memory_profile_();
     }
 
+    void use_external_host_work_area()
+    {
+        use_external_host_work_area_ = true;
+    }
+
+    std::size_t get_host_work_size_bytes() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return 0;
+#else
+        return bytes_from_elems_( host_send_buffer_elems_ ) + bytes_from_elems_( host_recv_buffer_elems_ );
+#endif
+    }
+
+    void set_external_host_work_area( void *external_host_work_area )
+    {
+        if ( !use_external_host_work_area_ )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_xw::set_external_host_work_area: external host work area was not enabled."
+            );
+        }
+        external_host_work_area_ = external_host_work_area;
+        bind_external_host_work_area_();
+        update_memory_profile_();
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_xw::init" );
@@ -1120,11 +1565,20 @@ public:
         init_layouts_();
         send_buffer_elems_ = max_buffer_elems_;
         recv_buffer_elems_ = max_buffer_elems_;
+        host_send_buffer_elems_ = send_buffer_elems_;
+        host_recv_buffer_elems_ = recv_buffer_elems_;
         if ( !use_external_work_area_ )
         {
             send_buffer_.init( send_buffer_elems_ );
             recv_buffer_.init( recv_buffer_elems_ );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( !use_external_host_work_area_ )
+        {
+            host_send_buffer_.init( host_send_buffer_elems_ );
+            host_recv_buffer_.init( host_recv_buffer_elems_ );
+        }
+#endif
         send_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         recv_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         is_inited_ = true;
@@ -1275,6 +1729,12 @@ private:
         {
             throw std::logic_error( "mpi_transpose_4d_same_xw: external work area was not bound." );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( use_external_host_work_area_ && get_host_work_size_bytes() != 0 && external_host_work_area_ == nullptr )
+        {
+            throw std::logic_error( "mpi_transpose_4d_same_xw: external host work area was not bound." );
+        }
+#endif
     }
 
     void update_memory_profile_()
@@ -1296,6 +1756,26 @@ private:
                                     : static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
                                           static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
         );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/host_send_buffer",
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            0
+#else
+            use_external_host_work_area_ ? 0
+                                         : static_cast<memory_profiler_t::bytes_type>( host_send_buffer_.size() ) *
+                                               static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+#endif
+        );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/host_recv_buffer",
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            0
+#else
+            use_external_host_work_area_ ? 0
+                                         : static_cast<memory_profiler_t::bytes_type>( host_recv_buffer_.size() ) *
+                                               static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+#endif
+        );
     }
 
     void bind_external_work_area_()
@@ -1309,6 +1789,24 @@ private:
         recv_buffer_.init_by_raw_data(
             reinterpret_cast<value_type *>( raw + bytes_from_elems_( send_buffer_elems_ ) ), recv_buffer_elems_
         );
+    }
+
+    void bind_external_host_work_area_()
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return;
+#else
+        if ( external_host_work_area_ == nullptr )
+        {
+            return;
+        }
+        char *raw = static_cast<char *>( external_host_work_area_ );
+        host_send_buffer_.init_by_raw_data( reinterpret_cast<value_type *>( raw ), host_send_buffer_elems_ );
+        host_recv_buffer_.init_by_raw_data(
+            reinterpret_cast<value_type *>( raw + bytes_from_elems_( host_send_buffer_elems_ ) ),
+            host_recv_buffer_elems_
+        );
+#endif
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -1354,6 +1852,48 @@ private:
     std::size_t bytes_from_elems_( std::size_t elems ) const
     {
         return elems * sizeof( value_type );
+    }
+
+    void copy_send_buffer_to_host_()
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            host_send_buffer_.raw_ptr(), send_buffer_.raw_ptr(), bytes_from_elems_( send_buffer_elems_ ),
+            runtime_api_t::device_to_host_kind()
+        );
+#endif
+    }
+
+    void copy_recv_buffer_from_host_()
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr(), host_recv_buffer_.raw_ptr(), bytes_from_elems_( recv_buffer_elems_ ),
+            runtime_api_t::host_to_device_kind()
+        );
+#endif
+    }
+
+    void copy_host_forward_chunk_to_device_( int source_j )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + forward_recv_offsets_[source_j],
+            host_recv_buffer_.raw_ptr() + forward_recv_offsets_[source_j],
+            bytes_from_elems_( forward_recv_chunk_elems_( source_j ) ), runtime_api_t::host_to_device_kind()
+        );
+#endif
+    }
+
+    void copy_host_backward_chunk_to_device_( int source_j )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + backward_recv_offsets_[source_j],
+            host_recv_buffer_.raw_ptr() + backward_recv_offsets_[source_j],
+            bytes_from_elems_( backward_recv_chunk_elems_( source_j ) ), runtime_api_t::host_to_device_kind()
+        );
+#endif
     }
 
     void init_value_type_()
@@ -1575,8 +2115,42 @@ private:
     void forward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "forward_p2p_waitall" );
+        const int comm_size = line_comm_info_.num_procs;
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_j_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                mpi_value_type_, p, p, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                mpi_value_type_, p, myid_j_, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
+            send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+        );
+
+        line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p != myid_j_ )
+            {
+                copy_host_forward_chunk_to_device_( p );
+            }
+            unpack_forward_chunk_( p, out );
+        }
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
@@ -1611,8 +2185,45 @@ private:
     void forward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "forward_p2p_waitany" );
+        const int comm_size = line_comm_info_.num_procs;
+        {
+            auto phase = profile_scope_( "stage_send_to_host" );
+            copy_send_buffer_to_host_();
+        }
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_j_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                mpi_value_type_, p, p, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                mpi_value_type_, p, myid_j_, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
+            send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+        );
+        unpack_forward_chunk_( myid_j_, out );
+
+        int completed = 0;
+        while ( completed < comm_size - 1 )
+        {
+            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+            if ( p == MPI_UNDEFINED )
+                break;
+            copy_host_forward_chunk_to_device_( p );
+            unpack_forward_chunk_( p, out );
+            completed++;
+        }
+
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
@@ -1655,8 +2266,17 @@ private:
     void forward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "forward_alltoallv" );
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallv(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
+            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
+            forward_rdispls_.data(), mpi_value_type_
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_forward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         line_comm_info_.alltoallv(
@@ -1674,8 +2294,18 @@ private:
     void forward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "forward_alltoallw" );
+        ensure_forward_alltoallw_layout_();
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallw(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_forward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         ensure_forward_alltoallw_layout_();
@@ -1694,8 +2324,39 @@ private:
     void backward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "backward_p2p_waitall" );
+        const int comm_size = line_comm_info_.num_procs;
+        copy_send_buffer_to_host_();
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_j_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                mpi_value_type_, p, myid_j_, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                mpi_value_type_, p, p, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
+            send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+        );
+
+        line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p != myid_j_ )
+            {
+                copy_host_backward_chunk_to_device_( p );
+            }
+            unpack_backward_chunk_( p, out );
+        }
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
@@ -1730,8 +2391,42 @@ private:
     void backward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "backward_p2p_waitany" );
+        const int comm_size = line_comm_info_.num_procs;
+        copy_send_buffer_to_host_();
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_j_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                mpi_value_type_, p, myid_j_, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                mpi_value_type_, p, p, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
+            send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ), runtime_api_t::device_to_device_kind()
+        );
+        unpack_backward_chunk_( myid_j_, out );
+
+        int completed = 0;
+        while ( completed < comm_size - 1 )
+        {
+            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+            if ( p == MPI_UNDEFINED )
+                break;
+            copy_host_backward_chunk_to_device_( p );
+            unpack_backward_chunk_( p, out );
+            completed++;
+        }
+
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
@@ -1774,8 +2469,17 @@ private:
     void backward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "backward_alltoallv" );
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallv(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
+            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
+            backward_rdispls_.data(), mpi_value_type_
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_backward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
         line_comm_info_.alltoallv(
@@ -1793,8 +2497,18 @@ private:
     void backward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_xw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "backward_alltoallw" );
+        ensure_backward_alltoallw_layout_();
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallw(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_backward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         ensure_backward_alltoallw_layout_();
@@ -1837,8 +2551,14 @@ private:
     contiguous_buf_t                   recv_buffer_;
     std::size_t                        send_buffer_elems_      = 0;
     std::size_t                        recv_buffer_elems_      = 0;
+    host_buf_t                         host_send_buffer_;
+    host_buf_t                         host_recv_buffer_;
+    std::size_t                        host_send_buffer_elems_ = 0;
+    std::size_t                        host_recv_buffer_elems_ = 0;
     bool                               use_external_work_area_ = false;
     void                              *external_work_area_     = nullptr;
+    bool                               use_external_host_work_area_ = false;
+    void                              *external_host_work_area_     = nullptr;
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;
@@ -1884,9 +2604,11 @@ public:
     using value_type        = ValueType;
     using backend_t         = Backend;
     using memory_t          = typename backend_t::memory_type;
+    using host_memory_t     = typename memory_t::host_memory_type;
     using partition_t       = ::fftm::partition;
     using mpi_comm_t        = scfd::communication::mpi_comm;
     using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
+    using host_buf_t        = scfd::arrays::array_nd<value_type, 1, host_memory_t>;
     using mpi_request_t     = scfd::communication::detail::mpi_request;
     using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
     using idx_t             = scfd::static_vec::vec<int, 4>;
@@ -1950,6 +2672,33 @@ public:
         update_memory_profile_();
     }
 
+    void use_external_host_work_area()
+    {
+        use_external_host_work_area_ = true;
+    }
+
+    std::size_t get_host_work_size_bytes() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return 0;
+#else
+        return bytes_from_elems_( host_send_buffer_elems_ ) + bytes_from_elems_( host_recv_buffer_elems_ );
+#endif
+    }
+
+    void set_external_host_work_area( void *external_host_work_area )
+    {
+        if ( !use_external_host_work_area_ )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_zw::set_external_host_work_area: external host work area was not enabled."
+            );
+        }
+        external_host_work_area_ = external_host_work_area;
+        bind_external_host_work_area_();
+        update_memory_profile_();
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_zw::init" );
@@ -1991,11 +2740,20 @@ public:
         init_layouts_();
         send_buffer_elems_ = max_buffer_elems_;
         recv_buffer_elems_ = max_buffer_elems_;
+        host_send_buffer_elems_ = send_buffer_elems_;
+        host_recv_buffer_elems_ = recv_buffer_elems_;
         if ( !use_external_work_area_ )
         {
             send_buffer_.init( send_buffer_elems_ );
             recv_buffer_.init( recv_buffer_elems_ );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( !use_external_host_work_area_ )
+        {
+            host_send_buffer_.init( host_send_buffer_elems_ );
+            host_recv_buffer_.init( host_recv_buffer_elems_ );
+        }
+#endif
         send_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         recv_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         is_inited_ = true;
@@ -2146,6 +2904,12 @@ private:
         {
             throw std::logic_error( "mpi_transpose_4d_same_zw: external work area was not bound." );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( use_external_host_work_area_ && get_host_work_size_bytes() != 0 && external_host_work_area_ == nullptr )
+        {
+            throw std::logic_error( "mpi_transpose_4d_same_zw: external host work area was not bound." );
+        }
+#endif
     }
 
     void update_memory_profile_()
@@ -2167,6 +2931,26 @@ private:
                                     : static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
                                           static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
         );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/host_send_buffer",
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            0
+#else
+            use_external_host_work_area_ ? 0
+                                         : static_cast<memory_profiler_t::bytes_type>( host_send_buffer_.size() ) *
+                                               static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+#endif
+        );
+        memory_profiler_->set_bytes(
+            memory_profile_prefix_ + "/host_recv_buffer",
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            0
+#else
+            use_external_host_work_area_ ? 0
+                                         : static_cast<memory_profiler_t::bytes_type>( host_recv_buffer_.size() ) *
+                                               static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+#endif
+        );
     }
 
     void bind_external_work_area_()
@@ -2180,6 +2964,24 @@ private:
         recv_buffer_.init_by_raw_data(
             reinterpret_cast<value_type *>( raw + bytes_from_elems_( send_buffer_elems_ ) ), recv_buffer_elems_
         );
+    }
+
+    void bind_external_host_work_area_()
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return;
+#else
+        if ( external_host_work_area_ == nullptr )
+        {
+            return;
+        }
+        char *raw = static_cast<char *>( external_host_work_area_ );
+        host_send_buffer_.init_by_raw_data( reinterpret_cast<value_type *>( raw ), host_send_buffer_elems_ );
+        host_recv_buffer_.init_by_raw_data(
+            reinterpret_cast<value_type *>( raw + bytes_from_elems_( host_send_buffer_elems_ ) ),
+            host_recv_buffer_elems_
+        );
+#endif
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -2225,6 +3027,48 @@ private:
     std::size_t bytes_from_elems_( std::size_t elems ) const
     {
         return elems * sizeof( value_type );
+    }
+
+    void copy_send_buffer_to_host_()
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            host_send_buffer_.raw_ptr(), send_buffer_.raw_ptr(), bytes_from_elems_( send_buffer_elems_ ),
+            runtime_api_t::device_to_host_kind()
+        );
+#endif
+    }
+
+    void copy_recv_buffer_from_host_()
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr(), host_recv_buffer_.raw_ptr(), bytes_from_elems_( recv_buffer_elems_ ),
+            runtime_api_t::host_to_device_kind()
+        );
+#endif
+    }
+
+    void copy_host_forward_chunk_to_device_( int source_i )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + forward_recv_offsets_[source_i],
+            host_recv_buffer_.raw_ptr() + forward_recv_offsets_[source_i],
+            bytes_from_elems_( forward_recv_chunk_elems_( source_i ) ), runtime_api_t::host_to_device_kind()
+        );
+#endif
+    }
+
+    void copy_host_backward_chunk_to_device_( int source_i )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + backward_recv_offsets_[source_i],
+            host_recv_buffer_.raw_ptr() + backward_recv_offsets_[source_i],
+            bytes_from_elems_( backward_recv_chunk_elems_( source_i ) ), runtime_api_t::host_to_device_kind()
+        );
+#endif
     }
 
     void init_value_type_()
@@ -2446,8 +3290,39 @@ private:
     void forward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "forward_p2p_waitall" );
+        const int comm_size = line_comm_info_.num_procs;
+        copy_send_buffer_to_host_();
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_i_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                mpi_value_type_, p, p, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                mpi_value_type_, p, myid_i_, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
+            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+        );
+
+        line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p != myid_i_ )
+            {
+                copy_host_forward_chunk_to_device_( p );
+            }
+            unpack_forward_chunk_( p, out );
+        }
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
@@ -2482,8 +3357,42 @@ private:
     void forward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "forward_p2p_waitany" );
+        const int comm_size = line_comm_info_.num_procs;
+        copy_send_buffer_to_host_();
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_i_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
+                mpi_value_type_, p, p, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
+                mpi_value_type_, p, myid_i_, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_i_],
+            send_buffer_.raw_ptr() + forward_send_offsets_[myid_i_],
+            bytes_from_elems_( forward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+        );
+        unpack_forward_chunk_( myid_i_, out );
+
+        int completed = 0;
+        while ( completed < comm_size - 1 )
+        {
+            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+            if ( p == MPI_UNDEFINED )
+                break;
+            copy_host_forward_chunk_to_device_( p );
+            unpack_forward_chunk_( p, out );
+            completed++;
+        }
+
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
@@ -2526,8 +3435,17 @@ private:
     void forward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "forward_alltoallv" );
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallv(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
+            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
+            forward_rdispls_.data(), mpi_value_type_
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_forward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         line_comm_info_.alltoallv(
@@ -2545,8 +3463,18 @@ private:
     void forward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "forward_alltoallw" );
+        ensure_forward_alltoallw_layout_();
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallw(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+            forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+            forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_forward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
         ensure_forward_alltoallw_layout_();
@@ -2565,8 +3493,39 @@ private:
     void backward_p2p_waitall_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "backward_p2p_waitall" );
+        const int comm_size = line_comm_info_.num_procs;
+        copy_send_buffer_to_host_();
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_i_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                mpi_value_type_, p, myid_i_, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                mpi_value_type_, p, p, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
+            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+        );
+
+        line_comm_info_.waitall( comm_size, recv_requests_.data() );
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p != myid_i_ )
+            {
+                copy_host_backward_chunk_to_device_( p );
+            }
+            unpack_backward_chunk_( p, out );
+        }
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
@@ -2601,8 +3560,42 @@ private:
     void backward_p2p_waitany_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto      scope     = profile_scope_( "backward_p2p_waitany" );
+        const int comm_size = line_comm_info_.num_procs;
+        copy_send_buffer_to_host_();
+        for ( int p = 0; p < comm_size; ++p )
+        {
+            if ( p == myid_i_ )
+                continue;
+            line_comm_info_.irecv(
+                host_recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
+                mpi_value_type_, p, myid_i_, recv_requests_[p]
+            );
+            line_comm_info_.isend(
+                host_send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                mpi_value_type_, p, p, send_requests_[p]
+            );
+        }
+
+        runtime_api_t::memcpy(
+            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_i_],
+            send_buffer_.raw_ptr() + backward_send_offsets_[myid_i_],
+            bytes_from_elems_( backward_recv_chunk_elems_( myid_i_ ) ), runtime_api_t::device_to_device_kind()
+        );
+        unpack_backward_chunk_( myid_i_, out );
+
+        int completed = 0;
+        while ( completed < comm_size - 1 )
+        {
+            const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+            if ( p == MPI_UNDEFINED )
+                break;
+            copy_host_backward_chunk_to_device_( p );
+            unpack_backward_chunk_( p, out );
+            completed++;
+        }
+
+        line_comm_info_.waitall( comm_size, send_requests_.data() );
 #else
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
@@ -2645,8 +3638,17 @@ private:
     void backward_alltoallv_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "backward_alltoallv" );
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallv(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
+            mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
+            backward_rdispls_.data(), mpi_value_type_
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_backward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
         line_comm_info_.alltoallv(
@@ -2664,8 +3666,18 @@ private:
     void backward_alltoallw_( ArrayOut &out )
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "mpi_transpose_4d_same_zw currently requires "
-                                "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
+        auto scope = profile_scope_( "backward_alltoallw" );
+        ensure_backward_alltoallw_layout_();
+        copy_send_buffer_to_host_();
+        line_comm_info_.alltoallw(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+            backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+            backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+        );
+
+        copy_recv_buffer_from_host_();
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            unpack_backward_chunk_( p, out );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         ensure_backward_alltoallw_layout_();
@@ -2708,8 +3720,14 @@ private:
     contiguous_buf_t                   recv_buffer_;
     std::size_t                        send_buffer_elems_      = 0;
     std::size_t                        recv_buffer_elems_      = 0;
+    host_buf_t                         host_send_buffer_;
+    host_buf_t                         host_recv_buffer_;
+    std::size_t                        host_send_buffer_elems_ = 0;
+    std::size_t                        host_recv_buffer_elems_ = 0;
     bool                               use_external_work_area_ = false;
     void                              *external_work_area_     = nullptr;
+    bool                               use_external_host_work_area_ = false;
+    void                              *external_host_work_area_     = nullptr;
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;

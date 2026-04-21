@@ -288,6 +288,11 @@ public:
         same_xy_.use_external_work_area();
         same_xw_.use_external_work_area();
         same_zw_.use_external_work_area();
+        same_x_.use_external_host_work_area();
+        same_z_.use_external_host_work_area();
+        same_xy_.use_external_host_work_area();
+        same_xw_.use_external_host_work_area();
+        same_zw_.use_external_host_work_area();
     }
 
     ~fftm()
@@ -452,8 +457,9 @@ private:
     using same_zw_t           = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log, runtime_api_t>;
     using for_each_3d_t       = typename Backend::template for_each_nd_type<3, int>;
     using for_each_4d_t       = typename Backend::template for_each_nd_type<4, int>;
-    using complex_buffer_t    = scfd::arrays::array_nd<complex, 1, memory_t>;
-    using shared_buffer_t     = scfd::memory::shared_buffer<memory_t>;
+    using complex_buffer_t     = scfd::arrays::array_nd<complex, 1, memory_t>;
+    using shared_buffer_t      = scfd::memory::shared_buffer<memory_t>;
+    using host_shared_buffer_t = scfd::memory::shared_buffer<typename memory_t::host_memory_type>;
     using profiler_t          = fftm_profiler;
     using optional_profiler_t = optional_profiler<profiler_t>;
     using memory_profiler_t   = fftm_memory_profiler;
@@ -480,6 +486,11 @@ private:
         return static_cast<void *>( static_cast<char *>( shared_work_buffer_.naive_ptr() ) + offset );
     }
 
+    void *shared_host_work_ptr_( std::size_t offset = 0 ) const
+    {
+        return static_cast<void *>( static_cast<char *>( shared_host_work_buffer_.naive_ptr() ) + offset );
+    }
+
     void activate_shared_work_area_()
     {
         const std::size_t fft_work_size       = base_fft_.activate_work_size();
@@ -494,6 +505,20 @@ private:
         shared_work_buffer_.require_size_bytes( shared_work_size_ );
         shared_work_buffer_.activate();
 
+        const std::size_t transpose_host_work_size = std::max(
+            std::max( same_x_.get_host_work_size_bytes(), same_z_.get_host_work_size_bytes() ),
+            std::max(
+                same_xy_.get_host_work_size_bytes(),
+                std::max( same_xw_.get_host_work_size_bytes(), same_zw_.get_host_work_size_bytes() )
+            )
+        );
+        shared_host_work_size_ = align_up_( transpose_host_work_size, 256 );
+        shared_host_work_buffer_.require_size_bytes( shared_host_work_size_ );
+        if ( shared_host_work_size_ != 0 )
+        {
+            shared_host_work_buffer_.activate();
+        }
+
         void *work_area = shared_work_ptr_();
         base_fft_.set_external_work_area( work_area );
         same_x_.set_external_work_area( work_area );
@@ -501,6 +526,15 @@ private:
         same_xy_.set_external_work_area( work_area );
         same_xw_.set_external_work_area( work_area );
         same_zw_.set_external_work_area( work_area );
+        if ( shared_host_work_size_ != 0 )
+        {
+            void *host_work_area = shared_host_work_ptr_();
+            same_x_.set_external_host_work_area( host_work_area );
+            same_z_.set_external_host_work_area( host_work_area );
+            same_xy_.set_external_host_work_area( host_work_area );
+            same_xw_.set_external_host_work_area( host_work_area );
+            same_zw_.set_external_host_work_area( host_work_area );
+        }
 
         update_memory_profile_for_current_dim_();
     }
@@ -1392,6 +1426,10 @@ private:
             "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
         );
         profiler->set_bytes(
+            "fftm/shared_host_work_buffer",
+            static_cast<memory_profiler_t::bytes_type>( shared_host_work_buffer_.get_work_size() )
+        );
+        profiler->set_bytes(
             "fftm/scratch_stage0_xfft_3d",
             bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_xfft_3d_.size() ), sizeof( complex ) )
         );
@@ -1419,6 +1457,10 @@ private:
         profiler->set_bytes(
             "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
         );
+        profiler->set_bytes(
+            "fftm/shared_host_work_buffer",
+            static_cast<memory_profiler_t::bytes_type>( shared_host_work_buffer_.get_work_size() )
+        );
         profiler->set_bytes( "fftm/scratch_stage0_xfft_3d", 0 );
         profiler->set_bytes( "fftm/scratch_stage1_3d", 0 );
         profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
@@ -1445,7 +1487,9 @@ private:
     optional_memory_profiler_t memory_profiler_;
     partitioning_t             partitioning_;
     shared_buffer_t            shared_work_buffer_;
+    host_shared_buffer_t       shared_host_work_buffer_;
     std::size_t                shared_work_size_ = 0;
+    std::size_t                shared_host_work_size_ = 0;
     same_x_t                   same_x_;
     same_z_t                   same_z_;
     same_xy_t                  same_xy_;

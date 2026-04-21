@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 
-#define SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 
 #include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>

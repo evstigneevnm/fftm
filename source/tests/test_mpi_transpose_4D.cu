@@ -3,7 +3,6 @@
 #include <string>
 #include <tuple>
 
-#define SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 
 #include <thrust/complex.h>
 

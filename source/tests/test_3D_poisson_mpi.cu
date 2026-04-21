@@ -2,7 +2,6 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
-#define SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 #include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
