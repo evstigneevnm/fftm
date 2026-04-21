@@ -70,8 +70,8 @@ struct strategy_4d_slab_slab_mpi
 
 struct fftm_init_options
 {
-    std::string profiling_key;
-    std::string memory_profiling_key;
+    std::string profiling_key                    = "fftm_prof";
+    std::string memory_profiling_key             = "fftm_mem";
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;
     bool        print_memory_profile_on_destroy  = true;
@@ -479,7 +479,7 @@ private:
 
     void activate_shared_work_area_()
     {
-        const std::size_t fft_work_size = base_fft_.activate_work_size();
+        const std::size_t fft_work_size       = base_fft_.activate_work_size();
         const std::size_t transpose_work_size = std::max(
             std::max( same_x_.get_work_size_bytes(), same_z_.get_work_size_bytes() ),
             std::max(
@@ -499,8 +499,7 @@ private:
         same_xw_.set_external_work_area( work_area );
         same_zw_.set_external_work_area( work_area );
 
-        update_memory_profile_3d_();
-        update_memory_profile_4d_();
+        update_memory_profile_for_current_dim_();
     }
 
     void configure_profiling_( const fftm_init_options &options )
@@ -539,8 +538,7 @@ private:
         same_xy_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xy" );
         same_xw_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xw" );
         same_zw_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_zw" );
-        update_memory_profile_3d_();
-        update_memory_profile_4d_();
+        update_memory_profile_for_current_dim_();
     }
 
     void log_profile_on_destroy_()
@@ -1380,6 +1378,23 @@ private:
         update_memory_profile_3d_();
     }
 
+    void update_memory_profile_for_current_dim_()
+    {
+        if ( dim_ == 3 )
+        {
+            update_memory_profile_3d_();
+        }
+        else if ( dim_ == 4 )
+        {
+            update_memory_profile_4d_();
+        }
+        else
+        {
+            update_memory_profile_3d_();
+            update_memory_profile_4d_();
+        }
+    }
+
     void update_memory_profile_3d_()
     {
         if ( !memory_profiler_.enabled() )
@@ -1389,8 +1404,7 @@ private:
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
         profiler->set_bytes(
-            "fftm/shared_work_buffer",
-            static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+            "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
         );
         profiler->set_bytes(
             "fftm/scratch_stage0_xfft_3d",
@@ -1419,8 +1433,7 @@ private:
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
         profiler->set_bytes(
-            "fftm/shared_work_buffer",
-            static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+            "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
         );
         profiler->set_bytes( "fftm/scratch_stage0_xfft_3d", 0 );
         profiler->set_bytes( "fftm/scratch_stage1_3d", 0 );
