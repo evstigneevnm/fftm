@@ -630,9 +630,9 @@ private:
         scfd::communication::detail::type_free( mpi_value_type_ );
     }
 
-    void synchronize_streams_()
+    void synchronize_streams_( const char *label = "stream_synchronize" )
     {
-        auto scope = profile_scope_( "stream_synchronize" );
+        auto scope = profile_scope_( label );
         for ( std::size_t i = 0; i < streams_.size(); ++i )
         {
             runtime_api_t::stream_synchronize( streams_[i].stream() );
@@ -762,7 +762,7 @@ private:
                     unpack_forward_received_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
@@ -806,7 +806,7 @@ private:
                     unpack_forward_received_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
@@ -872,7 +872,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
@@ -924,7 +924,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
@@ -960,7 +960,7 @@ private:
                 unpack_forward_received_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         {
@@ -978,7 +978,7 @@ private:
                 unpack_forward_received_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #endif
     }
 
@@ -1022,7 +1022,7 @@ private:
                 unpack_forward_received_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #else
         auto      scope    = profile_scope_( "forward_alltoallw" );
         const int row_size = row_comm_info_.num_procs;
@@ -1071,7 +1071,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "pack_complete" );
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -1121,7 +1121,7 @@ private:
                 }
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
@@ -1147,7 +1147,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "pack_complete" );
 
         {
             auto phase = profile_scope_( "post_send" );
@@ -1182,7 +1182,7 @@ private:
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #endif
     }
 
@@ -1210,7 +1210,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "pack_complete" );
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -1268,7 +1268,7 @@ private:
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #else
         auto      scope    = profile_scope_( "backward_p2p_waitany" );
         const int row_size = row_comm_info_.num_procs;
@@ -1290,7 +1290,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "pack_complete" );
 
         {
             auto phase = profile_scope_( "post_send" );
@@ -1335,7 +1335,7 @@ private:
             auto phase = profile_scope_( "wait_send" );
             row_comm_info_.waitall( row_size, send_requests_.data() );
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #endif
     }
 
@@ -1352,7 +1352,7 @@ private:
                     pack_backward_chunk_async_( p, in );
                 }
             }
-            synchronize_streams_();
+            synchronize_streams_( "pack_complete" );
 
             {
                 auto phase = profile_scope_( "stage_send_to_host" );
@@ -1385,7 +1385,7 @@ private:
                     pack_backward_chunk_async_( p, in );
                 }
             }
-            synchronize_streams_();
+            synchronize_streams_( "pack_complete" );
 
             {
                 auto phase = profile_scope_( "mpi_alltoallv" );
@@ -1412,7 +1412,7 @@ private:
                     pack_backward_chunk_async_( p, in );
                 }
             }
-            synchronize_streams_();
+            synchronize_streams_( "pack_complete" );
 
             {
                 auto phase = profile_scope_( "stage_send_to_host" );
@@ -1460,7 +1460,7 @@ private:
                     pack_backward_chunk_async_( p, in );
                 }
             }
-            synchronize_streams_();
+            synchronize_streams_( "pack_complete" );
 
             const int row_size = row_comm_info_.num_procs;
             {
@@ -2085,9 +2085,9 @@ private:
         scfd::communication::detail::type_free( mpi_value_type_ );
     }
 
-    void synchronize_streams_()
+    void synchronize_streams_( const char *label = "stream_synchronize" )
     {
-        auto scope = profile_scope_( "stream_synchronize" );
+        auto scope = profile_scope_( label );
         for ( std::size_t i = 0; i < streams_.size(); ++i )
         {
             runtime_api_t::stream_synchronize( streams_[i].stream() );
@@ -2165,7 +2165,7 @@ private:
     template <class ArrayIn>
     void pack_forward_( const ArrayIn &in )
     {
-        auto scope = profile_scope_( "pack_forward" );
+        auto scope = profile_scope_( "pack_forward_all" );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
             pack_forward_chunk_async_(
@@ -2173,7 +2173,7 @@ private:
                 send_buffer_.raw_ptr() + forward_send_offsets_[p], streams_[p].stream()
             );
         }
-        synchronize_streams_();
+        synchronize_streams_( "pack_complete" );
     }
 
     template <class ArrayOut>
@@ -2199,7 +2199,7 @@ private:
     template <class ArrayIn>
     void pack_backward_( const ArrayIn &in )
     {
-        auto scope = profile_scope_( "pack_backward" );
+        auto scope = profile_scope_( "pack_backward_all" );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
         {
             pack_backward_chunk_async_(
@@ -2207,7 +2207,7 @@ private:
                 send_buffer_.raw_ptr() + backward_send_offsets_[p], streams_[p].stream()
             );
         }
-        synchronize_streams_();
+        synchronize_streams_( "pack_complete" );
     }
 
     template <class ArrayOut>
@@ -2270,7 +2270,7 @@ private:
                 unpack_forward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2318,7 +2318,7 @@ private:
                 unpack_forward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2393,7 +2393,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2454,7 +2454,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2493,7 +2493,7 @@ private:
                 unpack_forward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #else
         auto scope = profile_scope_( "forward_alltoallv" );
         {
@@ -2511,7 +2511,7 @@ private:
                 unpack_forward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #endif
     }
 
@@ -2560,7 +2560,7 @@ private:
                 unpack_forward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #else
         auto             scope = profile_scope_( "forward_alltoallw" );
         std::vector<int> forward_sdispls_w( line_comm_info_.num_procs );
@@ -2591,7 +2591,7 @@ private:
                 unpack_forward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #endif
     }
 
@@ -2658,7 +2658,7 @@ private:
                 unpack_backward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2708,7 +2708,7 @@ private:
                 unpack_backward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2786,7 +2786,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2849,7 +2849,7 @@ private:
             }
         }
 
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
             line_comm_info_.waitall( comm_size, send_requests_.data() );
@@ -2891,7 +2891,7 @@ private:
                 unpack_backward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #else
         auto scope = profile_scope_( "backward_alltoallv" );
         pack_backward_( in );
@@ -2911,7 +2911,7 @@ private:
                 unpack_backward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #endif
     }
 
@@ -2962,7 +2962,7 @@ private:
                 unpack_backward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
         pack_backward_( in );
@@ -2996,7 +2996,7 @@ private:
                 unpack_backward_chunk_async_( p, out );
             }
         }
-        synchronize_streams_();
+        synchronize_streams_( "recv_copy_complete" );
 #endif
     }
 

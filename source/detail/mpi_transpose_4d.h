@@ -1025,7 +1025,10 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallw" );
-        ensure_forward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_forward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -1050,7 +1053,10 @@ private:
         }
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
-        ensure_forward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_forward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
@@ -1348,7 +1354,10 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallw" );
-        ensure_backward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_backward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -1373,7 +1382,10 @@ private:
         }
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
-        ensure_backward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_backward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
@@ -2432,7 +2444,10 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallw" );
-        ensure_forward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_forward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -2457,7 +2472,10 @@ private:
         }
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
-        ensure_forward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_forward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
@@ -2754,7 +2772,10 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallw" );
-        ensure_backward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_backward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -2779,7 +2800,10 @@ private:
         }
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
-        ensure_backward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_backward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
@@ -3839,7 +3863,10 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallw" );
-        ensure_forward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_forward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -3864,7 +3891,10 @@ private:
         }
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
-        ensure_forward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_forward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
@@ -4161,7 +4191,10 @@ private:
     {
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallw" );
-        ensure_backward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_backward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "stage_send_to_host" );
             copy_send_buffer_to_host_();
@@ -4186,7 +4219,10 @@ private:
         }
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
-        ensure_backward_alltoallw_layout_();
+        {
+            auto phase = profile_scope_( "prepare_alltoallw_layout" );
+            ensure_backward_alltoallw_layout_();
+        }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
