@@ -515,11 +515,9 @@ private:
                 detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "same_xy forward recvcount" );
             forward_rdispls_[p] = detail::mpi_int_cast( forward_recv_offsets_[p], "same_xy forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
-            forward_sdispls_w_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xy forward sdispl_w" );
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
-            forward_rdispls_w_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xy forward rdispl_w" );
+            forward_sdispls_w_[p]    = 0;
+            forward_rdispls_w_[p]    = 0;
 
             backward_sendcounts_[p] =
                 detail::mpi_int_cast( backward_send_chunk_elems_( p ), "same_xy backward sendcount" );
@@ -528,14 +526,40 @@ private:
                 detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "same_xy backward recvcount" );
             backward_rdispls_[p] = detail::mpi_int_cast( backward_recv_offsets_[p], "same_xy backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
-            backward_sdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_offsets_[p] ), "same_xy backward sdispl_w"
-            );
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
-            backward_rdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_offsets_[p] ), "same_xy backward rdispl_w"
-            );
+            backward_sdispls_w_[p]    = 0;
+            backward_rdispls_w_[p]    = 0;
         }
+        forward_alltoallw_layout_ready_  = false;
+        backward_alltoallw_layout_ready_ = false;
+    }
+
+    void ensure_forward_alltoallw_layout_()
+    {
+        if ( forward_alltoallw_layout_ready_ )
+            return;
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            forward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xy forward sdispl_w" );
+            forward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xy forward rdispl_w" );
+        }
+        forward_alltoallw_layout_ready_ = true;
+    }
+
+    void ensure_backward_alltoallw_layout_()
+    {
+        if ( backward_alltoallw_layout_ready_ )
+            return;
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            backward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xy backward sdispl_w" );
+            backward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xy backward rdispl_w" );
+        }
+        backward_alltoallw_layout_ready_ = true;
     }
 
     template <class ArrayIn>
@@ -738,6 +762,7 @@ private:
                                 "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
+        ensure_forward_alltoallw_layout_();
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
@@ -896,6 +921,7 @@ private:
                                 "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
+        ensure_backward_alltoallw_layout_();
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
             line_comm_info_.alltoallw(
@@ -973,6 +999,8 @@ private:
     std::vector<int>         backward_recvcounts_w_;
     std::vector<int>         backward_rdispls_w_;
     std::vector<mpi_dtype_t> backward_recvtypes_w_;
+    bool                     forward_alltoallw_layout_ready_  = false;
+    bool                     backward_alltoallw_layout_ready_ = false;
 
     std::size_t max_buffer_elems_ = 0;
 };
@@ -1438,11 +1466,9 @@ private:
                 detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "same_xw forward recvcount" );
             forward_rdispls_[p] = detail::mpi_int_cast( forward_recv_offsets_[p], "same_xw forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
-            forward_sdispls_w_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xw forward sdispl_w" );
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
-            forward_rdispls_w_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xw forward rdispl_w" );
+            forward_sdispls_w_[p]    = 0;
+            forward_rdispls_w_[p]    = 0;
 
             backward_sendcounts_[p] =
                 detail::mpi_int_cast( backward_send_chunk_elems_( p ), "same_xw backward sendcount" );
@@ -1451,14 +1477,40 @@ private:
                 detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "same_xw backward recvcount" );
             backward_rdispls_[p] = detail::mpi_int_cast( backward_recv_offsets_[p], "same_xw backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
-            backward_sdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_offsets_[p] ), "same_xw backward sdispl_w"
-            );
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
-            backward_rdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_offsets_[p] ), "same_xw backward rdispl_w"
-            );
+            backward_sdispls_w_[p]    = 0;
+            backward_rdispls_w_[p]    = 0;
         }
+        forward_alltoallw_layout_ready_  = false;
+        backward_alltoallw_layout_ready_ = false;
+    }
+
+    void ensure_forward_alltoallw_layout_()
+    {
+        if ( forward_alltoallw_layout_ready_ )
+            return;
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            forward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xw forward sdispl_w" );
+            forward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xw forward rdispl_w" );
+        }
+        forward_alltoallw_layout_ready_ = true;
+    }
+
+    void ensure_backward_alltoallw_layout_()
+    {
+        if ( backward_alltoallw_layout_ready_ )
+            return;
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            backward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xw backward sdispl_w" );
+            backward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xw backward rdispl_w" );
+        }
+        backward_alltoallw_layout_ready_ = true;
     }
 
     template <class ArrayIn>
@@ -1626,6 +1678,7 @@ private:
                                 "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
+        ensure_forward_alltoallw_layout_();
         line_comm_info_.alltoallw(
             static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
             forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
@@ -1744,6 +1797,7 @@ private:
                                 "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
+        ensure_backward_alltoallw_layout_();
         line_comm_info_.alltoallw(
             static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
             backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
@@ -1816,6 +1870,8 @@ private:
     std::vector<int>         backward_recvcounts_w_;
     std::vector<int>         backward_rdispls_w_;
     std::vector<mpi_dtype_t> backward_recvtypes_w_;
+    bool                     forward_alltoallw_layout_ready_  = false;
+    bool                     backward_alltoallw_layout_ready_ = false;
 
     std::size_t max_buffer_elems_ = 0;
 };
@@ -2281,11 +2337,9 @@ private:
                 detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "same_zw forward recvcount" );
             forward_rdispls_[p] = detail::mpi_int_cast( forward_recv_offsets_[p], "same_zw forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
-            forward_sdispls_w_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_zw forward sdispl_w" );
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
-            forward_rdispls_w_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_zw forward rdispl_w" );
+            forward_sdispls_w_[p]    = 0;
+            forward_rdispls_w_[p]    = 0;
 
             backward_sendcounts_[p] =
                 detail::mpi_int_cast( backward_send_chunk_elems_( p ), "same_zw backward sendcount" );
@@ -2294,14 +2348,40 @@ private:
                 detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "same_zw backward recvcount" );
             backward_rdispls_[p] = detail::mpi_int_cast( backward_recv_offsets_[p], "same_zw backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
-            backward_sdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_offsets_[p] ), "same_zw backward sdispl_w"
-            );
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
-            backward_rdispls_w_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_offsets_[p] ), "same_zw backward rdispl_w"
-            );
+            backward_sdispls_w_[p]    = 0;
+            backward_rdispls_w_[p]    = 0;
         }
+        forward_alltoallw_layout_ready_  = false;
+        backward_alltoallw_layout_ready_ = false;
+    }
+
+    void ensure_forward_alltoallw_layout_()
+    {
+        if ( forward_alltoallw_layout_ready_ )
+            return;
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            forward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_zw forward sdispl_w" );
+            forward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_zw forward rdispl_w" );
+        }
+        forward_alltoallw_layout_ready_ = true;
+    }
+
+    void ensure_backward_alltoallw_layout_()
+    {
+        if ( backward_alltoallw_layout_ready_ )
+            return;
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            backward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_zw backward sdispl_w" );
+            backward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_zw backward rdispl_w" );
+        }
+        backward_alltoallw_layout_ready_ = true;
     }
 
     template <class ArrayIn>
@@ -2469,6 +2549,7 @@ private:
                                 "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "forward_alltoallw" );
+        ensure_forward_alltoallw_layout_();
         line_comm_info_.alltoallw(
             static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
             forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
@@ -2587,6 +2668,7 @@ private:
                                 "SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI" );
 #else
         auto scope = profile_scope_( "backward_alltoallw" );
+        ensure_backward_alltoallw_layout_();
         line_comm_info_.alltoallw(
             static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
             backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
@@ -2659,6 +2741,8 @@ private:
     std::vector<int>         backward_recvcounts_w_;
     std::vector<int>         backward_rdispls_w_;
     std::vector<mpi_dtype_t> backward_recvtypes_w_;
+    bool                     forward_alltoallw_layout_ready_  = false;
+    bool                     backward_alltoallw_layout_ready_ = false;
 
     std::size_t max_buffer_elems_ = 0;
 };
