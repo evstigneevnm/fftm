@@ -17,6 +17,8 @@
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 
+#include <external_wrap/cufft_wrap.h>
+
 #include "../detail/array_arrangers.h"
 #include "../detail/mpi_transpose_3d.h"
 #include "../fft_partitioning.h"
@@ -27,6 +29,7 @@ namespace
 using T          = double;
 using complex_t  = thrust::complex<T>;
 using backend_t  = scfd::backend::cuda;
+using runtime_api_t = fftm::wrap::cuda_runtime_api;
 using memory_t   = backend_t::memory_type;
 using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::for_each_nd_type<3, int>;
@@ -223,7 +226,8 @@ int run_mode(
 )
 {
     using transpose_t =
-        fftm::mpi_transpose_3d<complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+        fftm::mpi_transpose_3d<
+            complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi, runtime_api_t>;
 
     fftm::processor_grid grid;
     grid.init( options.p1, options.p2 );

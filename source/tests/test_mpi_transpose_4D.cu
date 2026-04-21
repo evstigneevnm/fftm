@@ -17,6 +17,8 @@
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 
+#include <external_wrap/cufft_wrap.h>
+
 #include "../detail/array_arrangers.h"
 #include "../detail/direct_transpose_4d.h"
 #include "../detail/mpi_transpose_4d.h"
@@ -28,6 +30,7 @@ namespace
 using T          = double;
 using complex_t  = thrust::complex<T>;
 using backend_t  = scfd::backend::cuda;
+using runtime_api_t = fftm::wrap::cuda_runtime_api;
 using memory_t   = backend_t::memory_type;
 using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::for_each_nd_type<4, int>;
@@ -538,11 +541,11 @@ int run_mode(
 )
 {
     using same_xy_t = fftm::detail::mpi_transpose_4d_same_xy<
-        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi, runtime_api_t>;
     using same_xw_t = fftm::detail::mpi_transpose_4d_same_xw<
-        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi, runtime_api_t>;
     using same_zw_t = fftm::detail::mpi_transpose_4d_same_zw<
-        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi>;
+        complex_t, backend_t, scfd::communication::mpi_comm_info, scfd::utils::log_mpi, runtime_api_t>;
 
     if ( options.nw % 2 != 0 )
         throw std::logic_error( "Nw must be even for the half-spectrum transpose test" );

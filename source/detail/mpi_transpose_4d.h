@@ -16,7 +16,6 @@
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
 
-#include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
 #include "../profiling.h"
 #include "mpi_transpose_3d.h"
@@ -56,8 +55,7 @@ inline rect_4d_t<Idx> make_range_4d( std::size_t d0, std::size_t d1, std::size_t
 }
 
 template <
-    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
+    class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
 class mpi_transpose_4d_same_xy
 {
 public:
@@ -980,8 +978,7 @@ private:
 };
 
 template <
-    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
+    class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
 class mpi_transpose_4d_same_xw
 {
 public:
@@ -1824,8 +1821,7 @@ private:
 };
 
 template <
-    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
+    class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
 class mpi_transpose_4d_same_zw
 {
 public:

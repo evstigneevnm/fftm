@@ -13,7 +13,6 @@
 #include <scfd/communication/mpi_comm.h>
 #include <scfd/utils/log_mpi.h>
 
-#include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
 #include "../profiling.h"
 
@@ -59,8 +58,7 @@ inline int mpi_int_cast( std::size_t value, const std::string &what )
 } // namespace detail
 
 template <
-    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
+    class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
 class mpi_transpose_3d
 {
 public:
@@ -1000,8 +998,7 @@ private:
 };
 
 template <
-    class ValueType, class Backend, class MPIComm, class Log = scfd::utils::log_mpi,
-    class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
+    class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
 class mpi_transpose_3d_same_z
 {
 public:
