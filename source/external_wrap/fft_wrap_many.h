@@ -143,6 +143,7 @@ public:
             el.second->set_work_area( external_work_area );
         }
         external_activated_ = true;
+        update_memory_profile_();
     }
     std::size_t get_work_size() const
     {
@@ -184,7 +185,8 @@ private:
         }
 
         memory_profiler_->set_bytes(
-            memory_profile_prefix_ + "/work_area", static_cast<memory_profiler_t::bytes_type>( work_area_size_ )
+            memory_profile_prefix_ + "/work_area",
+            external_activated_ ? 0 : static_cast<memory_profiler_t::bytes_type>( work_area_size_ )
         );
     }
 

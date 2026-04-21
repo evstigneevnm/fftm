@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include <scfd/arrays/tensor_array_nd.h>
+#include <scfd/memory/shared_buffer.h>
 
 #include "detail/array_arrangers.h"
 #include "detail/cuda_memcpy_4d_slab_transposer.h"
@@ -208,7 +209,7 @@ public:
         dim_     = 2;
 
         add_2d_plans_();
-        base_fft_.activate();
+        activate_shared_work_area_();
         update_memory_profile_();
         init_done_ = true;
     }
@@ -224,7 +225,7 @@ public:
         dim_     = 3;
 
         add_3d_plans_();
-        base_fft_.activate();
+        activate_shared_work_area_();
         update_memory_profile_();
         init_done_ = true;
     }
@@ -248,7 +249,7 @@ public:
 
         init_4d_storage_( strategy_family_tag() );
         add_4d_plans_( strategy_family_tag() );
-        base_fft_.activate();
+        activate_shared_work_area_();
         update_memory_profile_();
         init_done_ = true;
     }
@@ -331,11 +332,31 @@ private:
     using stage2_complex_array_t = typename traits_4d_t::stage2_complex_array_t;
     using direct_transposer_t    = detail::direct_transpose_4d;
     using memcpy_transposer_t    = detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>;
+    using shared_buffer_t        = scfd::memory::shared_buffer<memory_t>;
 
     static typename memory_profiler_t::bytes_type bytes_of_elems_( std::size_t elems, std::size_t elem_size )
     {
         return static_cast<typename memory_profiler_t::bytes_type>( elems ) *
                static_cast<typename memory_profiler_t::bytes_type>( elem_size );
+    }
+
+    static std::size_t align_up_( std::size_t value, std::size_t alignment )
+    {
+        return ( value + alignment - 1 ) / alignment * alignment;
+    }
+
+    void *shared_work_ptr_() const
+    {
+        return static_cast<void *>( shared_work_buffer_.naive_ptr() );
+    }
+
+    void activate_shared_work_area_()
+    {
+        shared_work_size_ = align_up_( base_fft_.activate_work_size(), 256 );
+        shared_work_buffer_.require_size_bytes( shared_work_size_ );
+        shared_work_buffer_.activate();
+        base_fft_.set_external_work_area( shared_work_ptr_() );
+        update_memory_profile_();
     }
 
     void configure_memory_profiling_( const ffts_init_options &options )
@@ -361,6 +382,10 @@ private:
         }
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        profiler->set_bytes(
+            "ffts/shared_work_buffer",
+            static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+        );
         profiler->set_bytes(
             "ffts/stage0_4d", bytes_of_elems_( static_cast<std::size_t>( stage0_.total_size() ), sizeof( complex ) )
         );
@@ -868,6 +893,8 @@ private:
     BaseFFT                    base_fft_;
     ffts_init_options          init_options_;
     optional_memory_profiler_t memory_profiler_;
+    shared_buffer_t            shared_work_buffer_;
+    std::size_t                shared_work_size_ = 0;
 
     bool        init_done_;
     std::size_t dim_;

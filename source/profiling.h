@@ -4,8 +4,14 @@
 #include <memory>
 #include <string>
 
-#include <scfd/utils/mpi_timer_event.h>
 #include <scfd/utils/system_timer_event.h>
+
+#if defined( __has_include )
+#if __has_include( <mpi.h> )
+#include <scfd/utils/mpi_timer_event.h>
+#define FFTM_HAS_MPI_TIMER_EVENT 1
+#endif
+#endif
 
 #include "common/memory_profiler.h"
 #include "common/profiler.h"
@@ -13,7 +19,11 @@
 namespace fftm
 {
 
+#ifdef FFTM_HAS_MPI_TIMER_EVENT
 using fftm_profiler        = scfd::utils::profiler<scfd::utils::mpi_timer_event>;
+#else
+using fftm_profiler        = scfd::utils::profiler<scfd::utils::system_timer_event>;
+#endif
 using ffts_profiler        = scfd::utils::profiler<scfd::utils::system_timer_event>;
 using fftm_memory_profiler = memory_profiler;
 using ffts_memory_profiler = memory_profiler;

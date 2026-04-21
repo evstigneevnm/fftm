@@ -101,6 +101,29 @@ public:
         }
     }
 
+    void use_external_work_area()
+    {
+        use_external_work_area_ = true;
+    }
+
+    std::size_t get_work_size_bytes() const
+    {
+        return bytes_from_elems_( send_buffer_elems_ ) + bytes_from_elems_( recv_buffer_elems_ );
+    }
+
+    void set_external_work_area( void *external_work_area )
+    {
+        if ( !use_external_work_area_ )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_xy::set_external_work_area: external work area was not enabled."
+            );
+        }
+        external_work_area_ = external_work_area;
+        bind_external_work_area_();
+        update_memory_profile_();
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_xy::init" );
@@ -138,8 +161,13 @@ public:
             throw std::logic_error( "mpi_transpose_4d_same_xy communicator size mismatch" );
 
         init_layouts_();
-        send_buffer_.init( max_buffer_elems_ );
-        recv_buffer_.init( max_buffer_elems_ );
+        send_buffer_elems_ = max_buffer_elems_;
+        recv_buffer_elems_ = max_buffer_elems_;
+        if ( !use_external_work_area_ )
+        {
+            send_buffer_.init( send_buffer_elems_ );
+            recv_buffer_.init( recv_buffer_elems_ );
+        }
         send_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         recv_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         is_inited_ = true;
@@ -286,6 +314,10 @@ private:
         if ( !is_inited_ )
             throw std::logic_error( "mpi_transpose_4d_same_xy::init must be "
                                     "called before transpose" );
+        if ( use_external_work_area_ && external_work_area_ == nullptr )
+        {
+            throw std::logic_error( "mpi_transpose_4d_same_xy: external work area was not bound." );
+        }
     }
 
     void update_memory_profile_()
@@ -297,13 +329,28 @@ private:
 
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/send_buffer",
-            static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
-                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+            use_external_work_area_ ? 0
+                                    : static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
+                                          static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
         );
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/recv_buffer",
-            static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
-                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+            use_external_work_area_ ? 0
+                                    : static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
+                                          static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+        );
+    }
+
+    void bind_external_work_area_()
+    {
+        if ( external_work_area_ == nullptr )
+        {
+            return;
+        }
+        char *raw = static_cast<char *>( external_work_area_ );
+        send_buffer_.init_by_raw_data( reinterpret_cast<value_type *>( raw ), send_buffer_elems_ );
+        recv_buffer_.init_by_raw_data(
+            reinterpret_cast<value_type *>( raw + bytes_from_elems_( send_buffer_elems_ ) ), recv_buffer_elems_
         );
     }
 
@@ -870,6 +917,10 @@ private:
     scfd::communication::mpi_comm_info line_comm_info_;
     contiguous_buf_t                   send_buffer_;
     contiguous_buf_t                   recv_buffer_;
+    std::size_t                        send_buffer_elems_      = 0;
+    std::size_t                        recv_buffer_elems_      = 0;
+    bool                               use_external_work_area_ = false;
+    void                              *external_work_area_     = nullptr;
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;
@@ -950,6 +1001,29 @@ public:
         }
     }
 
+    void use_external_work_area()
+    {
+        use_external_work_area_ = true;
+    }
+
+    std::size_t get_work_size_bytes() const
+    {
+        return bytes_from_elems_( send_buffer_elems_ ) + bytes_from_elems_( recv_buffer_elems_ );
+    }
+
+    void set_external_work_area( void *external_work_area )
+    {
+        if ( !use_external_work_area_ )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_xw::set_external_work_area: external work area was not enabled."
+            );
+        }
+        external_work_area_ = external_work_area;
+        bind_external_work_area_();
+        update_memory_profile_();
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_xw::init" );
@@ -987,8 +1061,13 @@ public:
             throw std::logic_error( "mpi_transpose_4d_same_xw communicator size mismatch" );
 
         init_layouts_();
-        send_buffer_.init( max_buffer_elems_ );
-        recv_buffer_.init( max_buffer_elems_ );
+        send_buffer_elems_ = max_buffer_elems_;
+        recv_buffer_elems_ = max_buffer_elems_;
+        if ( !use_external_work_area_ )
+        {
+            send_buffer_.init( send_buffer_elems_ );
+            recv_buffer_.init( recv_buffer_elems_ );
+        }
         send_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         recv_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         is_inited_ = true;
@@ -1135,6 +1214,10 @@ private:
         if ( !is_inited_ )
             throw std::logic_error( "mpi_transpose_4d_same_xw::init must be "
                                     "called before transpose" );
+        if ( use_external_work_area_ && external_work_area_ == nullptr )
+        {
+            throw std::logic_error( "mpi_transpose_4d_same_xw: external work area was not bound." );
+        }
     }
 
     void update_memory_profile_()
@@ -1146,13 +1229,28 @@ private:
 
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/send_buffer",
-            static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
-                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+            use_external_work_area_ ? 0
+                                    : static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
+                                          static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
         );
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/recv_buffer",
-            static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
-                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+            use_external_work_area_ ? 0
+                                    : static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
+                                          static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+        );
+    }
+
+    void bind_external_work_area_()
+    {
+        if ( external_work_area_ == nullptr )
+        {
+            return;
+        }
+        char *raw = static_cast<char *>( external_work_area_ );
+        send_buffer_.init_by_raw_data( reinterpret_cast<value_type *>( raw ), send_buffer_elems_ );
+        recv_buffer_.init_by_raw_data(
+            reinterpret_cast<value_type *>( raw + bytes_from_elems_( send_buffer_elems_ ) ), recv_buffer_elems_
         );
     }
 
@@ -1639,6 +1737,10 @@ private:
     scfd::communication::mpi_comm_info line_comm_info_;
     contiguous_buf_t                   send_buffer_;
     contiguous_buf_t                   recv_buffer_;
+    std::size_t                        send_buffer_elems_      = 0;
+    std::size_t                        recv_buffer_elems_      = 0;
+    bool                               use_external_work_area_ = false;
+    void                              *external_work_area_     = nullptr;
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;
@@ -1719,6 +1821,29 @@ public:
         }
     }
 
+    void use_external_work_area()
+    {
+        use_external_work_area_ = true;
+    }
+
+    std::size_t get_work_size_bytes() const
+    {
+        return bytes_from_elems_( send_buffer_elems_ ) + bytes_from_elems_( recv_buffer_elems_ );
+    }
+
+    void set_external_work_area( void *external_work_area )
+    {
+        if ( !use_external_work_area_ )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_zw::set_external_work_area: external work area was not enabled."
+            );
+        }
+        external_work_area_ = external_work_area;
+        bind_external_work_area_();
+        update_memory_profile_();
+    }
+
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_zw::init" );
@@ -1756,8 +1881,13 @@ public:
             throw std::logic_error( "mpi_transpose_4d_same_zw communicator size mismatch" );
 
         init_layouts_();
-        send_buffer_.init( max_buffer_elems_ );
-        recv_buffer_.init( max_buffer_elems_ );
+        send_buffer_elems_ = max_buffer_elems_;
+        recv_buffer_elems_ = max_buffer_elems_;
+        if ( !use_external_work_area_ )
+        {
+            send_buffer_.init( send_buffer_elems_ );
+            recv_buffer_.init( recv_buffer_elems_ );
+        }
         send_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         recv_requests_.assign( line_comm_info_.num_procs, mpi_request_t() );
         is_inited_ = true;
@@ -1904,6 +2034,10 @@ private:
         if ( !is_inited_ )
             throw std::logic_error( "mpi_transpose_4d_same_zw::init must be "
                                     "called before transpose" );
+        if ( use_external_work_area_ && external_work_area_ == nullptr )
+        {
+            throw std::logic_error( "mpi_transpose_4d_same_zw: external work area was not bound." );
+        }
     }
 
     void update_memory_profile_()
@@ -1915,13 +2049,28 @@ private:
 
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/send_buffer",
-            static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
-                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+            use_external_work_area_ ? 0
+                                    : static_cast<memory_profiler_t::bytes_type>( send_buffer_.size() ) *
+                                          static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
         );
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/recv_buffer",
-            static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
-                static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+            use_external_work_area_ ? 0
+                                    : static_cast<memory_profiler_t::bytes_type>( recv_buffer_.size() ) *
+                                          static_cast<memory_profiler_t::bytes_type>( sizeof( value_type ) )
+        );
+    }
+
+    void bind_external_work_area_()
+    {
+        if ( external_work_area_ == nullptr )
+        {
+            return;
+        }
+        char *raw = static_cast<char *>( external_work_area_ );
+        send_buffer_.init_by_raw_data( reinterpret_cast<value_type *>( raw ), send_buffer_elems_ );
+        recv_buffer_.init_by_raw_data(
+            reinterpret_cast<value_type *>( raw + bytes_from_elems_( send_buffer_elems_ ) ), recv_buffer_elems_
         );
     }
 
@@ -2408,6 +2557,10 @@ private:
     scfd::communication::mpi_comm_info line_comm_info_;
     contiguous_buf_t                   send_buffer_;
     contiguous_buf_t                   recv_buffer_;
+    std::size_t                        send_buffer_elems_      = 0;
+    std::size_t                        recv_buffer_elems_      = 0;
+    bool                               use_external_work_area_ = false;
+    void                              *external_work_area_     = nullptr;
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;

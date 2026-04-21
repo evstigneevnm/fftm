@@ -12,6 +12,7 @@
 
 #include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
+#include <scfd/memory/shared_buffer.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
@@ -281,6 +282,11 @@ public:
     {
         for_each_3d_.block_size = 128;
         for_each_4d_.block_size = 128;
+        same_x_.use_external_work_area();
+        same_z_.use_external_work_area();
+        same_xy_.use_external_work_area();
+        same_xw_.use_external_work_area();
+        same_zw_.use_external_work_area();
     }
 
     ~fftm()
@@ -444,6 +450,7 @@ private:
     using for_each_3d_t       = typename Backend::template for_each_nd_type<3, int>;
     using for_each_4d_t       = typename Backend::template for_each_nd_type<4, int>;
     using complex_buffer_t    = scfd::arrays::array_nd<complex, 1, memory_t>;
+    using shared_buffer_t     = scfd::memory::shared_buffer<memory_t>;
     using profiler_t          = fftm_profiler;
     using optional_profiler_t = optional_profiler<profiler_t>;
     using memory_profiler_t   = fftm_memory_profiler;
@@ -458,6 +465,42 @@ private:
     {
         return static_cast<typename memory_profiler_t::bytes_type>( elems ) *
                static_cast<typename memory_profiler_t::bytes_type>( elem_size );
+    }
+
+    static std::size_t align_up_( std::size_t value, std::size_t alignment )
+    {
+        return ( value + alignment - 1 ) / alignment * alignment;
+    }
+
+    void *shared_work_ptr_( std::size_t offset = 0 ) const
+    {
+        return static_cast<void *>( static_cast<char *>( shared_work_buffer_.naive_ptr() ) + offset );
+    }
+
+    void activate_shared_work_area_()
+    {
+        const std::size_t fft_work_size = base_fft_.activate_work_size();
+        const std::size_t transpose_work_size = std::max(
+            std::max( same_x_.get_work_size_bytes(), same_z_.get_work_size_bytes() ),
+            std::max(
+                same_xy_.get_work_size_bytes(),
+                std::max( same_xw_.get_work_size_bytes(), same_zw_.get_work_size_bytes() )
+            )
+        );
+        shared_work_size_ = align_up_( std::max( fft_work_size, transpose_work_size ), 256 );
+        shared_work_buffer_.require_size_bytes( shared_work_size_ );
+        shared_work_buffer_.activate();
+
+        void *work_area = shared_work_ptr_();
+        base_fft_.set_external_work_area( work_area );
+        same_x_.set_external_work_area( work_area );
+        same_z_.set_external_work_area( work_area );
+        same_xy_.set_external_work_area( work_area );
+        same_xw_.set_external_work_area( work_area );
+        same_zw_.set_external_work_area( work_area );
+
+        update_memory_profile_3d_();
+        update_memory_profile_4d_();
     }
 
     void configure_profiling_( const fftm_init_options &options )
@@ -689,7 +732,7 @@ private:
 
         SCFD_SAFE_CALL( init_strategy_( strategy_family_3d_tag() ) );
         SCFD_SAFE_CALL( add_plans_( strategy_family_3d_tag() ) );
-        SCFD_SAFE_CALL( base_fft_.activate() );
+        SCFD_SAFE_CALL( activate_shared_work_area_() );
         init_done_ = true;
     }
 
@@ -725,7 +768,7 @@ private:
 
         SCFD_SAFE_CALL( init_4d_strategy_( strategy_family_4d_tag() ) );
         SCFD_SAFE_CALL( add_4d_plans_( strategy_family_4d_tag() ) );
-        SCFD_SAFE_CALL( base_fft_.activate() );
+        SCFD_SAFE_CALL( activate_shared_work_area_() );
         init_done_ = true;
     }
 
@@ -1346,6 +1389,10 @@ private:
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
         profiler->set_bytes(
+            "fftm/shared_work_buffer",
+            static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+        );
+        profiler->set_bytes(
             "fftm/scratch_stage0_xfft_3d",
             bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_xfft_3d_.size() ), sizeof( complex ) )
         );
@@ -1371,6 +1418,10 @@ private:
         }
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        profiler->set_bytes(
+            "fftm/shared_work_buffer",
+            static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+        );
         profiler->set_bytes( "fftm/scratch_stage0_xfft_3d", 0 );
         profiler->set_bytes( "fftm/scratch_stage1_3d", 0 );
         profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
@@ -1397,6 +1448,8 @@ private:
     optional_profiler_t        profiler_;
     optional_memory_profiler_t memory_profiler_;
     partitioning_t             partitioning_;
+    shared_buffer_t            shared_work_buffer_;
+    std::size_t                shared_work_size_ = 0;
     same_x_t                   same_x_;
     same_z_t                   same_z_;
     same_xy_t                  same_xy_;
