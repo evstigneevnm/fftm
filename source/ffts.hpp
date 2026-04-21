@@ -1,6 +1,7 @@
 #ifndef __FFTM_FFTS_HPP__
 #define __FFTM_FFTS_HPP__
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <iostream>
@@ -9,6 +10,7 @@
 #include <string>
 #include <type_traits>
 
+#include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
 #include <scfd/memory/shared_buffer.h>
 
@@ -244,9 +246,6 @@ public:
         nw_half_ = nw_ / 2 + 1;
         dim_     = 4;
 
-        stage0_.init( nx_, ny_, nz_, nw_half_ );
-        work_hat_.init( ny_, nz_, nw_half_, nx_ );
-
         init_4d_storage_( strategy_family_tag() );
         add_4d_plans_( strategy_family_tag() );
         activate_shared_work_area_();
@@ -311,11 +310,10 @@ public:
         forward_4d_( strategy_family_tag(), in, out );
     }
 
-    void backward( const complex_array_t<4> &in, real_array_t<4> &out )
+    // Destructive inverse: the spectral input is reused as a work buffer to avoid a full-domain copy.
+    void backward( complex_array_t<4> &in, real_array_t<4> &out )
     {
         ensure_dimension_( 4 );
-
-        copy_spectral_field_( in, work_hat_ );
         backward_4d_( strategy_family_tag(), in, out );
     }
 
@@ -387,17 +385,17 @@ private:
             static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
         );
         profiler->set_bytes(
-            "ffts/stage0_4d", bytes_of_elems_( static_cast<std::size_t>( stage0_.total_size() ), sizeof( complex ) )
+            "ffts/scratch_stage0_stage2_4d",
+            bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_stage2_4d_.size() ), sizeof( complex ) )
         );
         profiler->set_bytes(
-            "ffts/stage1_4d", bytes_of_elems_( static_cast<std::size_t>( stage1_.total_size() ), sizeof( complex ) )
+            "ffts/scratch_stage1_4d",
+            bytes_of_elems_( static_cast<std::size_t>( scratch_stage1_4d_.size() ), sizeof( complex ) )
         );
-        profiler->set_bytes(
-            "ffts/stage2_4d", bytes_of_elems_( static_cast<std::size_t>( stage2_.total_size() ), sizeof( complex ) )
-        );
-        profiler->set_bytes(
-            "ffts/work_hat_4d", bytes_of_elems_( static_cast<std::size_t>( work_hat_.total_size() ), sizeof( complex ) )
-        );
+        profiler->set_bytes( "ffts/stage0_4d", 0 );
+        profiler->set_bytes( "ffts/stage1_4d", 0 );
+        profiler->set_bytes( "ffts/stage2_4d", 0 );
+        profiler->set_bytes( "ffts/work_hat_4d", 0 );
     }
 
     void log_memory_profile_on_destroy_() const
@@ -562,8 +560,8 @@ private:
 
     void init_4d_storage_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil> )
     {
-        stage1_.init( nx_, ny_, nw_half_, nz_ );
-        stage2_.init( nx_, nz_, nw_half_, ny_ );
+        init_shared_stage0_stage2_4d_( nx_, ny_, nz_, nw_half_, nx_, nz_, nw_half_, ny_ );
+        init_owned_stage1_4d_( nx_, ny_, nw_half_, nz_ );
         direct_transposer_.reset( new detail::direct_transpose_4d( nx_, ny_, nz_, nw_half_ ) );
         init_memcpy_transposer_( transpose_backend_tag() );
         update_memory_profile_();
@@ -571,7 +569,8 @@ private:
 
     void init_4d_storage_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab> )
     {
-        stage1_.init( nz_, nw_half_, nx_, ny_ );
+        init_shared_stage0_stage2_4d_( nx_, ny_, nz_, nw_half_, 0, 0, 0, 0 );
+        init_owned_stage1_4d_( nz_, nw_half_, nx_, ny_ );
         direct_transposer_.reset( new detail::direct_transpose_4d( nx_, ny_, nz_, nw_half_ ) );
         init_memcpy_transposer_( transpose_backend_tag() );
         update_memory_profile_();
@@ -617,12 +616,12 @@ private:
     }
 
     void backward_4d_(
-        std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil>, const complex_array_t<4> &,
+        std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil>, complex_array_t<4> &in,
         real_array_t<4> &out
     )
     {
-        base_fft_.template exec<complex_array_t<4>, complex_array_t<4>>( "inverse_x", work_hat_, work_hat_ );
-        transpose_yzwx_to_xzwy_( work_hat_, stage2_ );
+        base_fft_.template exec<complex_array_t<4>, complex_array_t<4>>( "inverse_x", in, in );
+        transpose_yzwx_to_xzwy_( in, stage2_ );
 
         base_fft_.template exec<stage2_complex_array_t, stage2_complex_array_t>( "inverse_y", stage2_, stage2_ );
         transpose_xzwy_to_xywz_( stage2_, stage1_ );
@@ -634,11 +633,11 @@ private:
     }
 
     void backward_4d_(
-        std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab>, const complex_array_t<4> &,
+        std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab>, complex_array_t<4> &in,
         real_array_t<4> &out
     )
     {
-        transpose_yzwx_to_zwxy_( work_hat_, stage1_ );
+        transpose_yzwx_to_zwxy_( in, stage1_ );
         base_fft_.template exec<stage1_complex_array_t, stage1_complex_array_t>( "inverse_xy", stage1_, stage1_ );
         transpose_zwxy_to_xyzw_( stage1_, stage0_ );
         base_fft_.template exec<stage0_complex_array_t, real_array_t<4>>( "inverse_zw", stage0_, out );
@@ -864,12 +863,28 @@ private:
         transpose_yzwx_to_zwxy_backend_( transpose_backend_tag(), src, dst );
     }
 
-    void copy_spectral_field_( const complex_array_t<4> &src, complex_array_t<4> &dst )
+    void init_shared_stage0_stage2_4d_(
+        std::size_t stage0_d0, std::size_t stage0_d1, std::size_t stage0_d2, std::size_t stage0_d3,
+        std::size_t stage2_d0, std::size_t stage2_d1, std::size_t stage2_d2, std::size_t stage2_d3
+    )
     {
-        runtime_api_t::memcpy(
-            dst.raw_ptr(), src.raw_ptr(), sizeof( complex ) * static_cast<std::size_t>( src.total_size() ),
-            runtime_api_t::device_to_device_kind()
-        );
+        const std::size_t stage0_size = stage0_d0 * stage0_d1 * stage0_d2 * stage0_d3;
+        const std::size_t stage2_size = stage2_d0 * stage2_d1 * stage2_d2 * stage2_d3;
+
+        scratch_stage0_stage2_4d_.init( std::max( stage0_size, stage2_size ) );
+        stage0_.init_by_raw_data( scratch_stage0_stage2_4d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2, stage0_d3 );
+        if ( stage2_size != 0 )
+        {
+            stage2_.init_by_raw_data(
+                scratch_stage0_stage2_4d_.raw_ptr(), stage2_d0, stage2_d1, stage2_d2, stage2_d3
+            );
+        }
+    }
+
+    void init_owned_stage1_4d_( std::size_t d0, std::size_t d1, std::size_t d2, std::size_t d3 )
+    {
+        scratch_stage1_4d_.init( d0 * d1 * d2 * d3 );
+        stage1_.init_by_raw_data( scratch_stage1_4d_.raw_ptr(), d0, d1, d2, d3 );
     }
 
     void
@@ -912,10 +927,11 @@ private:
     std::unique_ptr<direct_transposer_t> direct_transposer_;
     std::unique_ptr<memcpy_transposer_t> memcpy_transposer_;
 
+    scfd::arrays::array_nd<complex, 1, memory_t> scratch_stage0_stage2_4d_;
+    scfd::arrays::array_nd<complex, 1, memory_t> scratch_stage1_4d_;
     stage0_complex_array_t stage0_;
     stage1_complex_array_t stage1_;
     stage2_complex_array_t stage2_;
-    complex_array_t<4>     work_hat_;
 };
 
 } // namespace fftm
