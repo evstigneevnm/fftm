@@ -15,6 +15,7 @@
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
+#include <scfd/utils/nested_exception_to_multistring.h>
 
 #include "../detail/array_arrangers.h"
 #include "../detail/direct_transpose_4d.h"
@@ -770,7 +771,7 @@ int main( int argc, char *argv[] )
     }
     catch ( const std::exception &e )
     {
-        log.error( e.what() );
+        log.error( scfd::utils::nested_exception_to_multistring( e ) );
         return 1;
     }
 }

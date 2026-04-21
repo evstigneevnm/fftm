@@ -13,6 +13,7 @@
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/init_cuda.h>
 #include <scfd/utils/log_std.h>
+#include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/system_timer_event.h>
 
 #include <external_wrap/cufft_wrap_many.h>
@@ -140,7 +141,7 @@ int main( int argc, char *argv[] )
     }
     catch ( const std::exception &ex )
     {
-        log.error( ex.what() );
+        log.error( scfd::utils::nested_exception_to_multistring( ex ) );
         return 1;
     }
 }
