@@ -745,14 +745,21 @@ private:
             row_comm_info_.waitall( row_size, recv_requests_.data() );
         }
         {
-            auto phase = profile_scope_( "stage_recv_to_device_unpack" );
+            auto phase = profile_scope_( "stage_recv_to_device" );
             for ( int p = 0; p < row_size; ++p )
             {
                 if ( p != myid_j_ )
                 {
                     copy_host_forward_chunk_to_device_async_( p );
-                    unpack_forward_received_chunk_async_( p, out );
                 }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < row_size; ++p )
+            {
+                if ( p != myid_j_ )
+                    unpack_forward_received_chunk_async_( p, out );
             }
         }
         synchronize_streams_();
@@ -843,15 +850,24 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < row_size - 1 )
             {
-                const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                copy_host_forward_chunk_to_device_async_( p );
-                unpack_forward_received_chunk_async_( p, out );
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_forward_chunk_to_device_async_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_received_chunk_async_( p, out );
+                }
                 completed++;
             }
         }
@@ -890,14 +906,20 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < row_size - 1 )
             {
-                const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                unpack_forward_received_chunk_async_( p, out );
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_received_chunk_async_( p, out );
+                }
                 completed++;
             }
         }
@@ -1219,19 +1241,25 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_recv" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < row_size - 1 )
             {
-                const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                runtime_api_t::memcpy_async(
-                    out.raw_ptr() + backward_recv_offset_elems_( p ),
-                    host_recv_buffer_.raw_ptr() + backward_recv_offset_elems_( p ),
-                    bytes_from_elems_( backward_recv_chunk_elems_( p ) ), runtime_api_t::host_to_device_kind(),
-                    streams_[p].stream()
-                );
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    runtime_api_t::memcpy_async(
+                        out.raw_ptr() + backward_recv_offset_elems_( p ),
+                        host_recv_buffer_.raw_ptr() + backward_recv_offset_elems_( p ),
+                        bytes_from_elems_( backward_recv_chunk_elems_( p ) ), runtime_api_t::host_to_device_kind(),
+                        streams_[p].stream()
+                    );
+                }
                 completed++;
             }
         }
@@ -1289,11 +1317,14 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_recv" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < row_size - 1 )
             {
-                const int p = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
                 completed++;
@@ -2223,13 +2254,19 @@ private:
             line_comm_info_.waitall( comm_size, recv_requests_.data() );
         }
         {
-            auto phase = profile_scope_( "stage_recv_to_device_unpack" );
+            auto phase = profile_scope_( "stage_recv_to_device" );
             for ( int p = 0; p < comm_size; ++p )
             {
                 if ( p != myid_i_ )
                 {
                     copy_host_forward_chunk_to_device_async_( p );
                 }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
                 unpack_forward_chunk_async_( p, out );
             }
         }
@@ -2334,15 +2371,24 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                copy_host_forward_chunk_to_device_async_( p );
-                unpack_forward_chunk_async_( p, out );
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_forward_chunk_to_device_async_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_async_( p, out );
+                }
                 completed++;
             }
         }
@@ -2390,14 +2436,20 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                unpack_forward_chunk_async_( p, out );
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_chunk_async_( p, out );
+                }
                 completed++;
             }
         }
@@ -2590,13 +2642,19 @@ private:
             line_comm_info_.waitall( comm_size, recv_requests_.data() );
         }
         {
-            auto phase = profile_scope_( "stage_recv_to_device_unpack" );
+            auto phase = profile_scope_( "stage_recv_to_device" );
             for ( int p = 0; p < comm_size; ++p )
             {
                 if ( p != myid_i_ )
                 {
                     copy_host_backward_chunk_to_device_async_( p );
                 }
+            }
+        }
+        {
+            auto phase = profile_scope_( "unpack_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
                 unpack_backward_chunk_async_( p, out );
             }
         }
@@ -2706,15 +2764,24 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                copy_host_backward_chunk_to_device_async_( p );
-                unpack_backward_chunk_async_( p, out );
+                {
+                    auto phase = profile_scope_( "stage_recv_chunk_to_device" );
+                    copy_host_backward_chunk_to_device_async_( p );
+                }
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_async_( p, out );
+                }
                 completed++;
             }
         }
@@ -2764,14 +2831,20 @@ private:
         }
 
         {
-            auto phase     = profile_scope_( "waitany_unpack" );
-            int  completed = 0;
+            int completed = 0;
             while ( completed < comm_size - 1 )
             {
-                const int p = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                int p = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "wait_recv_any" );
+                    p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+                }
                 if ( p == MPI_UNDEFINED )
                     break;
-                unpack_backward_chunk_async_( p, out );
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_chunk_async_( p, out );
+                }
                 completed++;
             }
         }
