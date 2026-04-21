@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cstdint>
 
 #include <scfd/backend/cuda.h>
 #include <scfd/utils/device_tag.h>

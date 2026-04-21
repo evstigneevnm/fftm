@@ -31,7 +31,7 @@ test_mpi_transpose_3D.bin: test_mpi_transpose_3D.cu
 	mpicxx -g test_mpi_transpose_3D.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lmpi -o test_mpi_transpose_3D.bin
 
 test_mpi_transpose_4D.bin: test_mpi_transpose_4D.cu
-	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $(SCFD_FLAGS) st_mpi_transpose_4D.cu -c -o test_mpi_transpose_4D.o
+	nvcc $(NVCCFLAGS_NO_DEVICE_DEBUG) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $(SCFD_FLAGS) test_mpi_transpose_4D.cu -c -o test_mpi_transpose_4D.o
 	mpicxx -g test_mpi_transpose_4D.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lmpi -o test_mpi_transpose_4D.bin
 
 test_fftm_3D_compare.bin: test_fftm_3D_compare.cu
@@ -91,4 +91,4 @@ test_4D_poisson.bin: test_4D_poisson.cu
 test_fft_3D.bin: test_fft_3D.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) $(SCFD_FLAGS) test_fft_3D.cu -L$(lib_cuda) -lcudart -lcufft -o test_fft_3D.bin
 
-all: test_init.bin test_fft_2D.bin test_2D_poisson.bin test_3D_poisson.bin test_4D_poisson.bin test_fft_3D.bin test_mpi_transpose_3D.bin test_mpi_transpose_4D.bin test_fftm_3D_compare.bin test_fftm_4D_compare.bin test_3D_poisson_mpi.bin test_3D_poisson_mpi_tutorial.bin test_4D_poisson_mpi.bin test_4D_poisson_mpi_tutorial.bin 
+all: test_init.bin test_fft_2D.bin test_2D_poisson.bin test_3D_poisson.bin test_4D_poisson.bin test_fft_3D.bin test_mpi_transpose_3D.bin test_mpi_transpose_4D.bin test_fftm_3D_compare.bin test_fftm_4D_compare.bin test_3D_poisson_mpi.bin test_3D_poisson_mpi_tutorial.bin test_4D_poisson_mpi.bin test_4D_poisson_mpi_tutorial.bin test_benchmark_ffts_3D.bin test_benchmark_ffts_4D.bin test_benchmark_fftm_3D.bin test_benchmark_ffts_4D.bin
