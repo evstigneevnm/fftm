@@ -16,6 +16,7 @@
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
 
+#include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
 #include "../profiling.h"
 #include "mpi_transpose_3d.h"
@@ -86,6 +87,11 @@ public:
         for_each_.block_size = 128;
     }
 
+    ~mpi_transpose_4d_same_xy()
+    {
+        free_value_type_();
+    }
+
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
@@ -127,6 +133,7 @@ public:
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_xy::init" );
+        free_value_type_();
         input_dim_  = input_dim;
         output_dim_ = output_dim;
         myid_i_     = myid_i;
@@ -160,6 +167,7 @@ public:
         if ( line_comm_info_.num_procs != static_cast<int>( input_dim_.size_z.size() ) )
             throw std::logic_error( "mpi_transpose_4d_same_xy communicator size mismatch" );
 
+        init_value_type_();
         init_layouts_();
         send_buffer_elems_ = max_buffer_elems_;
         recv_buffer_elems_ = max_buffer_elems_;
@@ -399,6 +407,25 @@ private:
         return elems * sizeof( value_type );
     }
 
+    void init_value_type_()
+    {
+        mpi_value_type_ = scfd::communication::detail::type_contiguous(
+            detail::mpi_int_cast( sizeof( value_type ), "mpi_transpose_4d_same_xy value type extent" ),
+            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+        );
+        scfd::communication::detail::type_commit( mpi_value_type_ );
+        mpi_value_type_inited_ = true;
+    }
+
+    void free_value_type_()
+    {
+        if ( mpi_value_type_inited_ )
+        {
+            scfd::communication::detail::type_free( mpi_value_type_ );
+            mpi_value_type_inited_ = false;
+        }
+    }
+
     std::size_t forward_send_chunk_elems_( int target_k ) const
     {
         return nx_local_ * ny_local_ * nz_local_ * output_dim_.size_w[target_k];
@@ -431,10 +458,10 @@ private:
         forward_rdispls_.resize( comm_size );
         forward_sendcounts_w_.resize( comm_size );
         forward_sdispls_w_.resize( comm_size );
-        forward_sendtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        forward_sendtypes_w_.assign( comm_size, mpi_value_type_ );
         forward_recvcounts_w_.resize( comm_size );
         forward_rdispls_w_.resize( comm_size );
-        forward_recvtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        forward_recvtypes_w_.assign( comm_size, mpi_value_type_ );
 
         backward_send_offsets_.resize( comm_size );
         backward_recv_offsets_.resize( comm_size );
@@ -444,10 +471,10 @@ private:
         backward_rdispls_.resize( comm_size );
         backward_sendcounts_w_.resize( comm_size );
         backward_sdispls_w_.resize( comm_size );
-        backward_sendtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        backward_sendtypes_w_.assign( comm_size, mpi_value_type_ );
         backward_recvcounts_w_.resize( comm_size );
         backward_rdispls_w_.resize( comm_size );
-        backward_recvtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        backward_recvtypes_w_.assign( comm_size, mpi_value_type_ );
 
         std::size_t packed_offset = 0;
         for ( int p = 0; p < comm_size; ++p )
@@ -483,35 +510,33 @@ private:
 
         for ( int p = 0; p < comm_size; ++p )
         {
-            forward_sendcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_xy forward sendcount"
-            );
-            forward_sdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xy forward sdispl" );
-            forward_recvcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_xy forward recvcount"
-            );
-            forward_rdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xy forward rdispl" );
+            forward_sendcounts_[p] =
+                detail::mpi_int_cast( forward_send_chunk_elems_( p ), "same_xy forward sendcount" );
+            forward_sdispls_[p] = detail::mpi_int_cast( forward_send_offsets_[p], "same_xy forward sdispl" );
+            forward_recvcounts_[p] =
+                detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "same_xy forward recvcount" );
+            forward_rdispls_[p] = detail::mpi_int_cast( forward_recv_offsets_[p], "same_xy forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
-            forward_sdispls_w_[p]    = forward_sdispls_[p];
+            forward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xy forward sdispl_w" );
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
-            forward_rdispls_w_[p]    = forward_rdispls_[p];
+            forward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xy forward rdispl_w" );
 
-            backward_sendcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_xy backward sendcount"
-            );
-            backward_sdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xy backward sdispl" );
-            backward_recvcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_xy backward recvcount"
-            );
-            backward_rdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xy backward rdispl" );
+            backward_sendcounts_[p] =
+                detail::mpi_int_cast( backward_send_chunk_elems_( p ), "same_xy backward sendcount" );
+            backward_sdispls_[p] = detail::mpi_int_cast( backward_send_offsets_[p], "same_xy backward sdispl" );
+            backward_recvcounts_[p] =
+                detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "same_xy backward recvcount" );
+            backward_rdispls_[p] = detail::mpi_int_cast( backward_recv_offsets_[p], "same_xy backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
-            backward_sdispls_w_[p]    = backward_sdispls_[p];
+            backward_sdispls_w_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_send_offsets_[p] ), "same_xy backward sdispl_w"
+            );
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
-            backward_rdispls_w_[p]    = backward_rdispls_[p];
+            backward_rdispls_w_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_recv_offsets_[p] ), "same_xy backward rdispl_w"
+            );
         }
     }
 
@@ -590,11 +615,11 @@ private:
                     continue;
                 line_comm_info_.irecv(
                     recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
+                    mpi_value_type_, p, p, recv_requests_[p]
                 );
                 line_comm_info_.isend(
                     send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, send_requests_[p]
+                    mpi_value_type_, p, myid_k_, send_requests_[p]
                 );
             }
         }
@@ -641,11 +666,11 @@ private:
                     continue;
                 line_comm_info_.irecv(
                     recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
+                    mpi_value_type_, p, p, recv_requests_[p]
                 );
                 line_comm_info_.isend(
                     send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, send_requests_[p]
+                    mpi_value_type_, p, myid_k_, send_requests_[p]
                 );
             }
         }
@@ -695,9 +720,8 @@ private:
             auto phase = profile_scope_( "mpi_alltoallv" );
             line_comm_info_.alltoallv(
                 static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
-                forward_sdispls_.data(), scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_.data(), forward_rdispls_.data(),
-                scfd::communication::detail::mpi_data_type<char>::mpi_type()
+                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
             );
         }
         {
@@ -749,11 +773,11 @@ private:
                     continue;
                 line_comm_info_.irecv(
                     recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, recv_requests_[p]
+                    mpi_value_type_, p, myid_k_, recv_requests_[p]
                 );
                 line_comm_info_.isend(
                     send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
+                    mpi_value_type_, p, p, send_requests_[p]
                 );
             }
         }
@@ -800,11 +824,11 @@ private:
                     continue;
                 line_comm_info_.irecv(
                     recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_k_, recv_requests_[p]
+                    mpi_value_type_, p, myid_k_, recv_requests_[p]
                 );
                 line_comm_info_.isend(
                     send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                    scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
+                    mpi_value_type_, p, p, send_requests_[p]
                 );
             }
         }
@@ -854,9 +878,8 @@ private:
             auto phase = profile_scope_( "mpi_alltoallv" );
             line_comm_info_.alltoallv(
                 static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
-                backward_sdispls_.data(), scfd::communication::detail::mpi_data_type<char>::mpi_type(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_.data(), backward_rdispls_.data(),
-                scfd::communication::detail::mpi_data_type<char>::mpi_type()
+                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
             );
         }
         {
@@ -924,6 +947,8 @@ private:
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;
+    mpi_dtype_t                        mpi_value_type_        = mpi_dtype_t();
+    bool                               mpi_value_type_inited_ = false;
 
     std::vector<std::size_t> forward_send_offsets_;
     std::vector<std::size_t> forward_recv_offsets_;
@@ -986,6 +1011,11 @@ public:
         for_each_.block_size = 128;
     }
 
+    ~mpi_transpose_4d_same_xw()
+    {
+        free_value_type_();
+    }
+
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
@@ -1027,6 +1057,7 @@ public:
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_xw::init" );
+        free_value_type_();
         input_dim_  = input_dim;
         output_dim_ = output_dim;
         myid_i_     = myid_i;
@@ -1060,6 +1091,7 @@ public:
         if ( line_comm_info_.num_procs != static_cast<int>( input_dim_.size_y.size() ) )
             throw std::logic_error( "mpi_transpose_4d_same_xw communicator size mismatch" );
 
+        init_value_type_();
         init_layouts_();
         send_buffer_elems_ = max_buffer_elems_;
         recv_buffer_elems_ = max_buffer_elems_;
@@ -1299,6 +1331,25 @@ private:
         return elems * sizeof( value_type );
     }
 
+    void init_value_type_()
+    {
+        mpi_value_type_ = scfd::communication::detail::type_contiguous(
+            detail::mpi_int_cast( sizeof( value_type ), "mpi_transpose_4d_same_xw value type extent" ),
+            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+        );
+        scfd::communication::detail::type_commit( mpi_value_type_ );
+        mpi_value_type_inited_ = true;
+    }
+
+    void free_value_type_()
+    {
+        if ( mpi_value_type_inited_ )
+        {
+            scfd::communication::detail::type_free( mpi_value_type_ );
+            mpi_value_type_inited_ = false;
+        }
+    }
+
     std::size_t forward_send_chunk_elems_( int target_j ) const
     {
         return nx_local_ * output_dim_.size_z[target_j] * nw_local_ * ny_local_;
@@ -1331,10 +1382,10 @@ private:
         forward_rdispls_.resize( comm_size );
         forward_sendcounts_w_.resize( comm_size );
         forward_sdispls_w_.resize( comm_size );
-        forward_sendtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        forward_sendtypes_w_.assign( comm_size, mpi_value_type_ );
         forward_recvcounts_w_.resize( comm_size );
         forward_rdispls_w_.resize( comm_size );
-        forward_recvtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        forward_recvtypes_w_.assign( comm_size, mpi_value_type_ );
 
         backward_send_offsets_.resize( comm_size );
         backward_recv_offsets_.resize( comm_size );
@@ -1344,10 +1395,10 @@ private:
         backward_rdispls_.resize( comm_size );
         backward_sendcounts_w_.resize( comm_size );
         backward_sdispls_w_.resize( comm_size );
-        backward_sendtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        backward_sendtypes_w_.assign( comm_size, mpi_value_type_ );
         backward_recvcounts_w_.resize( comm_size );
         backward_rdispls_w_.resize( comm_size );
-        backward_recvtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        backward_recvtypes_w_.assign( comm_size, mpi_value_type_ );
 
         std::size_t packed_offset = 0;
         for ( int p = 0; p < comm_size; ++p )
@@ -1383,35 +1434,33 @@ private:
 
         for ( int p = 0; p < comm_size; ++p )
         {
-            forward_sendcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_xw forward sendcount"
-            );
-            forward_sdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xw forward sdispl" );
-            forward_recvcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_xw forward recvcount"
-            );
-            forward_rdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xw forward rdispl" );
+            forward_sendcounts_[p] =
+                detail::mpi_int_cast( forward_send_chunk_elems_( p ), "same_xw forward sendcount" );
+            forward_sdispls_[p] = detail::mpi_int_cast( forward_send_offsets_[p], "same_xw forward sdispl" );
+            forward_recvcounts_[p] =
+                detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "same_xw forward recvcount" );
+            forward_rdispls_[p] = detail::mpi_int_cast( forward_recv_offsets_[p], "same_xw forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
-            forward_sdispls_w_[p]    = forward_sdispls_[p];
+            forward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_xw forward sdispl_w" );
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
-            forward_rdispls_w_[p]    = forward_rdispls_[p];
+            forward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_xw forward rdispl_w" );
 
-            backward_sendcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_xw backward sendcount"
-            );
-            backward_sdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_xw backward sdispl" );
-            backward_recvcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_xw backward recvcount"
-            );
-            backward_rdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_xw backward rdispl" );
+            backward_sendcounts_[p] =
+                detail::mpi_int_cast( backward_send_chunk_elems_( p ), "same_xw backward sendcount" );
+            backward_sdispls_[p] = detail::mpi_int_cast( backward_send_offsets_[p], "same_xw backward sdispl" );
+            backward_recvcounts_[p] =
+                detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "same_xw backward recvcount" );
+            backward_rdispls_[p] = detail::mpi_int_cast( backward_recv_offsets_[p], "same_xw backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
-            backward_sdispls_w_[p]    = backward_sdispls_[p];
+            backward_sdispls_w_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_send_offsets_[p] ), "same_xw backward sdispl_w"
+            );
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
-            backward_rdispls_w_[p]    = backward_rdispls_[p];
+            backward_rdispls_w_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_recv_offsets_[p] ), "same_xw backward rdispl_w"
+            );
         }
     }
 
@@ -1488,11 +1537,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
+                mpi_value_type_, p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, send_requests_[p]
+                mpi_value_type_, p, myid_j_, send_requests_[p]
             );
         }
 
@@ -1524,11 +1573,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
+                mpi_value_type_, p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, send_requests_[p]
+                mpi_value_type_, p, myid_j_, send_requests_[p]
             );
         }
 
@@ -1563,9 +1612,8 @@ private:
         auto scope = profile_scope_( "forward_alltoallv" );
         line_comm_info_.alltoallv(
             static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_.data(), forward_rdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
+            forward_rdispls_.data(), mpi_value_type_
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -1607,11 +1655,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, recv_requests_[p]
+                mpi_value_type_, p, myid_j_, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
+                mpi_value_type_, p, p, send_requests_[p]
             );
         }
 
@@ -1643,11 +1691,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_j_, recv_requests_[p]
+                mpi_value_type_, p, myid_j_, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
+                mpi_value_type_, p, p, send_requests_[p]
             );
         }
 
@@ -1682,9 +1730,8 @@ private:
         auto scope = profile_scope_( "backward_alltoallv" );
         line_comm_info_.alltoallv(
             static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_.data(), backward_rdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
+            backward_rdispls_.data(), mpi_value_type_
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -1744,6 +1791,8 @@ private:
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;
+    mpi_dtype_t                        mpi_value_type_        = mpi_dtype_t();
+    bool                               mpi_value_type_inited_ = false;
 
     std::vector<std::size_t> forward_send_offsets_;
     std::vector<std::size_t> forward_recv_offsets_;
@@ -1806,6 +1855,11 @@ public:
         for_each_.block_size = 128;
     }
 
+    ~mpi_transpose_4d_same_zw()
+    {
+        free_value_type_();
+    }
+
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
@@ -1847,6 +1901,7 @@ public:
     void init( const partition_t &input_dim, const partition_t &output_dim, int myid_i, int myid_j, int myid_k )
     {
         auto scope  = profile_scope_( "mpi_transpose_4d_same_zw::init" );
+        free_value_type_();
         input_dim_  = input_dim;
         output_dim_ = output_dim;
         myid_i_     = myid_i;
@@ -1880,6 +1935,7 @@ public:
         if ( line_comm_info_.num_procs != static_cast<int>( input_dim_.size_x.size() ) )
             throw std::logic_error( "mpi_transpose_4d_same_zw communicator size mismatch" );
 
+        init_value_type_();
         init_layouts_();
         send_buffer_elems_ = max_buffer_elems_;
         recv_buffer_elems_ = max_buffer_elems_;
@@ -2119,6 +2175,25 @@ private:
         return elems * sizeof( value_type );
     }
 
+    void init_value_type_()
+    {
+        mpi_value_type_ = scfd::communication::detail::type_contiguous(
+            detail::mpi_int_cast( sizeof( value_type ), "mpi_transpose_4d_same_zw value type extent" ),
+            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+        );
+        scfd::communication::detail::type_commit( mpi_value_type_ );
+        mpi_value_type_inited_ = true;
+    }
+
+    void free_value_type_()
+    {
+        if ( mpi_value_type_inited_ )
+        {
+            scfd::communication::detail::type_free( mpi_value_type_ );
+            mpi_value_type_inited_ = false;
+        }
+    }
+
     std::size_t forward_send_chunk_elems_( int target_i ) const
     {
         return output_dim_.size_y[target_i] * nz_local_ * nw_local_ * nx_local_;
@@ -2151,10 +2226,10 @@ private:
         forward_rdispls_.resize( comm_size );
         forward_sendcounts_w_.resize( comm_size );
         forward_sdispls_w_.resize( comm_size );
-        forward_sendtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        forward_sendtypes_w_.assign( comm_size, mpi_value_type_ );
         forward_recvcounts_w_.resize( comm_size );
         forward_rdispls_w_.resize( comm_size );
-        forward_recvtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        forward_recvtypes_w_.assign( comm_size, mpi_value_type_ );
 
         backward_send_offsets_.resize( comm_size );
         backward_recv_offsets_.resize( comm_size );
@@ -2164,10 +2239,10 @@ private:
         backward_rdispls_.resize( comm_size );
         backward_sendcounts_w_.resize( comm_size );
         backward_sdispls_w_.resize( comm_size );
-        backward_sendtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        backward_sendtypes_w_.assign( comm_size, mpi_value_type_ );
         backward_recvcounts_w_.resize( comm_size );
         backward_rdispls_w_.resize( comm_size );
-        backward_recvtypes_w_.assign( comm_size, scfd::communication::detail::mpi_data_type<char>::mpi_type() );
+        backward_recvtypes_w_.assign( comm_size, mpi_value_type_ );
 
         std::size_t packed_offset = 0;
         for ( int p = 0; p < comm_size; ++p )
@@ -2203,35 +2278,33 @@ private:
 
         for ( int p = 0; p < comm_size; ++p )
         {
-            forward_sendcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_send_chunk_elems_( p ) ), "same_zw forward sendcount"
-            );
-            forward_sdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_zw forward sdispl" );
-            forward_recvcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( forward_recv_chunk_elems_( p ) ), "same_zw forward recvcount"
-            );
-            forward_rdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_zw forward rdispl" );
+            forward_sendcounts_[p] =
+                detail::mpi_int_cast( forward_send_chunk_elems_( p ), "same_zw forward sendcount" );
+            forward_sdispls_[p] = detail::mpi_int_cast( forward_send_offsets_[p], "same_zw forward sdispl" );
+            forward_recvcounts_[p] =
+                detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "same_zw forward recvcount" );
+            forward_rdispls_[p] = detail::mpi_int_cast( forward_recv_offsets_[p], "same_zw forward rdispl" );
             forward_sendcounts_w_[p] = forward_sendcounts_[p];
-            forward_sdispls_w_[p]    = forward_sdispls_[p];
+            forward_sdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_send_offsets_[p] ), "same_zw forward sdispl_w" );
             forward_recvcounts_w_[p] = forward_recvcounts_[p];
-            forward_rdispls_w_[p]    = forward_rdispls_[p];
+            forward_rdispls_w_[p] =
+                detail::mpi_int_cast( bytes_from_elems_( forward_recv_offsets_[p] ), "same_zw forward rdispl_w" );
 
-            backward_sendcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_send_chunk_elems_( p ) ), "same_zw backward sendcount"
-            );
-            backward_sdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( backward_send_offsets_[p] ), "same_zw backward sdispl" );
-            backward_recvcounts_[p] = detail::mpi_int_cast(
-                bytes_from_elems_( backward_recv_chunk_elems_( p ) ), "same_zw backward recvcount"
-            );
-            backward_rdispls_[p] =
-                detail::mpi_int_cast( bytes_from_elems_( backward_recv_offsets_[p] ), "same_zw backward rdispl" );
+            backward_sendcounts_[p] =
+                detail::mpi_int_cast( backward_send_chunk_elems_( p ), "same_zw backward sendcount" );
+            backward_sdispls_[p] = detail::mpi_int_cast( backward_send_offsets_[p], "same_zw backward sdispl" );
+            backward_recvcounts_[p] =
+                detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "same_zw backward recvcount" );
+            backward_rdispls_[p] = detail::mpi_int_cast( backward_recv_offsets_[p], "same_zw backward rdispl" );
             backward_sendcounts_w_[p] = backward_sendcounts_[p];
-            backward_sdispls_w_[p]    = backward_sdispls_[p];
+            backward_sdispls_w_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_send_offsets_[p] ), "same_zw backward sdispl_w"
+            );
             backward_recvcounts_w_[p] = backward_recvcounts_[p];
-            backward_rdispls_w_[p]    = backward_rdispls_[p];
+            backward_rdispls_w_[p] = detail::mpi_int_cast(
+                bytes_from_elems_( backward_recv_offsets_[p] ), "same_zw backward rdispl_w"
+            );
         }
     }
 
@@ -2308,11 +2381,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
+                mpi_value_type_, p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, send_requests_[p]
+                mpi_value_type_, p, myid_i_, send_requests_[p]
             );
         }
 
@@ -2344,11 +2417,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, recv_requests_[p]
+                mpi_value_type_, p, p, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, send_requests_[p]
+                mpi_value_type_, p, myid_i_, send_requests_[p]
             );
         }
 
@@ -2383,9 +2456,8 @@ private:
         auto scope = profile_scope_( "forward_alltoallv" );
         line_comm_info_.alltoallv(
             static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(), forward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            forward_recvcounts_.data(), forward_rdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_.data(),
+            forward_rdispls_.data(), mpi_value_type_
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -2427,11 +2499,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, recv_requests_[p]
+                mpi_value_type_, p, myid_i_, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
+                mpi_value_type_, p, p, send_requests_[p]
             );
         }
 
@@ -2463,11 +2535,11 @@ private:
                 continue;
             line_comm_info_.irecv(
                 recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, myid_i_, recv_requests_[p]
+                mpi_value_type_, p, myid_i_, recv_requests_[p]
             );
             line_comm_info_.isend(
                 send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
-                scfd::communication::detail::mpi_data_type<char>::mpi_type(), p, p, send_requests_[p]
+                mpi_value_type_, p, p, send_requests_[p]
             );
         }
 
@@ -2502,9 +2574,8 @@ private:
         auto scope = profile_scope_( "backward_alltoallv" );
         line_comm_info_.alltoallv(
             static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-            backward_recvcounts_.data(), backward_rdispls_.data(),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+            mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_.data(),
+            backward_rdispls_.data(), mpi_value_type_
         );
 
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
@@ -2564,6 +2635,8 @@ private:
     for_each_t                         for_each_;
     std::vector<mpi_request_t>         send_requests_;
     std::vector<mpi_request_t>         recv_requests_;
+    mpi_dtype_t                        mpi_value_type_        = mpi_dtype_t();
+    bool                               mpi_value_type_inited_ = false;
 
     std::vector<std::size_t> forward_send_offsets_;
     std::vector<std::size_t> forward_recv_offsets_;

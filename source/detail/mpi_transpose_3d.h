@@ -13,6 +13,7 @@
 #include <scfd/communication/mpi_comm.h>
 #include <scfd/utils/log_mpi.h>
 
+#include "../external_wrap/cufft_wrap.h"
 #include "../fft_partitioning.h"
 #include "../profiling.h"
 
