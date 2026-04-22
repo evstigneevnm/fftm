@@ -784,6 +784,15 @@ int run_periodic_laplacian_test(
         wall_times.push_back( static_cast<T>( t1.elapsed_time( t0 ) ) );
     }
 
+    distributed_fft.forward( rhs, rhs_hat );
+    for_each(
+        fftm::test::detail::solve_poisson_3d_functor<T, idx_t, hat_array_t>{
+            rhs_hat, solution_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+            static_cast<int>( output_part.start_y[myid_i] ), static_cast<int>( output_part.start_z[myid_j] ) },
+        fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs_hat )
+    );
+    for_each.wait();
+
     for_each(
         fftm::test::detail::poisson_3d_derivative_spectra_functor<T, idx_t, hat_array_t>{
             solution_hat, dx_hat, dy_hat, dz_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
