@@ -154,6 +154,8 @@ template <class BaseFFT, class Backend, class Strategy4D = strategy_4d_pencil_pe
 class ffts
 {
 public:
+    using backend_type               = Backend;
+    using base_fft_type              = BaseFFT;
     using real                       = typename BaseFFT::real;
     using complex                    = typename BaseFFT::complex;
     using memory_t                   = typename Backend::memory_type;
@@ -381,8 +383,7 @@ private:
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
         profiler->set_bytes(
-            "ffts/shared_work_buffer",
-            static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+            "ffts/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
         );
         profiler->set_bytes(
             "ffts/scratch_stage0_stage2_4d",
@@ -875,9 +876,7 @@ private:
         stage0_.init_by_raw_data( scratch_stage0_stage2_4d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2, stage0_d3 );
         if ( stage2_size != 0 )
         {
-            stage2_.init_by_raw_data(
-                scratch_stage0_stage2_4d_.raw_ptr(), stage2_d0, stage2_d1, stage2_d2, stage2_d3
-            );
+            stage2_.init_by_raw_data( scratch_stage0_stage2_4d_.raw_ptr(), stage2_d0, stage2_d1, stage2_d2, stage2_d3 );
         }
     }
 
@@ -929,9 +928,9 @@ private:
 
     scfd::arrays::array_nd<complex, 1, memory_t> scratch_stage0_stage2_4d_;
     scfd::arrays::array_nd<complex, 1, memory_t> scratch_stage1_4d_;
-    stage0_complex_array_t stage0_;
-    stage1_complex_array_t stage1_;
-    stage2_complex_array_t stage2_;
+    stage0_complex_array_t                       stage0_;
+    stage1_complex_array_t                       stage1_;
+    stage2_complex_array_t                       stage2_;
 };
 
 } // namespace fftm

@@ -9,25 +9,24 @@
 #error "FFTM_VERSIONED_TEST_BINARY must be defined before including versioned_fftm_4d_test_driver.h"
 #endif
 
+#ifndef FFTM_TEST_ENV
+#error "FFTM_TEST_ENV must be defined before including versioned_fftm_4d_test_driver.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <string>
 #include <tuple>
 #include <vector>
 
-#include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>
-#include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda_mpi.h>
-#include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/scalar_traits.h>
 #include <scfd/utils/system_timer_event.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 #include <ffts.hpp>
 
@@ -37,13 +36,18 @@
 namespace
 {
 
-using T             = double;
-using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
-using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t     = scfd::backend::cuda;
-using memory_t      = backend_t::memory_type;
-using reduce_t      = backend_t::reduce_type;
-using for_each_t    = backend_t::template for_each_nd_type<4, int>;
+using test_env_t    = FFTM_TEST_ENV;
+using fftm_base_t   = fftm::fftm<typename test_env_t::base_fft_t, typename test_env_t::mpi_comm_t, typename test_env_t::backend_t>;
+using T             = typename fftm_base_t::real;
+using base_fft_t    = typename fftm_base_t::base_fft_type;
+using backend_t     = typename fftm_base_t::backend_type;
+using mpi_comm_t    = typename fftm_base_t::mpi_comm_type;
+using runtime_api_t = typename fftm_base_t::runtime_api_t;
+using log_mpi_t     = typename test_env_t::log_mpi_t;
+using mpi_wrap_t    = typename test_env_t::mpi_wrap_t;
+using memory_t      = typename fftm_base_t::memory_t;
+using reduce_t      = typename backend_t::reduce_type;
+using for_each_t    = typename backend_t::template for_each_nd_type<4, int>;
 using idx_t         = scfd::static_vec::vec<int, 4>;
 using rect_t        = scfd::static_vec::rect<int, 4>;
 using strategy_kind = fftm::test::detail::fftm_4d_strategy_kind;
@@ -347,13 +351,11 @@ struct periodic_poisson_4d_error_fields_functor
 
 template <class DistStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_forward_random_benchmark(
-    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    strategy_kind strategy, log_mpi_t &log, const options_t &options, const mpi_comm_t &comm_info
 )
 {
     using fftm_t = fftm::fftm<
-        base_fft_t, scfd::communication::mpi_comm_info, backend_t, fftm::strategy_3d_pencil_pencil<Mode>,
-        scfd::utils::log_mpi, DistStrategy4D>;
+        base_fft_t, mpi_comm_t, backend_t, fftm::strategy_3d_pencil_pencil<Mode>, log_mpi_t, DistStrategy4D>;
     using real_array_t = typename fftm_t::template real_array_t<4>;
     using hat_array_t  = typename fftm_t::template complex_array_t<4>;
 
@@ -375,7 +377,7 @@ int run_forward_random_benchmark(
 
     int myid_i = 0, myid_j = 0, myid_k = 0;
     {
-        fftm::fft_partitioning<scfd::communication::mpi_comm_info> partitioning( comm_info );
+        fftm::fft_partitioning<mpi_comm_t> partitioning( comm_info );
         partitioning.init( grid, sizes );
         std::tie( myid_i, myid_j, myid_k ) = partitioning.get_my_grid();
     }
@@ -428,13 +430,11 @@ int run_forward_random_benchmark(
 
 template <class DistStrategy4D, class RefStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_forward_reference_compare(
-    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    strategy_kind strategy, log_mpi_t &log, const options_t &options, const mpi_comm_t &comm_info
 )
 {
     using fftm_t = fftm::fftm<
-        base_fft_t, scfd::communication::mpi_comm_info, backend_t, fftm::strategy_3d_pencil_pencil<Mode>,
-        scfd::utils::log_mpi, DistStrategy4D>;
+        base_fft_t, mpi_comm_t, backend_t, fftm::strategy_3d_pencil_pencil<Mode>, log_mpi_t, DistStrategy4D>;
     using ref_ffts_t = fftm::ffts<base_fft_t, backend_t, RefStrategy4D>;
 
     using local_real_t  = typename fftm_t::template real_array_t<4>;
@@ -452,7 +452,7 @@ int run_forward_reference_compare(
     fftm::global_sizes sizes;
     sizes.init( options.nx, options.ny, options.nz, options.nw );
 
-    fftm::fft_partitioning<scfd::communication::mpi_comm_info> partitioning( comm_info );
+    fftm::fft_partitioning<mpi_comm_t> partitioning( comm_info );
     partitioning.init( grid, sizes );
 
     int myid_i = 0, myid_j = 0, myid_k = 0;
@@ -558,13 +558,11 @@ int run_forward_reference_compare(
 
 template <class DistStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_backward_random_benchmark(
-    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    strategy_kind strategy, log_mpi_t &log, const options_t &options, const mpi_comm_t &comm_info
 )
 {
     using fftm_t = fftm::fftm<
-        base_fft_t, scfd::communication::mpi_comm_info, backend_t, fftm::strategy_3d_pencil_pencil<Mode>,
-        scfd::utils::log_mpi, DistStrategy4D>;
+        base_fft_t, mpi_comm_t, backend_t, fftm::strategy_3d_pencil_pencil<Mode>, log_mpi_t, DistStrategy4D>;
     using real_array_t = typename fftm_t::template real_array_t<4>;
     using hat_array_t  = typename fftm_t::template complex_array_t<4>;
 
@@ -626,13 +624,11 @@ int run_backward_random_benchmark(
 
 template <class DistStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_roundtrip_random_test(
-    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    strategy_kind strategy, log_mpi_t &log, const options_t &options, const mpi_comm_t &comm_info
 )
 {
     using fftm_t = fftm::fftm<
-        base_fft_t, scfd::communication::mpi_comm_info, backend_t, fftm::strategy_3d_pencil_pencil<Mode>,
-        scfd::utils::log_mpi, DistStrategy4D>;
+        base_fft_t, mpi_comm_t, backend_t, fftm::strategy_3d_pencil_pencil<Mode>, log_mpi_t, DistStrategy4D>;
     using real_array_t = typename fftm_t::template real_array_t<4>;
     using hat_array_t  = typename fftm_t::template complex_array_t<4>;
 
@@ -654,7 +650,7 @@ int run_roundtrip_random_test(
 
     int myid_i = 0, myid_j = 0, myid_k = 0;
     {
-        fftm::fft_partitioning<scfd::communication::mpi_comm_info> partitioning( comm_info );
+        fftm::fft_partitioning<mpi_comm_t> partitioning( comm_info );
         partitioning.init( grid, sizes );
         std::tie( myid_i, myid_j, myid_k ) = partitioning.get_my_grid();
     }
@@ -733,13 +729,11 @@ int run_roundtrip_random_test(
 
 template <class DistStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_periodic_laplacian_test(
-    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    strategy_kind strategy, log_mpi_t &log, const options_t &options, const mpi_comm_t &comm_info
 )
 {
     using fftm_t = fftm::fftm<
-        base_fft_t, scfd::communication::mpi_comm_info, backend_t, fftm::strategy_3d_pencil_pencil<Mode>,
-        scfd::utils::log_mpi, DistStrategy4D>;
+        base_fft_t, mpi_comm_t, backend_t, fftm::strategy_3d_pencil_pencil<Mode>, log_mpi_t, DistStrategy4D>;
     using real_array_t = typename fftm_t::template real_array_t<4>;
     using hat_array_t  = typename fftm_t::template complex_array_t<4>;
 
@@ -752,7 +746,7 @@ int run_periodic_laplacian_test(
     fftm::global_sizes sizes;
     sizes.init( options.nx, options.ny, options.nz, options.nw );
 
-    fftm::fft_partitioning<scfd::communication::mpi_comm_info> partitioning( comm_info );
+    fftm::fft_partitioning<mpi_comm_t> partitioning( comm_info );
     partitioning.init( grid, sizes );
 
     int myid_i = 0, myid_j = 0, myid_k = 0;
@@ -928,8 +922,8 @@ int run_periodic_laplacian_test(
 
 template <class DistStrategy4D, class RefStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_case(
-    std::integral_constant<int, 1>, strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    std::integral_constant<int, 1>, strategy_kind strategy, log_mpi_t &log, const options_t &options,
+    const mpi_comm_t &comm_info
 )
 {
     return run_forward_reference_compare<DistStrategy4D, RefStrategy4D, Mode>( strategy, log, options, comm_info );
@@ -937,8 +931,8 @@ int run_case(
 
 template <class DistStrategy4D, class RefStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_case(
-    std::integral_constant<int, 0>, strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    std::integral_constant<int, 0>, strategy_kind strategy, log_mpi_t &log, const options_t &options,
+    const mpi_comm_t &comm_info
 )
 {
     return run_forward_random_benchmark<DistStrategy4D, Mode>( strategy, log, options, comm_info );
@@ -946,8 +940,8 @@ int run_case(
 
 template <class DistStrategy4D, class RefStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_case(
-    std::integral_constant<int, 2>, strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    std::integral_constant<int, 2>, strategy_kind strategy, log_mpi_t &log, const options_t &options,
+    const mpi_comm_t &comm_info
 )
 {
     return run_backward_random_benchmark<DistStrategy4D, Mode>( strategy, log, options, comm_info );
@@ -955,8 +949,8 @@ int run_case(
 
 template <class DistStrategy4D, class RefStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_case(
-    std::integral_constant<int, 3>, strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    std::integral_constant<int, 3>, strategy_kind strategy, log_mpi_t &log, const options_t &options,
+    const mpi_comm_t &comm_info
 )
 {
     return run_roundtrip_random_test<DistStrategy4D, Mode>( strategy, log, options, comm_info );
@@ -964,8 +958,8 @@ int run_case(
 
 template <class DistStrategy4D, class RefStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_case(
-    std::integral_constant<int, 4>, strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    std::integral_constant<int, 4>, strategy_kind strategy, log_mpi_t &log, const options_t &options,
+    const mpi_comm_t &comm_info
 )
 {
     return run_periodic_laplacian_test<DistStrategy4D, Mode>( strategy, log, options, comm_info );
@@ -973,8 +967,7 @@ int run_case(
 
 template <fftm::mpi_transpose_3d_mode Mode>
 int run_for_strategy_kind(
-    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    strategy_kind strategy, log_mpi_t &log, const options_t &options, const mpi_comm_t &comm_info
 )
 {
     switch ( strategy )
@@ -994,8 +987,7 @@ int run_for_strategy_kind(
 }
 
 int dispatch_mode(
-    strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
-    const scfd::communication::mpi_comm_info &comm_info
+    strategy_kind strategy, log_mpi_t &log, const options_t &options, const mpi_comm_t &comm_info
 )
 {
     switch ( options.mode )
@@ -1016,13 +1008,13 @@ int dispatch_mode(
 
 int main( int argc, char *argv[] )
 {
-    scfd::communication::mpi_wrap mpi( argc, argv );
-    auto                          comm_info = mpi.comm_world();
-    scfd::utils::log_mpi          log;
+    mpi_wrap_t mpi( argc, argv );
+    auto       comm_info = mpi.comm_world();
+    log_mpi_t  log;
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        test_env_t::init_device( log, comm_info );
 
         const options_t options =
             fftm::test::detail::parse_fftm_4d_test_options( argc, argv, FFTM_VERSIONED_TEST_BINARY, true, true, true );

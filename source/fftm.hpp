@@ -240,6 +240,9 @@ template <
 class fftm
 {
 public:
+    using backend_type  = Backend;
+    using base_fft_type = BaseFFT;
+    using mpi_comm_type = MPIComm;
     using real          = typename BaseFFT::real;
     using complex       = typename BaseFFT::complex;
     using runtime_api_t = typename BaseFFT::runtime_api;
@@ -449,20 +452,20 @@ private:
     using stage2_complex4_t = typename traits_4d_t::stage2_complex_array_t;
     using complex_array4_t  = typename traits_4d_t::complex_array_t;
 
-    using partitioning_t      = fft_partitioning<MPIComm>;
-    using same_x_t            = ::fftm::mpi_transpose_3d<complex, Backend, MPIComm, Log, runtime_api_t>;
-    using same_z_t            = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log, runtime_api_t>;
-    using same_xy_t           = ::fftm::detail::mpi_transpose_4d_same_xy<complex, Backend, MPIComm, Log, runtime_api_t>;
-    using same_xw_t           = ::fftm::detail::mpi_transpose_4d_same_xw<complex, Backend, MPIComm, Log, runtime_api_t>;
-    using same_zw_t           = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log, runtime_api_t>;
-    using for_each_3d_t       = typename Backend::template for_each_nd_type<3, int>;
-    using for_each_4d_t       = typename Backend::template for_each_nd_type<4, int>;
-    using complex_buffer_t     = scfd::arrays::array_nd<complex, 1, memory_t>;
-    using shared_buffer_t      = scfd::memory::shared_buffer<memory_t>;
-    using host_shared_buffer_t = scfd::memory::shared_buffer<typename memory_t::host_memory_type>;
-    using profiler_t          = fftm_profiler;
-    using optional_profiler_t = optional_profiler<profiler_t>;
-    using memory_profiler_t   = fftm_memory_profiler;
+    using partitioning_t   = fft_partitioning<MPIComm>;
+    using same_x_t         = ::fftm::mpi_transpose_3d<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_z_t         = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_xy_t        = ::fftm::detail::mpi_transpose_4d_same_xy<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_xw_t        = ::fftm::detail::mpi_transpose_4d_same_xw<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_zw_t        = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using for_each_3d_t    = typename Backend::template for_each_nd_type<3, int>;
+    using for_each_4d_t    = typename Backend::template for_each_nd_type<4, int>;
+    using complex_buffer_t = scfd::arrays::array_nd<complex, 1, memory_t>;
+    using shared_buffer_t  = scfd::memory::shared_buffer<memory_t>;
+    using host_shared_buffer_t       = scfd::memory::shared_buffer<typename memory_t::host_memory_type>;
+    using profiler_t                 = fftm_profiler;
+    using optional_profiler_t        = optional_profiler<profiler_t>;
+    using memory_profiler_t          = fftm_memory_profiler;
     using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
 
     typename optional_profiler_t::scoped_ticker profile_scope_( const std::string &name )
@@ -1157,9 +1160,7 @@ private:
         FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_slab" );
         SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ ) );
         SCFD_SAFE_CALL( same_x_.transpose_xyz_to_xzy( stage0_3d_, out, transpose_mode_3d ) );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_y", out, out )
-        );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_y", out, out ) );
         SCFD_SAFE_CALL( reorder_x_stage_( out, x_fft_stage_3d_ ) );
         SCFD_SAFE_CALL(
             base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "forward_x", x_fft_stage_3d_, x_fft_stage_3d_ )
@@ -1178,9 +1179,7 @@ private:
             base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ )
         );
         SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, in ) );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_y", in, in )
-        );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_y", in, in ) );
         SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz( in, stage0_3d_, transpose_mode_3d ) );
         SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
     }
@@ -1248,9 +1247,7 @@ private:
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_pencil_pencil" );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_x", in, in )
-        );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_x", in, in ) );
         SCFD_SAFE_CALL( same_zw_.transpose_yzwx_to_xzwy( in, stage2_4d_, transpose_mode_4d ) );
         SCFD_SAFE_CALL(
             base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "inverse_y", stage2_4d_, stage2_4d_ )
@@ -1277,14 +1274,12 @@ private:
     }
 
     void backward_4d_(
-        std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab>,
-        complex_array4_t &in, real_array4_t &out
+        std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab>, complex_array4_t &in,
+        real_array4_t &out
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_slab_slab" );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_xy", in, in )
-        );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_xy", in, in ) );
         SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( in, stage2_4d_ ) );
         SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d ) );
         SCFD_SAFE_CALL( transpose_local_4d_<0, 1, 3, 2>( stage1_4d_, stage0_4d_ ) );
@@ -1488,7 +1483,7 @@ private:
     partitioning_t             partitioning_;
     shared_buffer_t            shared_work_buffer_;
     host_shared_buffer_t       shared_host_work_buffer_;
-    std::size_t                shared_work_size_ = 0;
+    std::size_t                shared_work_size_      = 0;
     std::size_t                shared_host_work_size_ = 0;
     same_x_t                   same_x_;
     same_z_t                   same_z_;

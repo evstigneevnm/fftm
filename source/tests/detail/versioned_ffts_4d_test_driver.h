@@ -9,23 +9,23 @@
 #error "FFTM_VERSIONED_TEST_BINARY must be defined before including versioned_ffts_4d_test_driver.h"
 #endif
 
+#ifndef FFTM_TEST_ENV
+#error "FFTM_TEST_ENV must be defined before including versioned_ffts_4d_test_driver.h"
+#endif
+
 #include <cmath>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda.h>
-#include <scfd/utils/log_std.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/scalar_traits.h>
 #include <scfd/utils/system_timer_event.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <ffts.hpp>
 
 #include "fft_benchmark_common.h"
@@ -34,13 +34,16 @@
 namespace
 {
 
-using T             = double;
-using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
-using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t     = scfd::backend::cuda;
-using memory_t      = backend_t::memory_type;
-using reduce_t      = backend_t::reduce_type;
-using for_each_t    = backend_t::template for_each_nd_type<4, int>;
+using test_env_t    = FFTM_TEST_ENV;
+using ffts_base_t   = fftm::ffts<typename test_env_t::base_fft_t, typename test_env_t::backend_t>;
+using T             = typename ffts_base_t::real;
+using base_fft_t    = typename ffts_base_t::base_fft_type;
+using backend_t     = typename ffts_base_t::backend_type;
+using runtime_api_t = typename ffts_base_t::runtime_api;
+using log_std_t     = typename test_env_t::log_std_t;
+using memory_t      = typename ffts_base_t::memory_t;
+using reduce_t      = typename backend_t::reduce_type;
+using for_each_t    = typename backend_t::template for_each_nd_type<4, int>;
 using idx_t         = scfd::static_vec::vec<int, 4>;
 using rect_t        = scfd::static_vec::rect<int, 4>;
 using options_t     = fftm::test::detail::ffts_4d_benchmark_options<T>;
@@ -301,7 +304,7 @@ struct periodic_poisson_4d_error_fields_functor
 };
 
 template <class Strategy4D>
-int run_forward_random_benchmark( scfd::utils::log_std &log, const options_t &options )
+int run_forward_random_benchmark( log_std_t &log, const options_t &options )
 {
     using ffts_t       = fftm::ffts<base_fft_t, backend_t, Strategy4D>;
     using real_array_t = typename ffts_t::template real_array_t<4>;
@@ -350,7 +353,7 @@ int run_forward_random_benchmark( scfd::utils::log_std &log, const options_t &op
 }
 
 template <class Strategy4D>
-int run_forward_reference_compare( scfd::utils::log_std &log, const options_t &options )
+int run_forward_reference_compare( log_std_t &log, const options_t &options )
 {
     using ffts_t       = fftm::ffts<base_fft_t, backend_t, Strategy4D>;
     using ref_ffts_t   = fftm::ffts<base_fft_t, backend_t, fftm::strategy_4d_pencil_pencil<fftm::transpose_backend::direct>>;
@@ -435,7 +438,7 @@ int run_forward_reference_compare( scfd::utils::log_std &log, const options_t &o
 }
 
 template <class Strategy4D>
-int run_backward_random_benchmark( scfd::utils::log_std &log, const options_t &options )
+int run_backward_random_benchmark( log_std_t &log, const options_t &options )
 {
     using ffts_t       = fftm::ffts<base_fft_t, backend_t, Strategy4D>;
     using real_array_t = typename ffts_t::template real_array_t<4>;
@@ -481,7 +484,7 @@ int run_backward_random_benchmark( scfd::utils::log_std &log, const options_t &o
 }
 
 template <class Strategy4D>
-int run_roundtrip_random_test( scfd::utils::log_std &log, const options_t &options )
+int run_roundtrip_random_test( log_std_t &log, const options_t &options )
 {
     using ffts_t       = fftm::ffts<base_fft_t, backend_t, Strategy4D>;
     using real_array_t = typename ffts_t::template real_array_t<4>;
@@ -553,7 +556,7 @@ int run_roundtrip_random_test( scfd::utils::log_std &log, const options_t &optio
 }
 
 template <class Strategy4D>
-int run_periodic_laplacian_test( scfd::utils::log_std &log, const options_t &options )
+int run_periodic_laplacian_test( log_std_t &log, const options_t &options )
 {
     using ffts_t       = fftm::ffts<base_fft_t, backend_t, Strategy4D>;
     using real_array_t = typename ffts_t::template real_array_t<4>;
@@ -710,37 +713,37 @@ int run_periodic_laplacian_test( scfd::utils::log_std &log, const options_t &opt
 }
 
 template <class Strategy4D>
-int run_case( std::integral_constant<int, 0>, scfd::utils::log_std &log, const options_t &options )
+int run_case( std::integral_constant<int, 0>, log_std_t &log, const options_t &options )
 {
     return run_forward_random_benchmark<Strategy4D>( log, options );
 }
 
 template <class Strategy4D>
-int run_case( std::integral_constant<int, 1>, scfd::utils::log_std &log, const options_t &options )
+int run_case( std::integral_constant<int, 1>, log_std_t &log, const options_t &options )
 {
     return run_forward_reference_compare<Strategy4D>( log, options );
 }
 
 template <class Strategy4D>
-int run_case( std::integral_constant<int, 2>, scfd::utils::log_std &log, const options_t &options )
+int run_case( std::integral_constant<int, 2>, log_std_t &log, const options_t &options )
 {
     return run_backward_random_benchmark<Strategy4D>( log, options );
 }
 
 template <class Strategy4D>
-int run_case( std::integral_constant<int, 3>, scfd::utils::log_std &log, const options_t &options )
+int run_case( std::integral_constant<int, 3>, log_std_t &log, const options_t &options )
 {
     return run_roundtrip_random_test<Strategy4D>( log, options );
 }
 
 template <class Strategy4D>
-int run_case( std::integral_constant<int, 4>, scfd::utils::log_std &log, const options_t &options )
+int run_case( std::integral_constant<int, 4>, log_std_t &log, const options_t &options )
 {
     return run_periodic_laplacian_test<Strategy4D>( log, options );
 }
 
 template <int Testcase>
-int dispatch_strategy( scfd::utils::log_std &log, const options_t &options, strategy_kind strategy )
+int dispatch_strategy( log_std_t &log, const options_t &options, strategy_kind strategy )
 {
     switch ( strategy )
     {
@@ -768,11 +771,11 @@ int dispatch_strategy( scfd::utils::log_std &log, const options_t &options, stra
 
 int main( int argc, char *argv[] )
 {
-    scfd::utils::log_std log;
+    log_std_t log;
 
     try
     {
-        scfd::utils::init_cuda_persistent( log, 0 );
+        test_env_t::init_device( log );
         const options_t options =
             fftm::test::detail::parse_ffts_4d_benchmark_options<T>( argc, argv, FFTM_VERSIONED_TEST_BINARY );
 
