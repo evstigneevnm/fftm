@@ -60,7 +60,10 @@ struct strategy_4d_slab_slab
 
 struct ffts_init_options
 {
-    std::string memory_profiling_key;
+    std::string profiling_key                   = "ffts_prof";
+    std::string memory_profiling_key            = "ffts_mem";
+    bool        print_profile_summary_on_destroy = true;
+    bool        print_profile_totals_on_destroy  = true;
     bool        print_memory_profile_on_destroy = true;
     bool        print_memory_totals_on_destroy  = true;
 };
@@ -161,6 +164,8 @@ public:
     using memory_t                   = typename Backend::memory_type;
     using runtime_api                = typename BaseFFT::runtime_api;
     using strategy_4d_t              = Strategy4D;
+    using profiler_t                 = ffts_profiler;
+    using optional_profiler_t        = optional_profiler<profiler_t>;
     using memory_profiler_t          = ffts_memory_profiler;
     using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
 
@@ -190,6 +195,7 @@ public:
     {
         try
         {
+            log_profile_on_destroy_();
             log_memory_profile_on_destroy_();
         }
         catch ( ... )
@@ -206,7 +212,8 @@ public:
     void init( std::size_t nx, std::size_t ny, const ffts_init_options &options = ffts_init_options() )
     {
         ensure_can_init_();
-        configure_memory_profiling_( options );
+        configure_profiling_( options );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::init<2>" );
         nx_      = nx;
         ny_      = ny;
         ny_half_ = ny_ / 2 + 1;
@@ -221,7 +228,8 @@ public:
     void init( std::size_t nx, std::size_t ny, std::size_t nz, const ffts_init_options &options = ffts_init_options() )
     {
         ensure_can_init_();
-        configure_memory_profiling_( options );
+        configure_profiling_( options );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::init<3>" );
         nx_      = nx;
         ny_      = ny;
         nz_      = nz;
@@ -240,7 +248,8 @@ public:
     )
     {
         ensure_can_init_();
-        configure_memory_profiling_( options );
+        configure_profiling_( options );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::init<4>" );
         nx_      = nx;
         ny_      = ny;
         nz_      = nz;
@@ -268,6 +277,24 @@ public:
         }
     }
 
+    void print_profile( std::ostream &out ) const
+    {
+        if ( profiler_.enabled() )
+        {
+            ostream_log_t log( out );
+            profiler_.log_print( log );
+        }
+    }
+
+    void print_profile_totals( std::ostream &out ) const
+    {
+        if ( profiler_.enabled() )
+        {
+            ostream_log_t log( out );
+            profiler_.log_print_totals( log );
+        }
+    }
+
     void print_memory_totals( std::ostream &out ) const
     {
         if ( memory_profiler_.enabled() )
@@ -285,30 +312,35 @@ public:
     void forward( const real_array_t<2> &in, complex_array_t<2> &out )
     {
         ensure_dimension_( 2 );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::forward_2d" );
         base_fft_.template exec<real_array_t<2>, complex_array_t<2>>( "forward_2d", in, out );
     }
 
     void backward( const complex_array_t<2> &in, real_array_t<2> &out )
     {
         ensure_dimension_( 2 );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::backward_2d" );
         base_fft_.template exec<complex_array_t<2>, real_array_t<2>>( "inverse_2d", in, out );
     }
 
     void forward( const real_array_t<3> &in, complex_array_t<3> &out )
     {
         ensure_dimension_( 3 );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::forward_3d" );
         base_fft_.template exec<real_array_t<3>, complex_array_t<3>>( "forward_3d", in, out );
     }
 
     void backward( const complex_array_t<3> &in, real_array_t<3> &out )
     {
         ensure_dimension_( 3 );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::backward_3d" );
         base_fft_.template exec<complex_array_t<3>, real_array_t<3>>( "inverse_3d", in, out );
     }
 
     void forward( const real_array_t<4> &in, complex_array_t<4> &out )
     {
         ensure_dimension_( 4 );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::forward_4d" );
         forward_4d_( strategy_family_tag(), in, out );
     }
 
@@ -316,6 +348,7 @@ public:
     void backward( complex_array_t<4> &in, real_array_t<4> &out )
     {
         ensure_dimension_( 4 );
+        FFTM_PROFILE_SCOPED_TIC( "ffts::backward_4d" );
         backward_4d_( strategy_family_tag(), in, out );
     }
 
@@ -333,6 +366,29 @@ private:
     using direct_transposer_t    = detail::direct_transpose_4d;
     using memcpy_transposer_t    = detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>;
     using shared_buffer_t        = scfd::memory::shared_buffer<memory_t>;
+
+    struct ostream_log_t
+    {
+        explicit ostream_log_t( std::ostream &out_ ) : out( out_ )
+        {
+        }
+
+        void info( const std::string &message )
+        {
+            out << message;
+            if ( message.empty() || message.back() != '\n' )
+            {
+                out << '\n';
+            }
+        }
+
+        std::ostream &out;
+    };
+
+    typename optional_profiler_t::scoped_ticker profile_scope_( const std::string &name )
+    {
+        return profiler_.scoped_tic( name );
+    }
 
     static typename memory_profiler_t::bytes_type bytes_of_elems_( std::size_t elems, std::size_t elem_size )
     {
@@ -352,6 +408,7 @@ private:
 
     void activate_shared_work_area_()
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::activate_shared_work_area" );
         shared_work_size_ = align_up_( base_fft_.activate_work_size(), 256 );
         shared_work_buffer_.require_size_bytes( shared_work_size_ );
         shared_work_buffer_.activate();
@@ -359,9 +416,23 @@ private:
         update_memory_profile_();
     }
 
-    void configure_memory_profiling_( const ffts_init_options &options )
+    void configure_profiling_( const ffts_init_options &options )
     {
         init_options_ = options;
+        if ( !options.profiling_key.empty() )
+        {
+            profiler_.enable( options.profiling_key );
+        }
+        else
+        {
+            profiler_.disable();
+        }
+
+        configure_memory_profiling_( options );
+    }
+
+    void configure_memory_profiling_( const ffts_init_options &options )
+    {
         if ( !options.memory_profiling_key.empty() )
         {
             memory_profiler_.enable( options.memory_profiling_key );
@@ -372,6 +443,25 @@ private:
         }
         base_fft_.set_memory_profiler( memory_profiler_.native_ptr(), "ffts/base_fft" );
         update_memory_profile_();
+    }
+
+    void log_profile_on_destroy_() const
+    {
+        if ( !profiler_.enabled() )
+        {
+            return;
+        }
+
+        if ( init_options_.print_profile_summary_on_destroy )
+        {
+            ostream_log_t log( std::cout );
+            profiler_.log_print( log );
+        }
+        if ( init_options_.print_profile_totals_on_destroy )
+        {
+            ostream_log_t log( std::cout );
+            profiler_.log_print_totals( log );
+        }
     }
 
     void update_memory_profile_()
@@ -446,6 +536,7 @@ private:
 
     void add_2d_plans_()
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::add_plans_2d" );
         base_fft_.template add_plan_2D<::fftm::direction::R2C>(
             "forward_2d", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
             static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ), 1,
@@ -463,6 +554,7 @@ private:
 
     void add_3d_plans_()
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::add_plans_3d" );
         base_fft_.template add_plan_3D<::fftm::direction::R2C>(
             "forward_3d", static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
             static_cast<long long int>( nz_ ), static_cast<long long int>( nx_ ), static_cast<long long int>( ny_ ),
@@ -482,6 +574,7 @@ private:
 
     void add_4d_plans_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::add_plans_4d_pencil_pencil" );
         const long long int real_batch = static_cast<long long int>( nx_ * ny_ * nz_ );
         const long long int z_batch    = static_cast<long long int>( nx_ * ny_ * nw_half_ );
         const long long int y_batch    = static_cast<long long int>( nx_ * nz_ * nw_half_ );
@@ -528,6 +621,7 @@ private:
 
     void add_4d_plans_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::add_plans_4d_slab_slab" );
         const long long int zw_batch  = static_cast<long long int>( nx_ * ny_ );
         const long long int xy_batch  = static_cast<long long int>( nz_ * nw_half_ );
         const long long int xy_stride = static_cast<long long int>( nz_ * nw_half_ );
@@ -561,6 +655,7 @@ private:
 
     void init_4d_storage_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::pencil_pencil> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::init_4d_storage_pencil_pencil" );
         init_shared_stage0_stage2_4d_( nx_, ny_, nz_, nw_half_, nx_, nz_, nw_half_, ny_ );
         init_owned_stage1_4d_( nx_, ny_, nw_half_, nz_ );
         direct_transposer_.reset( new detail::direct_transpose_4d( nx_, ny_, nz_, nw_half_ ) );
@@ -570,6 +665,7 @@ private:
 
     void init_4d_storage_( std::integral_constant<transform_strategy_4d, transform_strategy_4d::slab_slab> )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::init_4d_storage_slab_slab" );
         init_shared_stage0_stage2_4d_( nx_, ny_, nz_, nw_half_, 0, 0, 0, 0 );
         init_owned_stage1_4d_( nz_, nw_half_, nx_, ny_ );
         direct_transposer_.reset( new detail::direct_transpose_4d( nx_, ny_, nz_, nw_half_ ) );
@@ -593,6 +689,7 @@ private:
         complex_array_t<4> &out
     )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::forward_4d_pencil_pencil" );
         base_fft_.template exec<real_array_t<4>, stage0_complex_array_t>( "forward_w", in, stage0_ );
         transpose_xyzw_to_xywz_( stage0_, stage1_ );
 
@@ -610,6 +707,7 @@ private:
         complex_array_t<4> &out
     )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::forward_4d_slab_slab" );
         base_fft_.template exec<real_array_t<4>, stage0_complex_array_t>( "forward_zw", in, stage0_ );
         transpose_xyzw_to_zwxy_( stage0_, stage1_ );
         base_fft_.template exec<stage1_complex_array_t, stage1_complex_array_t>( "forward_xy", stage1_, stage1_ );
@@ -621,6 +719,7 @@ private:
         real_array_t<4> &out
     )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::backward_4d_pencil_pencil" );
         base_fft_.template exec<complex_array_t<4>, complex_array_t<4>>( "inverse_x", in, in );
         transpose_yzwx_to_xzwy_( in, stage2_ );
 
@@ -638,6 +737,7 @@ private:
         real_array_t<4> &out
     )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::backward_4d_slab_slab" );
         transpose_yzwx_to_zwxy_( in, stage1_ );
         base_fft_.template exec<stage1_complex_array_t, stage1_complex_array_t>( "inverse_xy", stage1_, stage1_ );
         transpose_zwxy_to_xyzw_( stage1_, stage0_ );
@@ -807,60 +907,70 @@ private:
     template <class SrcArray, class DstArray>
     void transpose_xyzw_to_xywz_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_xyzw_to_xywz" );
         transpose_xyzw_to_xywz_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_xywz_to_xzwy_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_xywz_to_xzwy" );
         transpose_xywz_to_xzwy_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_xzwy_to_yzwx_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_xzwy_to_yzwx" );
         transpose_xzwy_to_yzwx_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_yzwx_to_xzwy_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_yzwx_to_xzwy" );
         transpose_yzwx_to_xzwy_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_xzwy_to_xywz_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_xzwy_to_xywz" );
         transpose_xzwy_to_xywz_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_xywz_to_xyzw_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_xywz_to_xyzw" );
         transpose_xywz_to_xyzw_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_xyzw_to_zwxy_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_xyzw_to_zwxy" );
         transpose_xyzw_to_zwxy_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_xyzw_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_zwxy_to_xyzw" );
         transpose_zwxy_to_xyzw_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_zwxy_to_yzwx_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_zwxy_to_yzwx" );
         transpose_zwxy_to_yzwx_backend_( transpose_backend_tag(), src, dst );
     }
 
     template <class SrcArray, class DstArray>
     void transpose_yzwx_to_zwxy_( const SrcArray &src, DstArray &dst )
     {
+        FFTM_PROFILE_SCOPED_TIC( "ffts::transpose_yzwx_to_zwxy" );
         transpose_yzwx_to_zwxy_backend_( transpose_backend_tag(), src, dst );
     }
 
@@ -906,6 +1016,7 @@ private:
 
     BaseFFT                    base_fft_;
     ffts_init_options          init_options_;
+    optional_profiler_t        profiler_;
     optional_memory_profiler_t memory_profiler_;
     shared_buffer_t            shared_work_buffer_;
     std::size_t                shared_work_size_ = 0;
