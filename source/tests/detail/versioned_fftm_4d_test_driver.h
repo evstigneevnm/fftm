@@ -32,6 +32,7 @@
 
 #include "fftm_4d_test_options.h"
 #include "poisson_4d_fft_common.h"
+#include "test_memory_profile_helpers.h"
 
 namespace
 {
@@ -414,6 +415,13 @@ int run_forward_random_benchmark(
     }
 
     const auto stats = compute_timing_statistics( wall_times );
+    fftm::test::detail::log_tracked_memory_with_external_mpi(
+        log, comm_info, distributed_fft, "test=fftm_v0_4d",
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) ),
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) )
+    );
 
     if ( comm_info.myid == 0 )
     {
@@ -541,6 +549,50 @@ int run_forward_reference_compare(
     }
 
     const auto stats = compute_timing_statistics( wall_times );
+    if ( distributed_fft.is_memory_profiling_enabled() || reference_fft.is_memory_profiling_enabled() )
+    {
+        using bytes_t = typename fftm_t::memory_profile_bytes_t;
+        const auto distributed_buckets = distributed_fft.get_memory_profile_buckets();
+        const auto reference_buckets   = reference_fft.get_memory_profile_buckets();
+        const bytes_t internal_device_current = static_cast<bytes_t>(
+            distributed_buckets.get( ::fftm::detail::memory_profile_bucket::device ).current +
+            reference_buckets.get( ::fftm::detail::memory_profile_bucket::device ).current
+        );
+        const bytes_t internal_device_peak = static_cast<bytes_t>(
+            distributed_buckets.get( ::fftm::detail::memory_profile_bucket::device ).peak +
+            reference_buckets.get( ::fftm::detail::memory_profile_bucket::device ).peak
+        );
+        const bytes_t internal_host_current = static_cast<bytes_t>(
+            distributed_buckets.get( ::fftm::detail::memory_profile_bucket::host_pinned ).current +
+            reference_buckets.get( ::fftm::detail::memory_profile_bucket::host_pinned ).current
+        );
+        const bytes_t internal_host_peak = static_cast<bytes_t>(
+            distributed_buckets.get( ::fftm::detail::memory_profile_bucket::host_pinned ).peak +
+            reference_buckets.get( ::fftm::detail::memory_profile_bucket::host_pinned ).peak
+        );
+        const bytes_t internal_other_current = static_cast<bytes_t>(
+            distributed_buckets.get( ::fftm::detail::memory_profile_bucket::other ).current +
+            reference_buckets.get( ::fftm::detail::memory_profile_bucket::other ).current
+        );
+        const bytes_t internal_other_peak = static_cast<bytes_t>(
+            distributed_buckets.get( ::fftm::detail::memory_profile_bucket::other ).peak +
+            reference_buckets.get( ::fftm::detail::memory_profile_bucket::other ).peak
+        );
+        const bytes_t external_device_current = static_cast<bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( local_in ), fftm::test::detail::array_bytes( local_out ),
+            fftm::test::detail::array_bytes( ref_in ), fftm::test::detail::array_bytes( ref_out ) ) );
+        const bytes_t external_device_peak = static_cast<bytes_t>(
+            external_device_current + fftm::test::detail::sum_bytes(
+                                          fftm::test::detail::bytes_of_elems<T>( local_out.total_size() ),
+                                          fftm::test::detail::bytes_of_elems<T>( local_out.total_size() ) )
+        );
+
+        fftm::test::detail::log_tracked_memory_categories_mpi<fftm_t>(
+            log, comm_info, "test=fftm_v1_4d", internal_device_current, internal_device_peak, internal_host_current,
+            internal_host_peak, external_device_current, external_device_peak, internal_other_current,
+            internal_other_peak
+        );
+    }
 
     if ( comm_info.myid == 0 )
     {
@@ -608,6 +660,13 @@ int run_backward_random_benchmark(
     }
 
     const auto stats = compute_timing_statistics( wall_times );
+    fftm::test::detail::log_tracked_memory_with_external_mpi(
+        log, comm_info, distributed_fft, "test=fftm_v2_4d",
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( hat ), fftm::test::detail::array_bytes( work ) ) ),
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( hat ), fftm::test::detail::array_bytes( work ) ) )
+    );
 
     if ( comm_info.myid == 0 )
     {
@@ -713,6 +772,13 @@ int run_roundtrip_random_test(
     }
 
     const auto stats = compute_timing_statistics( wall_times );
+    fftm::test::detail::log_tracked_memory_with_external_mpi(
+        log, comm_info, distributed_fft, "test=fftm_v3_4d",
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) ),
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) )
+    );
 
     if ( comm_info.myid == 0 )
     {
@@ -906,6 +972,31 @@ int run_periodic_laplacian_test(
     const T l2_norm      = std::sqrt( global_l2_sq );
     const T h1_norm      = std::sqrt( global_h1_sq );
     const auto stats     = compute_timing_statistics( wall_times );
+    fftm::test::detail::log_tracked_memory_with_external_mpi(
+        log, comm_info, distributed_fft, "test=fftm_v4_4d",
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( rhs ), fftm::test::detail::array_bytes( exact_solution ),
+            fftm::test::detail::array_bytes( exact_dx ), fftm::test::detail::array_bytes( exact_dy ),
+            fftm::test::detail::array_bytes( exact_dz ), fftm::test::detail::array_bytes( exact_dw ),
+            fftm::test::detail::array_bytes( numerical_solution ), fftm::test::detail::array_bytes( numerical_dx ),
+            fftm::test::detail::array_bytes( numerical_dy ), fftm::test::detail::array_bytes( numerical_dz ),
+            fftm::test::detail::array_bytes( numerical_dw ), fftm::test::detail::array_bytes( solution_error_sq ),
+            fftm::test::detail::array_bytes( gradient_error_sq ), fftm::test::detail::array_bytes( rhs_hat ),
+            fftm::test::detail::array_bytes( solution_hat ), fftm::test::detail::array_bytes( dx_hat ),
+            fftm::test::detail::array_bytes( dy_hat ), fftm::test::detail::array_bytes( dz_hat ),
+            fftm::test::detail::array_bytes( dw_hat ) ) ),
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( rhs ), fftm::test::detail::array_bytes( exact_solution ),
+            fftm::test::detail::array_bytes( exact_dx ), fftm::test::detail::array_bytes( exact_dy ),
+            fftm::test::detail::array_bytes( exact_dz ), fftm::test::detail::array_bytes( exact_dw ),
+            fftm::test::detail::array_bytes( numerical_solution ), fftm::test::detail::array_bytes( numerical_dx ),
+            fftm::test::detail::array_bytes( numerical_dy ), fftm::test::detail::array_bytes( numerical_dz ),
+            fftm::test::detail::array_bytes( numerical_dw ), fftm::test::detail::array_bytes( solution_error_sq ),
+            fftm::test::detail::array_bytes( gradient_error_sq ), fftm::test::detail::array_bytes( rhs_hat ),
+            fftm::test::detail::array_bytes( solution_hat ), fftm::test::detail::array_bytes( dx_hat ),
+            fftm::test::detail::array_bytes( dy_hat ), fftm::test::detail::array_bytes( dz_hat ),
+            fftm::test::detail::array_bytes( dw_hat ) ) )
+    );
 
     if ( comm_info.myid == 0 )
     {

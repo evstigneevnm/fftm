@@ -21,6 +21,7 @@
 
 #include "detail/fft_benchmark_common.h"
 #include "detail/fft_benchmark_options.h"
+#include "detail/test_memory_profile_helpers.h"
 
 namespace
 {
@@ -133,6 +134,13 @@ int run_benchmark_case(
     }
 
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
+    fftm::test::detail::log_tracked_memory_with_external_mpi(
+        log, comm_info, distributed_fft, "benchmark=fftm-3d",
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) ),
+        static_cast<typename fftm_t::memory_profile_bytes_t>( fftm::test::detail::sum_bytes(
+            fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) )
+    );
 
     if ( comm_info.myid == 0 )
     {

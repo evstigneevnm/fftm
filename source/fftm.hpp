@@ -22,6 +22,7 @@
 
 #include "detail/array_arrangers.h"
 #include "detail/direct_transpose_4d.h"
+#include "detail/memory_profile_utils.h"
 #include "detail/mpi_transpose_3d.h"
 #include "detail/mpi_transpose_4d.h"
 #include "fft_direction.h"
@@ -250,6 +251,9 @@ public:
     using partition_t   = ::fftm::partition;
     using strategy_3d_t = Strategy3D;
     using strategy_4d_t = Strategy4D;
+    using memory_profiler_t        = fftm_memory_profiler;
+    using memory_profile_bytes_t   = typename memory_profiler_t::bytes_type;
+    using memory_profile_buckets_t = detail::memory_profile_buckets<memory_profile_bytes_t>;
 
     template <std::size_t Dim>
     using real_array_t = typename std::conditional<
@@ -426,6 +430,16 @@ public:
         }
     }
 
+    bool is_memory_profiling_enabled() const
+    {
+        return memory_profiler_.enabled();
+    }
+
+    memory_profile_buckets_t get_memory_profile_buckets() const
+    {
+        return collect_memory_profile_buckets_();
+    }
+
 private:
     using strategy_family_3d_tag = std::integral_constant<transform_strategy_3d, strategy_family_3d>;
     using strategy_family_4d_tag = std::integral_constant<transform_strategy_4d_mpi, strategy_family_4d>;
@@ -465,7 +479,6 @@ private:
     using host_shared_buffer_t       = scfd::memory::shared_buffer<typename memory_t::host_memory_type>;
     using profiler_t                 = fftm_profiler;
     using optional_profiler_t        = optional_profiler<profiler_t>;
-    using memory_profiler_t          = fftm_memory_profiler;
     using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
 
     typename optional_profiler_t::scoped_ticker profile_scope_( const std::string &name )
@@ -621,10 +634,7 @@ private:
             return;
         }
 
-        auto bytes_to_mib = []( typename memory_profiler_t::bytes_type bytes ) -> double {
-            return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
-        };
-
+        const memory_profile_buckets_t local_buckets = collect_memory_profile_buckets_();
         std::stringstream ss;
         ss << "Memory profile (MPI reduced):";
         for ( const auto &item : profiler->entries() )
@@ -641,19 +651,21 @@ private:
                 const double proc_count = static_cast<double>( mpi_.num_procs );
                 ss << "\n  " << item.first << ": current(sum/max/avg)=" << current_sum << "/" << current_max << "/"
                    << static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs ) << " B ("
-                   << std::fixed << std::setprecision( 3 ) << bytes_to_mib( current_sum ) << "/"
-                   << bytes_to_mib( current_max ) << "/"
-                   << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs )
-                      )
+                   << std::fixed << std::setprecision( 3 ) << bytes_to_mib_( current_sum ) << "/"
+                   << bytes_to_mib_( current_max ) << "/"
+                   << bytes_to_mib_( static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs ) )
                    << " MiB)"
                    << ", peak(sum/max/avg)=" << peak_sum << "/" << peak_max << "/"
                    << static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs ) << " B ("
-                   << bytes_to_mib( peak_sum ) << "/" << bytes_to_mib( peak_max ) << "/"
-                   << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs ) )
+                   << bytes_to_mib_( peak_sum ) << "/" << bytes_to_mib_( peak_max ) << "/"
+                   << bytes_to_mib_( static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs ) )
                    << " MiB)";
                 (void)proc_count;
             }
         }
+
+        ss << "\nMemory profile categories (MPI reduced):";
+        append_memory_profile_bucket_lines_mpi_( ss, local_buckets, true );
         if ( mpi_.myid == 0 )
         {
             log_.info( ss.str() );
@@ -668,33 +680,100 @@ private:
             return;
         }
 
-        const auto current_local = profiler->total_current_bytes();
-        const auto peak_local    = profiler->total_peak_bytes();
-        const auto current_sum   = mpi_.all_reduce_sum( current_local );
-        const auto current_max   = mpi_.all_reduce_max( current_local );
-        const auto peak_sum      = mpi_.all_reduce_sum( peak_local );
-        const auto peak_max      = mpi_.all_reduce_max( peak_local );
+        const memory_profile_buckets_t local_buckets = collect_memory_profile_buckets_();
 
         if ( mpi_.myid == 0 )
         {
-            auto bytes_to_mib = []( typename memory_profiler_t::bytes_type bytes ) -> double {
-                return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
-            };
             std::stringstream ss;
-            ss << "Memory profile totals (MPI reduced): "
-               << "current(sum/max/avg)=" << current_sum << "/" << current_max << "/"
-               << static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs ) << " B ("
-               << std::fixed << std::setprecision( 3 ) << bytes_to_mib( current_sum ) << "/"
-               << bytes_to_mib( current_max ) << "/"
-               << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( current_sum / mpi_.num_procs ) )
-               << " MiB)"
-               << ", peak(sum/max/avg)=" << peak_sum << "/" << peak_max << "/"
-               << static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs ) << " B ("
-               << bytes_to_mib( peak_sum ) << "/" << bytes_to_mib( peak_max ) << "/"
-               << bytes_to_mib( static_cast<typename memory_profiler_t::bytes_type>( peak_sum / mpi_.num_procs ) )
-               << " MiB)";
+            ss << "Memory profile totals (MPI reduced):";
+            append_memory_profile_total_lines_mpi_( ss, local_buckets, true );
             log_.info( ss.str() );
         }
+    }
+
+    static double bytes_to_mib_( memory_profile_bytes_t bytes )
+    {
+        return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
+    }
+
+    memory_profile_buckets_t collect_memory_profile_buckets_() const
+    {
+        memory_profile_buckets_t       buckets;
+        const memory_profiler_t       *profiler = memory_profiler_.native_ptr();
+        if ( profiler == nullptr )
+        {
+            return buckets;
+        }
+
+        for ( const auto &item : profiler->entries() )
+        {
+            buckets.add( item.first, item.second.current_bytes, item.second.peak_bytes );
+        }
+        return buckets;
+    }
+
+    void append_memory_profile_line_mpi_(
+        std::stringstream &ss, const char *name, memory_profile_bytes_t current_local, memory_profile_bytes_t peak_local
+    ) const
+    {
+        const auto current_sum = mpi_.all_reduce_sum( current_local );
+        const auto current_max = mpi_.all_reduce_max( current_local );
+        const auto peak_sum    = mpi_.all_reduce_sum( peak_local );
+        const auto peak_max    = mpi_.all_reduce_max( peak_local );
+
+        if ( mpi_.myid != 0 )
+        {
+            return;
+        }
+
+        ss << "\n  " << name << ": current(sum/max/avg)=" << current_sum << "/" << current_max << "/"
+           << static_cast<memory_profile_bytes_t>( current_sum / mpi_.num_procs ) << " B ("
+           << std::fixed << std::setprecision( 3 ) << bytes_to_mib_( current_sum ) << "/" << bytes_to_mib_( current_max )
+           << "/" << bytes_to_mib_( static_cast<memory_profile_bytes_t>( current_sum / mpi_.num_procs ) ) << " MiB)"
+           << ", peak(sum/max/avg)=" << peak_sum << "/" << peak_max << "/"
+           << static_cast<memory_profile_bytes_t>( peak_sum / mpi_.num_procs ) << " B (" << bytes_to_mib_( peak_sum )
+           << "/" << bytes_to_mib_( peak_max ) << "/"
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( peak_sum / mpi_.num_procs ) ) << " MiB)";
+    }
+
+    void append_memory_profile_bucket_lines_mpi_(
+        std::stringstream &ss, const memory_profile_buckets_t &local_buckets, bool include_external_test
+    ) const
+    {
+        append_memory_profile_line_mpi_(
+            ss, detail::memory_profile_bucket_name( detail::memory_profile_bucket::device ),
+            local_buckets.get( detail::memory_profile_bucket::device ).current,
+            local_buckets.get( detail::memory_profile_bucket::device ).peak
+        );
+        append_memory_profile_line_mpi_(
+            ss, detail::memory_profile_bucket_name( detail::memory_profile_bucket::host_pinned ),
+            local_buckets.get( detail::memory_profile_bucket::host_pinned ).current,
+            local_buckets.get( detail::memory_profile_bucket::host_pinned ).peak
+        );
+        if ( include_external_test )
+        {
+            append_memory_profile_line_mpi_(
+                ss, detail::memory_profile_bucket_name( detail::memory_profile_bucket::external_test ),
+                local_buckets.get( detail::memory_profile_bucket::external_test ).current,
+                local_buckets.get( detail::memory_profile_bucket::external_test ).peak
+            );
+        }
+
+        const auto other = local_buckets.get( detail::memory_profile_bucket::other );
+        if ( other.current != 0 || other.peak != 0 )
+        {
+            append_memory_profile_line_mpi_(
+                ss, detail::memory_profile_bucket_name( detail::memory_profile_bucket::other ), other.current, other.peak
+            );
+        }
+    }
+
+    void append_memory_profile_total_lines_mpi_(
+        std::stringstream &ss, const memory_profile_buckets_t &local_buckets, bool include_external_test
+    ) const
+    {
+        append_memory_profile_line_mpi_( ss, "total", local_buckets.total().current, local_buckets.total().peak );
+        append_memory_profile_bucket_lines_mpi_( ss, local_buckets, include_external_test );
     }
 
     void ensure_can_init_() const

@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -17,6 +19,7 @@
 #include "detail/array_arrangers.h"
 #include "detail/cuda_memcpy_4d_slab_transposer.h"
 #include "detail/direct_transpose_4d.h"
+#include "detail/memory_profile_utils.h"
 #include "fft_direction.h"
 #include "profiling.h"
 
@@ -168,6 +171,8 @@ public:
     using optional_profiler_t        = optional_profiler<profiler_t>;
     using memory_profiler_t          = ffts_memory_profiler;
     using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
+    using memory_profile_bytes_t     = typename memory_profiler_t::bytes_type;
+    using memory_profile_buckets_t   = detail::memory_profile_buckets<memory_profile_bytes_t>;
 
     template <std::size_t Dim>
     using real_array_t = typename detail::ffts_array_traits<real, complex, memory_t, Dim, Strategy4D>::real_array_t;
@@ -273,7 +278,7 @@ public:
     {
         if ( memory_profiler_.enabled() )
         {
-            memory_profiler_.native_ptr()->print( out );
+            print_memory_profile_summary_( out );
         }
     }
 
@@ -299,8 +304,18 @@ public:
     {
         if ( memory_profiler_.enabled() )
         {
-            memory_profiler_.native_ptr()->print_totals( out );
+            print_memory_profile_totals_( out );
         }
+    }
+
+    bool is_memory_profiling_enabled() const
+    {
+        return memory_profiler_.enabled();
+    }
+
+    memory_profile_buckets_t get_memory_profile_buckets() const
+    {
+        return collect_memory_profile_buckets_();
     }
 
     std::size_t dimension() const
@@ -498,12 +513,104 @@ private:
 
         if ( init_options_.print_memory_profile_on_destroy )
         {
-            memory_profiler_.native_ptr()->print( std::cout );
+            print_memory_profile_summary_( std::cout );
         }
         if ( init_options_.print_memory_totals_on_destroy )
         {
-            memory_profiler_.native_ptr()->print_totals( std::cout );
+            print_memory_profile_totals_( std::cout );
         }
+    }
+
+    static double bytes_to_mib_( memory_profile_bytes_t bytes )
+    {
+        return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
+    }
+
+    memory_profile_buckets_t collect_memory_profile_buckets_() const
+    {
+        memory_profile_buckets_t       buckets;
+        const memory_profiler_t       *profiler = memory_profiler_.native_ptr();
+        if ( profiler == nullptr )
+        {
+            return buckets;
+        }
+
+        for ( const auto &item : profiler->entries() )
+        {
+            buckets.add( item.first, item.second.current_bytes, item.second.peak_bytes );
+        }
+        return buckets;
+    }
+
+    static void append_memory_profile_line_(
+        std::ostream &out, const char *name, memory_profile_bytes_t current, memory_profile_bytes_t peak
+    )
+    {
+        out << "\n  " << name << ": current(sum/max/avg)=" << current << "/" << current << "/" << current << " B ("
+            << std::fixed << std::setprecision( 3 ) << bytes_to_mib_( current ) << "/" << bytes_to_mib_( current ) << "/"
+            << bytes_to_mib_( current ) << " MiB)"
+            << ", peak(sum/max/avg)=" << peak << "/" << peak << "/" << peak << " B (" << bytes_to_mib_( peak ) << "/"
+            << bytes_to_mib_( peak ) << "/" << bytes_to_mib_( peak ) << " MiB)";
+    }
+
+    static void append_memory_profile_bucket_lines_(
+        std::ostream &out, const memory_profile_buckets_t &buckets, bool include_external_test
+    )
+    {
+        append_memory_profile_line_(
+            out, detail::memory_profile_bucket_name( detail::memory_profile_bucket::device ),
+            buckets.get( detail::memory_profile_bucket::device ).current,
+            buckets.get( detail::memory_profile_bucket::device ).peak
+        );
+        append_memory_profile_line_(
+            out, detail::memory_profile_bucket_name( detail::memory_profile_bucket::host_pinned ),
+            buckets.get( detail::memory_profile_bucket::host_pinned ).current,
+            buckets.get( detail::memory_profile_bucket::host_pinned ).peak
+        );
+        if ( include_external_test )
+        {
+            append_memory_profile_line_(
+                out, detail::memory_profile_bucket_name( detail::memory_profile_bucket::external_test ),
+                buckets.get( detail::memory_profile_bucket::external_test ).current,
+                buckets.get( detail::memory_profile_bucket::external_test ).peak
+            );
+        }
+
+        const auto other = buckets.get( detail::memory_profile_bucket::other );
+        if ( other.current != 0 || other.peak != 0 )
+        {
+            append_memory_profile_line_(
+                out, detail::memory_profile_bucket_name( detail::memory_profile_bucket::other ), other.current, other.peak
+            );
+        }
+    }
+
+    void print_memory_profile_summary_( std::ostream &out ) const
+    {
+        const memory_profiler_t *profiler = memory_profiler_.native_ptr();
+        if ( profiler == nullptr )
+        {
+            return;
+        }
+
+        out << "Memory profile:";
+        for ( const auto &item : profiler->entries() )
+        {
+            append_memory_profile_line_( out, item.first.c_str(), item.second.current_bytes, item.second.peak_bytes );
+        }
+
+        out << "\nMemory profile categories:";
+        append_memory_profile_bucket_lines_( out, collect_memory_profile_buckets_(), true );
+        out << '\n';
+    }
+
+    void print_memory_profile_totals_( std::ostream &out ) const
+    {
+        const memory_profile_buckets_t buckets = collect_memory_profile_buckets_();
+        out << "Memory profile totals:";
+        append_memory_profile_line_( out, "total", buckets.total().current, buckets.total().peak );
+        append_memory_profile_bucket_lines_( out, buckets, true );
+        out << '\n';
     }
 
     void ensure_can_init_() const
