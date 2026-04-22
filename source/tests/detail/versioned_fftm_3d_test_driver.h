@@ -384,7 +384,7 @@ int run_forward_random_benchmark(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=v0_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, "
+            "test=fftm_v0_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, "
             "stddev_wall_ms=%.8e",
             fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
             options.p2, options.nx, options.ny, options.nz, options.times, stats.mean, stats.stddev
@@ -503,7 +503,7 @@ int run_forward_reference_compare(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=v1_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: "
+            "test=fftm_v1_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: "
             "forward_rel_l2=%.8e, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
             options.p2, options.nx, options.ny, options.nz, options.times, max_forward_rel_l2, stats.mean,
@@ -565,7 +565,7 @@ int run_backward_random_benchmark(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=v2_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, "
+            "test=fftm_v2_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, "
             "stddev_wall_ms=%.8e",
             fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
             options.p2, options.nx, options.ny, options.nz, options.times, stats.mean, stats.stddev
@@ -665,7 +665,7 @@ int run_roundtrip_random_test(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=v3_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: max_l2=%.8e, "
+            "test=fftm_v3_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: max_l2=%.8e, "
             "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
             options.p2, options.nx, options.ny, options.nz, options.times, max_l2, stats.mean, stats.stddev
@@ -837,7 +837,7 @@ int run_periodic_laplacian_test(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=v4_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: L2=%.8e, H1=%.8e, "
+            "test=fftm_v4_3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, times=%d: L2=%.8e, H1=%.8e, "
             "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
             options.p2, options.nx, options.ny, options.nz, options.times, l2_norm, h1_norm, stats.mean, stats.stddev
