@@ -681,12 +681,12 @@ private:
         }
 
         const memory_profile_buckets_t local_buckets = collect_memory_profile_buckets_();
+        std::stringstream              ss;
+        ss << "Memory profile totals (MPI reduced):";
+        append_memory_profile_total_lines_mpi_( ss, local_buckets, true );
 
         if ( mpi_.myid == 0 )
         {
-            std::stringstream ss;
-            ss << "Memory profile totals (MPI reduced):";
-            append_memory_profile_total_lines_mpi_( ss, local_buckets, true );
             log_.info( ss.str() );
         }
     }
@@ -760,12 +760,9 @@ private:
         }
 
         const auto other = local_buckets.get( detail::memory_profile_bucket::other );
-        if ( other.current != 0 || other.peak != 0 )
-        {
-            append_memory_profile_line_mpi_(
-                ss, detail::memory_profile_bucket_name( detail::memory_profile_bucket::other ), other.current, other.peak
-            );
-        }
+        append_memory_profile_line_mpi_(
+            ss, detail::memory_profile_bucket_name( detail::memory_profile_bucket::other ), other.current, other.peak
+        );
     }
 
     void append_memory_profile_total_lines_mpi_(

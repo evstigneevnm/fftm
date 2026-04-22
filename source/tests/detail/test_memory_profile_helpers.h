@@ -89,10 +89,7 @@ inline void log_tracked_memory_categories_mpi(
     append_memory_profile_line_mpi( ss, comm, "external_test_owned", external_device_current, external_device_peak );
     append_memory_profile_line_mpi( ss, comm, "tracked_device_total", tracked_device_cur, tracked_device_pk );
 
-    if ( internal_other_current != 0 || internal_other_peak != 0 )
-    {
-        append_memory_profile_line_mpi( ss, comm, "other_internal", internal_other_current, internal_other_peak );
-    }
+    append_memory_profile_line_mpi( ss, comm, "other_internal", internal_other_current, internal_other_peak );
 
     append_memory_profile_line_mpi( ss, comm, "tracked_total", tracked_total_cur, tracked_total_pk );
 
