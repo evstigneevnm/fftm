@@ -72,6 +72,28 @@ $(eval $(call BUILD_MPI_TEST,test_benchmark_fftm_3D_nca.bin,test_benchmark_fftm_
 $(eval $(call BUILD_MPI_TEST,test_benchmark_fftm_4D.bin,test_benchmark_fftm_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_benchmark_fftm_4D.o,-lcudart -lcufft -lmpi))
 $(eval $(call BUILD_MPI_TEST,test_benchmark_fftm_4D_nca.bin,test_benchmark_fftm_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_benchmark_fftm_4D_nca.o,-lcudart -lcufft -lmpi))
 
+$(eval $(call BUILD_MPI_TEST,test_v0_3D.bin,test_v0_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_v0_3D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v0_3D_nca.bin,test_v0_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_NCA),test_v0_3D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v1_3D.bin,test_v1_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_v1_3D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v1_3D_nca.bin,test_v1_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_NCA),test_v1_3D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v2_3D.bin,test_v2_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_v2_3D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v2_3D_nca.bin,test_v2_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_NCA),test_v2_3D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v3_3D.bin,test_v3_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_v3_3D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v3_3D_nca.bin,test_v3_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_NCA),test_v3_3D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v4_3D.bin,test_v4_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_v4_3D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v4_3D_nca.bin,test_v4_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_NCA),test_v4_3D_nca.o,-lcudart -lcufft -lmpi))
+
+$(eval $(call BUILD_MPI_TEST,test_v0_4D.bin,test_v0_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_v0_4D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v0_4D_nca.bin,test_v0_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_v0_4D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v1_4D.bin,test_v1_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_v1_4D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v1_4D_nca.bin,test_v1_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_v1_4D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v2_4D.bin,test_v2_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_v2_4D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v2_4D_nca.bin,test_v2_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_v2_4D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v3_4D.bin,test_v3_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_v3_4D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v3_4D_nca.bin,test_v3_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_v3_4D_nca.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v4_4D.bin,test_v4_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_v4_4D.o,-lcudart -lcufft -lmpi))
+$(eval $(call BUILD_MPI_TEST,test_v4_4D_nca.bin,test_v4_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_v4_4D_nca.o,-lcudart -lcufft -lmpi))
+
 test:
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) $(SCFD_FLAGS) test_cudaMemcpy3DAsync_1.cu -o test_cudaMemcpy3DAsync_1.bin
 
@@ -91,4 +113,4 @@ test_4D_poisson.bin: test_4D_poisson.cu
 test_fft_3D.bin: test_fft_3D.cu
 	nvcc $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(contrib) $(SCFD_FLAGS) test_fft_3D.cu -L$(lib_cuda) -lcudart -lcufft -o test_fft_3D.bin
 
-all: test_init.bin test_fft_2D.bin test_2D_poisson.bin test_3D_poisson.bin test_4D_poisson.bin test_fft_3D.bin test_mpi_transpose_3D.bin test_mpi_transpose_3D_nca.bin test_mpi_transpose_4D.bin test_mpi_transpose_4D_nca.bin test_fftm_3D_compare.bin test_fftm_3D_compare_nca.bin test_fftm_4D_compare.bin test_fftm_4D_compare_nca.bin test_3D_poisson_mpi.bin test_3D_poisson_mpi_nca.bin test_3D_poisson_mpi_tutorial.bin test_3D_poisson_mpi_tutorial_nca.bin test_4D_poisson_mpi.bin test_4D_poisson_mpi_nca.bin test_4D_poisson_mpi_tutorial.bin test_4D_poisson_mpi_tutorial_nca.bin test_benchmark_ffts_3D.bin test_benchmark_ffts_4D.bin test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.bin test_benchmark_fftm_4D.bin test_benchmark_fftm_4D_nca.bin
+all: test_init.bin test_fft_2D.bin test_2D_poisson.bin test_3D_poisson.bin test_4D_poisson.bin test_fft_3D.bin test_mpi_transpose_3D.bin test_mpi_transpose_3D_nca.bin test_mpi_transpose_4D.bin test_mpi_transpose_4D_nca.bin test_fftm_3D_compare.bin test_fftm_3D_compare_nca.bin test_fftm_4D_compare.bin test_fftm_4D_compare_nca.bin test_3D_poisson_mpi.bin test_3D_poisson_mpi_nca.bin test_3D_poisson_mpi_tutorial.bin test_3D_poisson_mpi_tutorial_nca.bin test_4D_poisson_mpi.bin test_4D_poisson_mpi_nca.bin test_4D_poisson_mpi_tutorial.bin test_4D_poisson_mpi_tutorial_nca.bin test_benchmark_ffts_3D.bin test_benchmark_ffts_4D.bin test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.bin test_benchmark_fftm_4D.bin test_benchmark_fftm_4D_nca.bin test_v0_3D.bin test_v0_3D_nca.bin test_v1_3D.bin test_v1_3D_nca.bin test_v2_3D.bin test_v2_3D_nca.bin test_v3_3D.bin test_v3_3D_nca.bin test_v4_3D.bin test_v4_3D_nca.bin test_v0_4D.bin test_v0_4D_nca.bin test_v1_4D.bin test_v1_4D_nca.bin test_v2_4D.bin test_v2_4D_nca.bin test_v3_4D.bin test_v3_4D_nca.bin test_v4_4D.bin test_v4_4D_nca.bin

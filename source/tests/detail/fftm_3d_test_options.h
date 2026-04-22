@@ -32,6 +32,7 @@ struct fftm_3d_test_options
     std::size_t                   nz       = 16;
     std::size_t                   p1       = 0;
     std::size_t                   p2       = 0;
+    double                        threshold = 1.0e-11;
     int                           times    = 1;
 };
 
@@ -60,12 +61,15 @@ choose_grid_3d( const fftm_3d_test_options &options, fftm_3d_strategy_kind strat
     return pencil_grid;
 }
 
-inline std::string usage_fftm_3d_test( const std::string &binary_name, bool allow_strategy_all, bool allow_times )
+inline std::string
+usage_fftm_3d_test( const std::string &binary_name, bool allow_strategy_all, bool allow_times, bool allow_threshold = false )
 {
     std::string usage = "USAGE: " + binary_name + " [--strategy slab-pencil|pencil-slab|pencil-pencil";
     if ( allow_strategy_all )
         usage += "|all";
     usage += "] [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2]";
+    if ( allow_threshold )
+        usage += " [--threshold eps]";
     if ( allow_times )
         usage += " [--times repeats]";
     usage += " [Nx Ny Nz]";
@@ -74,7 +78,7 @@ inline std::string usage_fftm_3d_test( const std::string &binary_name, bool allo
 
 inline fftm_3d_test_options parse_fftm_3d_test_options(
     int argc, char *argv[], int num_procs, const std::string &binary_name, bool allow_strategy_all, bool allow_times,
-    const fftm_3d_test_options &defaults = fftm_3d_test_options()
+    bool allow_threshold = false, const fftm_3d_test_options &defaults = fftm_3d_test_options()
 )
 {
     fftm_3d_test_options options = defaults;
@@ -136,6 +140,15 @@ inline fftm_3d_test_options parse_fftm_3d_test_options(
                 throw std::logic_error( "--times must be at least 1" );
             argi += 2;
         }
+        else if ( arg == "--threshold" )
+        {
+            if ( !allow_threshold )
+                throw std::logic_error( "Unknown option '--threshold'" );
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --threshold" );
+            options.threshold = std::atof( argv[argi + 1] );
+            argi += 2;
+        }
         else
         {
             break;
@@ -150,7 +163,7 @@ inline fftm_3d_test_options parse_fftm_3d_test_options(
     }
     else if ( argc != argi )
     {
-        throw std::logic_error( usage_fftm_3d_test( binary_name, allow_strategy_all, allow_times ) );
+        throw std::logic_error( usage_fftm_3d_test( binary_name, allow_strategy_all, allow_times, allow_threshold ) );
     }
 
     if ( options.p1 == 0 || options.p2 == 0 )
