@@ -220,7 +220,8 @@ int main( int argc, char *argv[] )
                 defaults.ny = 128;
                 defaults.nz = 128;
                 return defaults;
-            }()
+            }(),
+            false
         );
         if ( options.p1 * options.p2 != static_cast<std::size_t>( comm_info.num_procs ) )
             throw std::logic_error( "P1*P2 must equal the number of MPI processes" );

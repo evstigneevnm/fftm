@@ -939,7 +939,7 @@ int main( int argc, char *argv[] )
         scfd::utils::init_cuda_mpi( log, comm_info );
 
         const options_t options = fftm::test::detail::parse_fftm_3d_test_options(
-            argc, argv, comm_info.num_procs, FFTM_VERSIONED_TEST_BINARY, true, true, true
+            argc, argv, comm_info.num_procs, FFTM_VERSIONED_TEST_BINARY, true, true, options_t(), true
         );
 
         if ( options.p1 * options.p2 != static_cast<std::size_t>( comm_info.num_procs ) )

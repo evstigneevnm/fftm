@@ -78,7 +78,7 @@ usage_fftm_3d_test( const std::string &binary_name, bool allow_strategy_all, boo
 
 inline fftm_3d_test_options parse_fftm_3d_test_options(
     int argc, char *argv[], int num_procs, const std::string &binary_name, bool allow_strategy_all, bool allow_times,
-    bool allow_threshold = false, const fftm_3d_test_options &defaults = fftm_3d_test_options()
+    const fftm_3d_test_options &defaults = fftm_3d_test_options(), bool allow_threshold = false
 )
 {
     fftm_3d_test_options options = defaults;
