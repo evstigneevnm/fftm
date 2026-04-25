@@ -1,0 +1,25 @@
+\documentclass{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{array}
+\pagestyle{empty}
+\begin{document}
+\begin{center}
+{\fontsize{8.0pt}{9.4pt}\selectfont
+\textbf{Versioned Test Correctness Summary}
+
+\vspace{0.6em}
+\begin{tabular}{llllrrrr}
+\hline
+Dim & Impl. & Transport & Cases & OK & Fail & max L2 & max H1 \\
+\hline
+3D & FFTM & CUDA-aware & v0,v1,v2,v3,v4 & 51 & 9 & 2.75e-15 & 4.74e-15 \\
+3D & FFTM & non-CUDA-aware & v0,v1,v2,v3,v4 & 47 & 13 & 2.75e-15 & 4.74e-15 \\
+3D & FFTS & single GPU & v0,v1,v2,v3,v4 & 5 & 0 & 2.58e-15 & 4.49e-15 \\
+4D & FFTM & CUDA-aware & v0,v1,v2,v3,v4 & 40 & 0 & 6.42e-15 & 1.30e-14 \\
+4D & FFTM & non-CUDA-aware & v0,v1,v2,v3,v4 & 40 & 0 & 6.42e-15 & 1.30e-14 \\
+4D & FFTS & single GPU & v0,v1,v2,v3,v4 & 20 & 0 & 4.71e-15 & 9.93e-15 \\
+\hline
+\end{tabular}
+}
+\end{center}
+\end{document}

@@ -1,0 +1,64 @@
+\documentclass{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{array}
+\pagestyle{empty}
+\begin{document}
+\begin{center}
+{\fontsize{8.0pt}{9.4pt}\selectfont
+\textbf{Accumulated Temporal Profiler Breakdown for Best Benchmark Configurations}
+
+\vspace{0.6em}
+\begin{tabular}{lll p{0.46\linewidth} rr}
+\hline
+Dim & Impl. & Config & Profiler entry & Time [ms] & Total [\%] \\
+\hline
+3D & FFTS/1GPU & - & derived: local FFT applications & 2.40e+04 & 18.98 \\
+3D & FFTS/1GPU & - & ffts::forward\_3d & 1.20e+04 & 9.50 \\
+3D & FFTS/1GPU & - & ffts::backward\_3d & 1.20e+04 & 9.49 \\
+3D & FFTS/1GPU & - & ffts::init<3> & 8.54 & 0.01 \\
+3D & FFTS/1GPU & - & ffts::add\_plans\_3d & 6.39 & 0.01 \\
+3D & FFTS/1GPU & - & ffts::activate\_shared\_work\_area & 2.16 & 0 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & derived: local FFT applications & 5.94e+04 & 19.62 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & derived: total communication/transposes & 2.37e+05 & 78.48 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & wait\_recv\_any & 2.27e+05 & 74.87 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & fftm::forward\_3d\_pencil\_slab & 1.48e+05 & 49.07 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & fftm::backward\_3d\_pencil\_slab & 1.48e+05 & 49.03 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & mpi\_transpose\_3d::transpose\_xzy\_to\_xyz/p2p-waitany & 1.19e+05 & 39.26 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & backward\_p2p\_waitany & 1.19e+05 & 39.26 \\
+3D & FFTM-CA/2GPU & pencil-slab, p2p-waitany & mpi\_transpose\_3d::transpose\_xyz\_to\_xzy/p2p-waitany & 1.19e+05 & 39.22 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & derived: local FFT applications & 5.98e+04 & 23.92 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & derived: total communication/transposes & 1.71e+05 & 68.34 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & fftm::backward\_3d\_pencil\_slab & 1.17e+05 & 46.84 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & fftm::forward\_3d\_pencil\_slab & 1.14e+05 & 45.41 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & wait\_recv & 9.24e+04 & 36.94 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & mpi\_transpose\_3d::transpose\_xzy\_to\_xyz/p2p-waitall & 8.74e+04 & 34.94 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & backward\_p2p\_waitall & 8.74e+04 & 34.94 \\
+3D & FFTM-NCA/2GPU & pencil-slab, p2p-waitall & mpi\_transpose\_3d::transpose\_xyz\_to\_xzy/p2p-waitall & 8.35e+04 & 33.39 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & derived: local FFT applications & 1.26e+04 & 83.98 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & ffts::backward\_4d & 6312.21 & 42.09 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & ffts::backward\_4d\_pencil\_pencil & 6312.21 & 42.09 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & ffts::forward\_4d & 6281.65 & 41.89 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & ffts::forward\_4d\_pencil\_pencil & 6281.63 & 41.89 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & ffts::transpose\_xyzw\_to\_xywz & 21.96 & 0.15 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & ffts::transpose\_xywz\_to\_xzwy & 21.93 & 0.15 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & derived: local FFT applications & 2.02e+04 & 8.97 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & derived: total communication/transposes & 2.03e+05 & 90.17 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & mpi\_alltoallw & 1.79e+05 & 79.52 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & fftm::backward\_4d\_pencil\_pencil & 1.12e+05 & 49.63 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & fftm::forward\_4d\_pencil\_pencil & 1.11e+05 & 49.51 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & forward\_alltoallw & 9.77e+04 & 43.38 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & backward\_alltoallw & 9.75e+04 & 43.29 \\
+4D & FFTM-CA/2GPU & pencil-pencil, alltoallw & mpi\_transpose\_4d\_same\_xy::transpose\_xyzw\_to\_xywz/alltoallw & 8.96e+04 & 39.81 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & derived: local FFT applications & 4.55e+04 & 19.57 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & derived: total communication/transposes & 1.35e+05 & 58.14 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & fftm::backward\_4d\_slab\_slab & 9.19e+04 & 39.52 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & fftm::forward\_4d\_slab\_slab & 8.88e+04 & 38.20 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & wait\_recv & 7.54e+04 & 32.45 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & mpi\_transpose\_4d\_same\_xw::transpose\_xywz\_to\_xzwy/p2p-waitall & 6.85e+04 & 29.45 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & forward\_p2p\_waitall & 6.80e+04 & 29.23 \\
+4D & FFTM-NCA/2GPU & slab-slab, p2p-waitall & mpi\_transpose\_4d\_same\_xw::transpose\_xzwy\_to\_xywz/p2p-waitall & 6.67e+04 & 28.69 \\
+\hline
+\end{tabular}
+}
+\end{center}
+\end{document}

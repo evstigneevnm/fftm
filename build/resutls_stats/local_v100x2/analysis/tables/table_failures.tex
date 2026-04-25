@@ -1,0 +1,25 @@
+\documentclass{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{array}
+\pagestyle{empty}
+\begin{document}
+\begin{center}
+{\fontsize{8.0pt}{9.4pt}\selectfont
+\textbf{Failed Measurement Summary}
+
+\vspace{0.6em}
+\begin{tabular}{lllllrl}
+\hline
+Dim & Impl. & Transport & Strategy & Mode & Count & Cases \\
+\hline
+3D & FFTM & CUDA-aware & pencil-pencil & alltoallw & 4 & benchmark,v0,v2,v3 \\
+3D & FFTM & CUDA-aware & pencil-slab & alltoallw & 4 & benchmark,v0,v2,v3 \\
+3D & FFTM & CUDA-aware & slab-pencil & alltoallw & 4 & benchmark,v0,v2,v3 \\
+3D & FFTM & non-CUDA-aware & pencil-pencil & alltoallw & 6 & benchmark,v0,v1,v2,v3,v4 \\
+3D & FFTM & non-CUDA-aware & pencil-slab & alltoallw & 6 & benchmark,v0,v1,v2,v3,v4 \\
+3D & FFTM & non-CUDA-aware & slab-pencil & alltoallw & 4 & benchmark,v0,v2,v3 \\
+\hline
+\end{tabular}
+}
+\end{center}
+\end{document}
