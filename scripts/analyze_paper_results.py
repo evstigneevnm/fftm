@@ -1593,6 +1593,125 @@ def memory_footprint_pdf(rows: List[ResultRow], fig_dir: Path, args: argparse.Na
     )
 
 
+def best_scaling_size(rows: List[ResultRow], dim: int) -> Optional[int]:
+    by_size: Dict[int, set] = defaultdict(set)
+    for row in rows:
+        if row.case_name != "benchmark" or row.suite != "fftm" or row.dim != dim:
+            continue
+        if not row.ok or row.avg_wall_ms is None:
+            continue
+        n = size_n(row)
+        if n is not None:
+            by_size[n].add(row.num_gpus)
+    candidates = [n for n, gpu_counts in by_size.items() if len(gpu_counts) >= 2]
+    return max(candidates) if candidates else None
+
+
+def gpu_scaling_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argparse.Namespace) -> Optional[Path]:
+    selected_n = best_scaling_size(rows, dim)
+    if selected_n is None:
+        return None
+    benchmark = [
+        row
+        for row in rows
+        if row.case_name == "benchmark"
+        and row.dim == dim
+        and row.ok
+        and row.avg_wall_ms is not None
+        and size_n(row) == selected_n
+    ]
+    fftm = [row for row in benchmark if row.suite == "fftm"]
+    if not fftm:
+        return None
+    x_values = sorted(set(row.num_gpus for row in fftm))
+    if len(x_values) < 2:
+        return None
+
+    colors = [
+        (0.10, 0.32, 0.70),
+        (0.88, 0.35, 0.08),
+        (0.12, 0.55, 0.20),
+        (0.72, 0.20, 0.18),
+        (0.52, 0.24, 0.68),
+        (0.35, 0.35, 0.35),
+    ]
+    absolute = []
+    color_index = 0
+    for strategy in STRATEGY_ORDER.get(dim, sorted(set(row.strategy for row in fftm))):
+        for transport in ["cuda_aware", "non_cuda_aware"]:
+            points = []
+            for gpu_count in x_values:
+                best = best_by_throughput(
+                    row
+                    for row in fftm
+                    if row.strategy == strategy and row.transport == transport and row.num_gpus == gpu_count
+                )
+                if best and best.avg_wall_ms is not None:
+                    points.append((gpu_count, best.avg_wall_ms))
+            if points:
+                label = f"{strategy} {('CA' if transport == 'cuda_aware' else 'NCA')}"
+                absolute.append((label, points, colors[color_index % len(colors)]))
+                color_index += 1
+
+    ffts = best_by_throughput(row for row in benchmark if row.suite == "ffts")
+    if ffts and ffts.avg_wall_ms is not None:
+        absolute.append(("FFTS 1GPU", [(gpu_count, ffts.avg_wall_ms) for gpu_count in x_values], (0.78, 0.20, 0.62)))
+
+    speedup = []
+    for label, points, color in absolute:
+        if label == "FFTS 1GPU" or not points:
+            continue
+        base = points[0][1]
+        if base <= 0:
+            continue
+        speedup.append((label, [(gpu_count, base / value) for gpu_count, value in points if value > 0], color))
+
+    width = 535.0
+    height = 292.0
+    canvas = PdfCanvas(width, height)
+    canvas.text(width / 2.0, height - 18.0, f"{dim}D FFTM GPU-count scaling at N={selected_n}", args.title_font_size, align="center")
+    canvas.text(
+        width / 2.0,
+        height - 32.0,
+        "Best successful mode selected per strategy/transport/GPU count.",
+        args.legend_font_size,
+        color=(0.25, 0.25, 0.25),
+        align="center",
+    )
+    legend_items = [(label, color) for label, _, color in absolute]
+    draw_legend_wrapped(canvas, legend_items, 58.0, height - 49.0, width - 116.0, args.legend_font_size)
+    plot_y = 56.0
+    plot_h = height - 145.0
+    gap = 58.0
+    plot_w = (width - 72.0 - gap - 18.0) / 2.0
+    draw_line_panel(
+        canvas,
+        (58.0, plot_y, plot_w, plot_h),
+        "Runtime",
+        x_values,
+        absolute,
+        "Time [ms]",
+        "MPI ranks / GPUs",
+        args,
+        log_y=True,
+    )
+    draw_line_panel(
+        canvas,
+        (58.0 + plot_w + gap, plot_y, plot_w, plot_h),
+        "Strong-scaling speedup",
+        x_values,
+        speedup,
+        "Speedup",
+        "MPI ranks / GPUs",
+        args,
+        log_y=False,
+        y_min_override=0.0,
+    )
+    path = fig_dir / f"fig_fftm_{dim}d_gpu_scaling.pdf"
+    canvas.save(path)
+    return path
+
+
 def ffts_fftm_relative_pdf(rows: List[ResultRow], fig_dir: Path, args: argparse.Namespace) -> Optional[Path]:
     benchmark = [r for r in rows if r.case_name == "benchmark" and r.ok]
     categories: List[str] = []
@@ -2323,6 +2442,9 @@ def main() -> int:
         if fig:
             generated.append(fig)
         fig = throughput_figure_pdf(rows, dim, dirs["figures"], args)
+        if fig:
+            generated.append(fig)
+        fig = gpu_scaling_pdf(rows, dim, dirs["figures"], args)
         if fig:
             generated.append(fig)
         fig = runtime_absolute_heatmap_pdf(rows, dim, dirs["figures"], args)

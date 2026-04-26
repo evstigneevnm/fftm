@@ -72,6 +72,12 @@ def parse_csv_ints(value: str, *, allow_auto: bool = False) -> List[int]:
     return result
 
 
+def dense_gpu_counts(max_gpus: int) -> List[int]:
+    if max_gpus < 2:
+        return []
+    return list(range(2, max_gpus + 1))
+
+
 def parse_csv_strings(value: str, allowed: Sequence[str], name: str) -> List[str]:
     if value == "all":
         return list(allowed)
@@ -296,18 +302,34 @@ class PaperClusterRunner:
     def resolve_local_gpu_counts(self) -> List[int]:
         if self.args.gpu_counts == "auto":
             count = len(self.detected_gpus) if self.detected_gpus else len(self.args.device_memory_mib or [])
-            return [count] if count >= 2 else []
+            if self.args.max_gpus is not None:
+                count = min(count, int(self.args.max_gpus))
+            return dense_gpu_counts(count)
         counts = parse_csv_ints(self.args.gpu_counts)
+        if self.args.max_gpus is not None:
+            counts = [count for count in counts if count <= self.args.max_gpus]
         return [count for count in counts if count >= 1]
 
     def resolve_slurm_gpu_counts(self) -> List[int]:
+        if self.args.gpu_counts == "full-nodes":
+            nodes = parse_csv_ints(self.args.node_counts) or [1]
+            counts = sorted(set(node_count * self.args.gpus_per_node for node_count in nodes))
+            if self.args.max_gpus is not None:
+                counts = [count for count in counts if count <= self.args.max_gpus]
+            return counts
+
         explicit = parse_csv_ints(self.args.gpu_counts, allow_auto=True)
         if explicit:
+            if self.args.max_gpus is not None:
+                explicit = [count for count in explicit if count <= self.args.max_gpus]
             return explicit
         nodes = parse_csv_ints(self.args.node_counts)
         if not nodes:
             nodes = [1]
-        return [node_count * self.args.gpus_per_node for node_count in nodes]
+        max_gpus = max(nodes) * self.args.gpus_per_node
+        if self.args.max_gpus is not None:
+            max_gpus = min(max_gpus, int(self.args.max_gpus))
+        return dense_gpu_counts(max_gpus)
 
     def effective_gpus(self) -> List[Dict[str, Any]]:
         if self.executor == "local" and self.detected_gpus:
@@ -563,7 +585,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--srun-time", default="00:20:00")
     parser.add_argument("--gpus-per-node", type=int, default=8)
     parser.add_argument("--node-counts", default="1")
-    parser.add_argument("--gpu-counts", default="auto")
+    parser.add_argument(
+        "--gpu-counts",
+        default="auto",
+        help=(
+            "Comma-separated FFTM GPU counts, 'auto' for dense 2..max sweep, or "
+            "'full-nodes' for only node_count*gpus_per_node counts. FFTS supplies the 1-GPU baseline."
+        ),
+    )
+    parser.add_argument(
+        "--max-gpus",
+        type=int,
+        default=None,
+        help="Optional cap for automatic or explicit FFTM GPU-count sweeps.",
+    )
     parser.add_argument("--gpu-name", default="A100")
     parser.add_argument("--default-device-memory-mib", type=int, default=40960)
     parser.add_argument("--device-memory-mib", type=int, nargs="*", default=None)

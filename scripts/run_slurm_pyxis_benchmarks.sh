@@ -10,6 +10,8 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 DATA_DIR="${FFTM_DATA_DIR:-${PWD}/fftm_cluster_data_${STAMP}}"
 
 NODE_COUNTS="${FFTM_NODE_COUNTS:-1}"
+GPU_COUNTS="${FFTM_GPU_COUNTS:-auto}"
+MAX_GPUS="${FFTM_MAX_GPUS:-}"
 GPUS_PER_NODE="${FFTM_GPUS_PER_NODE:-8}"
 SRUN_TIME="${FFTM_SRUN_TIME:-00:20:00}"
 SRUN_EXTRA_ARGS="${FFTM_SRUN_EXTRA_ARGS:-}"
@@ -27,7 +29,7 @@ BENCHMARK_TIMES="${FFTM_BENCHMARK_TIMES:-3}"
 VALIDATION_TIMES="${FFTM_VALIDATION_TIMES:-1}"
 MODES="${FFTM_MODES:-alltoallv,alltoallw,p2p-waitall,p2p-waitany}"
 TRANSPORTS="${FFTM_TRANSPORTS:-cuda_aware,non_cuda_aware}"
-INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-1}"
+INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-0}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
 GPU_NAME="${FFTM_GPU_NAME:-A100}"
 DEVICE_MEMORY_MIB="${FFTM_DEVICE_MEMORY_MIB:-40960}"
@@ -44,6 +46,7 @@ args=(
     --container-data-directory "${CONTAINER_DATA_DIR}"
     --data-directory "${DATA_DIR}"
     --node-counts "${NODE_COUNTS}"
+    --gpu-counts "${GPU_COUNTS}"
     --gpus-per-node "${GPUS_PER_NODE}"
     --srun-time "${SRUN_TIME}"
     --srun-extra-args "${SRUN_EXTRA_ARGS}"
@@ -59,6 +62,10 @@ args=(
     --transports "${TRANSPORTS}"
     --timeout-seconds "${TIMEOUT_SECONDS}"
 )
+
+if [[ -n "${MAX_GPUS}" ]]; then
+    args+=(--max-gpus "${MAX_GPUS}")
+fi
 
 if [[ -n "${CONTAINER_ENV}" ]]; then
     args+=(--container-env "${CONTAINER_ENV}")
