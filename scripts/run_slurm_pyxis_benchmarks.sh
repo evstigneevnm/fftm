@@ -21,13 +21,23 @@ CONTAINER_TESTS_ROOT="${FFTM_CONTAINER_TESTS_ROOT:-/opt/fftm/bin}"
 CONTAINER_ENV="${FFTM_CONTAINER_ENV:-}"
 CONTAINER_MOUNTS="${FFTM_CONTAINER_MOUNTS:-}"
 
-BENCHMARK_SIZES_3D="${FFTM_BENCHMARK_SIZES_3D:-256,512}"
-BENCHMARK_SIZES_4D="${FFTM_BENCHMARK_SIZES_4D:-40,64}"
+BENCHMARK_SIZES_3D="${FFTM_BENCHMARK_SIZES_3D:-auto}"
+BENCHMARK_SIZES_4D="${FFTM_BENCHMARK_SIZES_4D:-auto}"
 VERSIONED_SIZE_3D="${FFTM_VERSIONED_SIZE_3D:-128}"
 VERSIONED_SIZE_4D="${FFTM_VERSIONED_SIZE_4D:-32}"
 BENCHMARK_TIMES="${FFTM_BENCHMARK_TIMES:-3}"
 VALIDATION_TIMES="${FFTM_VALIDATION_TIMES:-1}"
-MODES="${FFTM_MODES:-alltoallv,alltoallw,p2p-waitall,p2p-waitany}"
+AUTO_MEMORY_FRACTION="${FFTM_AUTO_MEMORY_FRACTION:-0.72}"
+AUTO_RESERVE_MEMORY_MIB="${FFTM_AUTO_RESERVE_MEMORY_MIB:-2048}"
+AUTO_BYTES_PER_POINT_3D="${FFTM_AUTO_BYTES_PER_POINT_3D:-48}"
+AUTO_BYTES_PER_POINT_4D="${FFTM_AUTO_BYTES_PER_POINT_4D:-40}"
+AUTO_REFERENCE_SIZE_3D="${FFTM_AUTO_REFERENCE_SIZE_3D:-}"
+AUTO_REFERENCE_SIZE_4D="${FFTM_AUTO_REFERENCE_SIZE_4D:-}"
+AUTO_MIN_SIZE_3D="${FFTM_AUTO_MIN_SIZE_3D:-64}"
+AUTO_MIN_SIZE_4D="${FFTM_AUTO_MIN_SIZE_4D:-16}"
+AUTO_MAX_SIZE_3D="${FFTM_AUTO_MAX_SIZE_3D:-}"
+AUTO_MAX_SIZE_4D="${FFTM_AUTO_MAX_SIZE_4D:-}"
+MODES="${FFTM_MODES:-alltoallv,p2p-waitall,p2p-waitany}"
 TRANSPORTS="${FFTM_TRANSPORTS:-cuda_aware,non_cuda_aware}"
 INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-0}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
@@ -58,6 +68,12 @@ args=(
     --versioned-size-4d "${VERSIONED_SIZE_4D}"
     --benchmark-times "${BENCHMARK_TIMES}"
     --validation-times "${VALIDATION_TIMES}"
+    --auto-memory-fraction "${AUTO_MEMORY_FRACTION}"
+    --auto-reserve-memory-mib "${AUTO_RESERVE_MEMORY_MIB}"
+    --auto-bytes-per-point-3d "${AUTO_BYTES_PER_POINT_3D}"
+    --auto-bytes-per-point-4d "${AUTO_BYTES_PER_POINT_4D}"
+    --auto-min-size-3d "${AUTO_MIN_SIZE_3D}"
+    --auto-min-size-4d "${AUTO_MIN_SIZE_4D}"
     --modes "${MODES}"
     --transports "${TRANSPORTS}"
     --timeout-seconds "${TIMEOUT_SECONDS}"
@@ -65,6 +81,18 @@ args=(
 
 if [[ -n "${MAX_GPUS}" ]]; then
     args+=(--max-gpus "${MAX_GPUS}")
+fi
+if [[ -n "${AUTO_MAX_SIZE_3D}" ]]; then
+    args+=(--auto-max-size-3d "${AUTO_MAX_SIZE_3D}")
+fi
+if [[ -n "${AUTO_MAX_SIZE_4D}" ]]; then
+    args+=(--auto-max-size-4d "${AUTO_MAX_SIZE_4D}")
+fi
+if [[ -n "${AUTO_REFERENCE_SIZE_3D}" ]]; then
+    args+=(--auto-reference-size-3d "${AUTO_REFERENCE_SIZE_3D}")
+fi
+if [[ -n "${AUTO_REFERENCE_SIZE_4D}" ]]; then
+    args+=(--auto-reference-size-4d "${AUTO_REFERENCE_SIZE_4D}")
 fi
 
 if [[ -n "${CONTAINER_ENV}" ]]; then

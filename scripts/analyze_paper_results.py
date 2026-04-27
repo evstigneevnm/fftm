@@ -81,6 +81,19 @@ class ResultRow:
             return None
         return (self.points / (self.avg_wall_ms / 1000.0)) / 1.0e9
 
+    @property
+    def effective_gflops_s(self) -> Optional[float]:
+        """Conventional effective FFT rate for a measured forward+inverse pair.
+
+        The benchmark times one forward transform plus one inverse transform.
+        We report the common FFT estimate 5*N*log2(N) operations per transform,
+        i.e. 10*N*log2(N) operations for the measured pair.
+        """
+        if not self.avg_wall_ms or self.avg_wall_ms <= 0 or self.points <= 1:
+            return None
+        flops = 10.0 * float(self.points) * math.log2(float(self.points))
+        return (flops / (self.avg_wall_ms / 1000.0)) / 1.0e9
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -457,6 +470,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                 "avg_wall_ms",
                 "stddev_wall_ms",
                 "throughput_gpoints_s",
+                "effective_gflops_s",
                 "used_device_peak_max_mib",
                 "tracked_device_peak_max_mib",
                 "host_pinned_peak_max_mib",
@@ -483,6 +497,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                     r.avg_wall_ms,
                     r.stddev_wall_ms,
                     r.throughput_gpoints_s,
+                    r.effective_gflops_s,
                     r.used_device_peak_max_mib,
                     r.tracked_device_peak_max_mib,
                     r.host_pinned_peak_max_mib,
@@ -1609,17 +1624,13 @@ def best_scaling_size(rows: List[ResultRow], dim: int) -> Optional[int]:
 
 def gpu_scaling_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argparse.Namespace) -> Optional[Path]:
     selected_n = best_scaling_size(rows, dim)
-    if selected_n is None:
-        return None
     benchmark = [
         row
         for row in rows
-        if row.case_name == "benchmark"
-        and row.dim == dim
-        and row.ok
-        and row.avg_wall_ms is not None
-        and size_n(row) == selected_n
+        if row.case_name == "benchmark" and row.dim == dim and row.ok and row.avg_wall_ms is not None
     ]
+    if selected_n is not None:
+        benchmark = [row for row in benchmark if size_n(row) == selected_n]
     fftm = [row for row in benchmark if row.suite == "fftm"]
     if not fftm:
         return None
@@ -1635,7 +1646,7 @@ def gpu_scaling_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argpar
         (0.52, 0.24, 0.68),
         (0.35, 0.35, 0.35),
     ]
-    absolute = []
+    primary = []
     color_index = 0
     for strategy in STRATEGY_ORDER.get(dim, sorted(set(row.strategy for row in fftm))):
         for transport in ["cuda_aware", "non_cuda_aware"]:
@@ -1646,39 +1657,62 @@ def gpu_scaling_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argpar
                     for row in fftm
                     if row.strategy == strategy and row.transport == transport and row.num_gpus == gpu_count
                 )
-                if best and best.avg_wall_ms is not None:
-                    points.append((gpu_count, best.avg_wall_ms))
+                if best:
+                    value = best.avg_wall_ms if selected_n is not None else best.throughput_gpoints_s
+                    if value is not None:
+                        points.append((gpu_count, value))
             if points:
                 label = f"{strategy} {('CA' if transport == 'cuda_aware' else 'NCA')}"
-                absolute.append((label, points, colors[color_index % len(colors)]))
+                primary.append((label, points, colors[color_index % len(colors)]))
                 color_index += 1
 
-    ffts = best_by_throughput(row for row in benchmark if row.suite == "ffts")
-    if ffts and ffts.avg_wall_ms is not None:
-        absolute.append(("FFTS 1GPU", [(gpu_count, ffts.avg_wall_ms) for gpu_count in x_values], (0.78, 0.20, 0.62)))
-
-    speedup = []
-    for label, points, color in absolute:
-        if label == "FFTS 1GPU" or not points:
-            continue
-        base = points[0][1]
-        if base <= 0:
-            continue
-        speedup.append((label, [(gpu_count, base / value) for gpu_count, value in points if value > 0], color))
+    if selected_n is not None:
+        ffts = best_by_throughput(row for row in benchmark if row.suite == "ffts")
+        if ffts and ffts.avg_wall_ms is not None:
+            primary.append(("FFTS 1GPU", [(gpu_count, ffts.avg_wall_ms) for gpu_count in x_values], (0.78, 0.20, 0.62)))
+        secondary = []
+        for label, points, color in primary:
+            if label == "FFTS 1GPU" or not points:
+                continue
+            base = points[0][1]
+            if base <= 0:
+                continue
+            secondary.append((label, [(gpu_count, base / value) for gpu_count, value in points if value > 0], color))
+        title = f"{dim}D FFTM GPU-count strong scaling at N={selected_n}"
+        subtitle = "Best successful mode selected per strategy/transport/GPU count."
+        left_title = "Runtime"
+        left_label = "Time [ms]"
+        right_title = "Strong-scaling speedup"
+        right_label = "Speedup"
+        left_log = True
+    else:
+        size_points = []
+        for gpu_count in x_values:
+            sizes = [size_n(row) for row in fftm if row.num_gpus == gpu_count and size_n(row) is not None]
+            if sizes:
+                size_points.append((gpu_count, max(sizes)))
+        secondary = [("chosen N", size_points, (0.10, 0.32, 0.70))] if size_points else []
+        title = f"{dim}D FFTM GPU-count capacity scaling"
+        subtitle = "Each GPU count uses its fitted FFT-friendly maximum benchmark size."
+        left_title = "Best throughput"
+        left_label = "Gpoints/s"
+        right_title = "Fitted problem side"
+        right_label = "N"
+        left_log = False
 
     width = 535.0
     height = 292.0
     canvas = PdfCanvas(width, height)
-    canvas.text(width / 2.0, height - 18.0, f"{dim}D FFTM GPU-count scaling at N={selected_n}", args.title_font_size, align="center")
+    canvas.text(width / 2.0, height - 18.0, title, args.title_font_size, align="center")
     canvas.text(
         width / 2.0,
         height - 32.0,
-        "Best successful mode selected per strategy/transport/GPU count.",
+        subtitle,
         args.legend_font_size,
         color=(0.25, 0.25, 0.25),
         align="center",
     )
-    legend_items = [(label, color) for label, _, color in absolute]
+    legend_items = [(label, color) for label, _, color in primary]
     draw_legend_wrapped(canvas, legend_items, 58.0, height - 49.0, width - 116.0, args.legend_font_size)
     plot_y = 56.0
     plot_h = height - 145.0
@@ -1687,27 +1721,128 @@ def gpu_scaling_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argpar
     draw_line_panel(
         canvas,
         (58.0, plot_y, plot_w, plot_h),
-        "Runtime",
+        left_title,
         x_values,
-        absolute,
-        "Time [ms]",
+        primary,
+        left_label,
         "MPI ranks / GPUs",
         args,
-        log_y=True,
+        log_y=left_log,
     )
     draw_line_panel(
         canvas,
         (58.0 + plot_w + gap, plot_y, plot_w, plot_h),
-        "Strong-scaling speedup",
+        right_title,
         x_values,
-        speedup,
-        "Speedup",
+        secondary,
+        right_label,
         "MPI ranks / GPUs",
         args,
         log_y=False,
         y_min_override=0.0,
     )
     path = fig_dir / f"fig_fftm_{dim}d_gpu_scaling.pdf"
+    canvas.save(path)
+    return path
+
+
+def gflops_gpu_scaling_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argparse.Namespace) -> Optional[Path]:
+    benchmark = [
+        row
+        for row in rows
+        if row.case_name == "benchmark"
+        and row.dim == dim
+        and row.suite == "fftm"
+        and row.ok
+        and row.effective_gflops_s is not None
+    ]
+    if not benchmark:
+        return None
+    x_values = sorted(set(row.num_gpus for row in benchmark))
+    if len(x_values) < 2:
+        return None
+
+    colors = [
+        (0.10, 0.32, 0.70),
+        (0.88, 0.35, 0.08),
+        (0.12, 0.55, 0.20),
+        (0.72, 0.20, 0.18),
+        (0.52, 0.24, 0.68),
+        (0.35, 0.35, 0.35),
+    ]
+    total_series = []
+    per_gpu_series = []
+    color_index = 0
+    for strategy in STRATEGY_ORDER.get(dim, sorted(set(row.strategy for row in benchmark))):
+        for transport in ["cuda_aware", "non_cuda_aware"]:
+            total_points: List[Tuple[int, float]] = []
+            per_gpu_points: List[Tuple[int, float]] = []
+            for gpu_count in x_values:
+                best = max(
+                    (
+                        row
+                        for row in benchmark
+                        if row.strategy == strategy and row.transport == transport and row.num_gpus == gpu_count
+                    ),
+                    key=lambda row: row.effective_gflops_s or -1.0,
+                    default=None,
+                )
+                if best and best.effective_gflops_s is not None:
+                    total_points.append((gpu_count, best.effective_gflops_s))
+                    per_gpu_points.append((gpu_count, best.effective_gflops_s / float(max(1, gpu_count))))
+            if total_points:
+                label = f"{strategy} {('CA' if transport == 'cuda_aware' else 'NCA')}"
+                color = colors[color_index % len(colors)]
+                total_series.append((label, total_points, color))
+                per_gpu_series.append((label, per_gpu_points, color))
+                color_index += 1
+
+    if not total_series:
+        return None
+
+    width = 535.0
+    height = 292.0
+    canvas = PdfCanvas(width, height)
+    canvas.text(width / 2.0, height - 18.0, f"{dim}D FFTM effective GFLOP/s vs GPU count", args.title_font_size, align="center")
+    canvas.text(
+        width / 2.0,
+        height - 32.0,
+        "Effective rate uses 10*N*log2(N) operations for the measured forward+inverse pair.",
+        args.legend_font_size,
+        color=(0.25, 0.25, 0.25),
+        align="center",
+    )
+    legend_items = [(label, color) for label, _, color in total_series]
+    draw_legend_wrapped(canvas, legend_items, 58.0, height - 49.0, width - 116.0, args.legend_font_size)
+    plot_y = 56.0
+    plot_h = height - 145.0
+    gap = 58.0
+    plot_w = (width - 72.0 - gap - 18.0) / 2.0
+    draw_line_panel(
+        canvas,
+        (58.0, plot_y, plot_w, plot_h),
+        "Total effective rate",
+        x_values,
+        total_series,
+        "GFLOP/s",
+        "MPI ranks / GPUs",
+        args,
+        log_y=False,
+        y_min_override=0.0,
+    )
+    draw_line_panel(
+        canvas,
+        (58.0 + plot_w + gap, plot_y, plot_w, plot_h),
+        "Effective rate per GPU",
+        x_values,
+        per_gpu_series,
+        "GFLOP/s/GPU",
+        "MPI ranks / GPUs",
+        args,
+        log_y=False,
+        y_min_override=0.0,
+    )
+    path = fig_dir / f"fig_fftm_{dim}d_effective_gflops_gpu_scaling.pdf"
     canvas.save(path)
     return path
 
@@ -2445,6 +2580,9 @@ def main() -> int:
         if fig:
             generated.append(fig)
         fig = gpu_scaling_pdf(rows, dim, dirs["figures"], args)
+        if fig:
+            generated.append(fig)
+        fig = gflops_gpu_scaling_pdf(rows, dim, dirs["figures"], args)
         if fig:
             generated.append(fig)
         fig = runtime_absolute_heatmap_pdf(rows, dim, dirs["figures"], args)

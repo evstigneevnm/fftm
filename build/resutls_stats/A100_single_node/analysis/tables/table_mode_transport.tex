@@ -1,0 +1,29 @@
+\documentclass{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{array}
+\pagestyle{empty}
+\begin{document}
+\begin{center}
+{\fontsize{8.0pt}{9.4pt}\selectfont
+\textbf{Best FFTM Mode by Strategy and Transport}
+
+\vspace{0.6em}
+\begin{tabular}{llllrrl}
+\hline
+Dim & Strategy & Transport & Best mode & Time [ms] & Gpts/s & Failed modes \\
+\hline
+3D & slab-pencil & CUDA-aware & p2p-waitany & 2073.74 & 4.142 & - \\
+3D & slab-pencil & non-CUDA-aware & p2p-waitall & 1.12e+04 & 1.166 & - \\
+3D & pencil-slab & CUDA-aware & p2p-waitany & 2531.60 & 3.393 & - \\
+3D & pencil-slab & non-CUDA-aware & p2p-waitany & 1.77e+04 & 0.734 & - \\
+3D & pencil-pencil & CUDA-aware & p2p-waitany & 2686.54 & 3.197 & - \\
+3D & pencil-pencil & non-CUDA-aware & p2p-waitany & 1.82e+04 & 0.715 & - \\
+4D & slab-slab & CUDA-aware & alltoallv & 909.89 & 4.720 & - \\
+4D & slab-slab & non-CUDA-aware & p2p-waitany & 1.07e+04 & 1.195 & - \\
+4D & pencil-pencil & CUDA-aware & p2p-waitall & 1422.79 & 3.019 & - \\
+4D & pencil-pencil & non-CUDA-aware & p2p-waitall & 1.72e+04 & 0.640 & - \\
+\hline
+\end{tabular}
+}
+\end{center}
+\end{document}

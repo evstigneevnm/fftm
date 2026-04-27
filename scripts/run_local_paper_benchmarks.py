@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 FFTM_STRATEGIES_3D = ("slab-pencil", "pencil-slab", "pencil-pencil")
 FFTM_STRATEGIES_4D = ("pencil-pencil", "slab-slab")
-FFTM_MODES = ("p2p-waitall", "p2p-waitany", "alltoallv", "alltoallw")
+FFTM_MODES = ("p2p-waitall", "p2p-waitany", "alltoallv")
 FFTS_STRATEGIES_4D = ("pencil-direct", "pencil-memcpy", "slab-direct", "slab-memcpy")
 
 SUMMARY_KEY_RE = re.compile(r"([A-Za-z0-9_]+)=((?:\([^)]*\))|[^,]+)")

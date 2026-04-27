@@ -72,6 +72,16 @@ def parse_csv_ints(value: str, *, allow_auto: bool = False) -> List[int]:
     return result
 
 
+def parse_size_list_or_auto(value: str) -> Optional[List[int]]:
+    value = (value or "").strip()
+    if value == "auto":
+        return None
+    parsed = parse_csv_ints(value)
+    if not parsed:
+        raise ValueError("size list cannot be empty unless it is 'auto'")
+    return parsed
+
+
 def dense_gpu_counts(max_gpus: int) -> List[int]:
     if max_gpus < 2:
         return []
@@ -86,6 +96,33 @@ def parse_csv_strings(value: str, allowed: Sequence[str], name: str) -> List[str
     if unknown:
         raise ValueError(f"unknown {name}: {', '.join(unknown)}; allowed: {', '.join(allowed)}")
     return selected
+
+
+def generate_fft_friendly_sizes(limit: int, minimum: int) -> List[int]:
+    """Return even 7-smooth sizes up to limit.
+
+    FFT libraries are generally happiest with factorizations over small primes.
+    We keep the side length even for real-to-complex transforms.
+    """
+    if limit < minimum:
+        return []
+    values = {1}
+    for prime in (2, 3, 5, 7):
+        next_values = set(values)
+        for value in values:
+            current = value * prime
+            while current <= limit:
+                next_values.add(current)
+                current *= prime
+        values = next_values
+    return sorted(value for value in values if minimum <= value <= limit and value % 2 == 0)
+
+
+def largest_fft_friendly_size(limit: int, minimum: int) -> int:
+    sizes = generate_fft_friendly_sizes(limit, minimum)
+    if not sizes:
+        return max(minimum, limit)
+    return sizes[-1]
 
 
 def container_binary_map(tests_root: Path) -> Dict[str, Path]:
@@ -271,10 +308,9 @@ class PaperClusterRunner:
         self.modes = parse_csv_strings(args.modes, FFTM_MODES, "--modes")
         self.strategies_3d = parse_csv_strings(args.strategies_3d, FFTM_STRATEGIES_3D, "--strategies-3d")
         self.strategies_4d = parse_csv_strings(args.strategies_4d, FFTM_STRATEGIES_4D, "--strategies-4d")
-        self.benchmark_sizes_3d = parse_csv_ints(args.benchmark_sizes_3d)
-        self.benchmark_sizes_4d = parse_csv_ints(args.benchmark_sizes_4d)
-        if not self.benchmark_sizes_3d or not self.benchmark_sizes_4d:
-            raise ValueError("benchmark size lists cannot be empty")
+        self.benchmark_sizes_3d = parse_size_list_or_auto(args.benchmark_sizes_3d)
+        self.benchmark_sizes_4d = parse_size_list_or_auto(args.benchmark_sizes_4d)
+        self.size_plan = self.build_size_plan()
 
         self.specs = build_specs(
             self.binaries,
@@ -348,6 +384,90 @@ class PaperClusterRunner:
             for index in range(max_gpus)
         ]
 
+    def per_rank_memory_total_bytes(self, num_gpus: int) -> int:
+        effective = self.effective_gpus()
+        selected = effective[: max(1, min(num_gpus, len(effective)))]
+        return min(gpu["memory_total_bytes"] for gpu in selected)
+
+    def per_rank_memory_target_bytes(self, num_gpus: int) -> int:
+        total = self.per_rank_memory_total_bytes(num_gpus)
+        target = int(total * self.args.auto_memory_fraction)
+        if self.args.auto_reserve_memory_mib > 0:
+            reserve_cap = total - mib_to_bytes(self.args.auto_reserve_memory_mib)
+            target = min(target, reserve_cap)
+        return max(0, target)
+
+    def effective_auto_bytes_per_point(self, dim: int) -> float:
+        reference_size = self.args.auto_reference_size_3d if dim == 3 else self.args.auto_reference_size_4d
+        if reference_size is None:
+            return self.args.auto_bytes_per_point_3d if dim == 3 else self.args.auto_bytes_per_point_4d
+        target = self.per_rank_memory_target_bytes(1)
+        if target <= 0:
+            return self.args.auto_bytes_per_point_3d if dim == 3 else self.args.auto_bytes_per_point_4d
+        return float(target) / float(int(reference_size) ** dim)
+
+    def max_auto_n(self, dim: int, num_gpus: int) -> int:
+        bytes_per_point = self.effective_auto_bytes_per_point(dim)
+        target = self.per_rank_memory_target_bytes(num_gpus)
+        if target <= 0 or bytes_per_point <= 0:
+            return self.args.auto_min_size_3d if dim == 3 else self.args.auto_min_size_4d
+        raw = int(math.floor(((float(target) * float(num_gpus)) / float(bytes_per_point)) ** (1.0 / float(dim))))
+        maximum = self.args.auto_max_size_3d if dim == 3 else self.args.auto_max_size_4d
+        minimum = self.args.auto_min_size_3d if dim == 3 else self.args.auto_min_size_4d
+        if maximum is not None:
+            raw = min(raw, int(maximum))
+        return largest_fft_friendly_size(raw, minimum)
+
+    def estimated_per_rank_memory_bytes(self, dim: int, num_gpus: int, side_length: int) -> int:
+        bytes_per_point = self.effective_auto_bytes_per_point(dim)
+        total_points = float(int(side_length) ** dim)
+        return int(math.ceil(total_points * bytes_per_point / float(max(1, num_gpus))))
+
+    def build_size_plan(self) -> Dict[str, Any]:
+        gpu_counts = sorted(set([1] + list(self.gpu_counts)))
+        plan: Dict[str, Any] = {
+            "mode_3d": "auto" if self.benchmark_sizes_3d is None else "explicit",
+            "mode_4d": "auto" if self.benchmark_sizes_4d is None else "explicit",
+            "assumptions": {
+                "auto_memory_fraction": self.args.auto_memory_fraction,
+                "auto_reserve_memory_mib": self.args.auto_reserve_memory_mib,
+                "auto_bytes_per_point_3d": self.args.auto_bytes_per_point_3d,
+                "auto_bytes_per_point_4d": self.args.auto_bytes_per_point_4d,
+                "auto_reference_size_3d": self.args.auto_reference_size_3d,
+                "auto_reference_size_4d": self.args.auto_reference_size_4d,
+                "auto_min_size_3d": self.args.auto_min_size_3d,
+                "auto_min_size_4d": self.args.auto_min_size_4d,
+                "auto_max_size_3d": self.args.auto_max_size_3d,
+                "auto_max_size_4d": self.args.auto_max_size_4d,
+                "fft_friendly": "largest even 7-smooth N below the memory target",
+            },
+            "sizes": {},
+        }
+        for dim in (3, 4):
+            dim_key = f"{dim}d"
+            explicit = self.benchmark_sizes_3d if dim == 3 else self.benchmark_sizes_4d
+            plan["sizes"][dim_key] = {}
+            for gpu_count in gpu_counts:
+                if explicit is None:
+                    values = [self.max_auto_n(dim, gpu_count)]
+                    mode = "auto"
+                else:
+                    values = list(explicit)
+                    mode = "explicit"
+                estimated = self.estimated_per_rank_memory_bytes(dim, gpu_count, values[0])
+                target = self.per_rank_memory_target_bytes(gpu_count)
+                plan["sizes"][dim_key][str(gpu_count)] = {
+                    "mode": mode,
+                    "num_gpus": gpu_count,
+                    "per_rank_total_memory_mib": bytes_to_mib(self.per_rank_memory_total_bytes(gpu_count)),
+                    "per_rank_target_memory_mib": bytes_to_mib(target),
+                    "effective_bytes_per_point": self.effective_auto_bytes_per_point(dim),
+                    "estimated_per_rank_memory_mib": bytes_to_mib(estimated),
+                    "estimated_target_ratio": (float(estimated) / float(target)) if target > 0 else 0.0,
+                    "side_lengths": values,
+                }
+        return plan
+
     def prepare_output(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
@@ -372,6 +492,10 @@ class PaperClusterRunner:
             json.dumps({"created_at": now_iso(), "args": vars(self.args)}, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        (self.data_dir / "size_plan.json").write_text(
+            json.dumps({"created_at": now_iso(), **self.size_plan}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         planned = self.plan_runs()
         (self.data_dir / "matrix.json").write_text(
             json.dumps(
@@ -390,7 +514,9 @@ class PaperClusterRunner:
 
     def sizes_for_spec(self, spec: RunSpec) -> List[Tuple[int, ...]]:
         if spec.case_name == "benchmark":
-            values = self.benchmark_sizes_3d if spec.dim == 3 else self.benchmark_sizes_4d
+            dim_key = f"{spec.dim}d"
+            gpu_key = str(spec.num_gpus)
+            values = self.size_plan["sizes"][dim_key][gpu_key]["side_lengths"]
         else:
             value = self.args.versioned_size_3d if spec.dim == 3 else self.args.versioned_size_4d
             values = [value]
@@ -603,8 +729,65 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default-device-memory-mib", type=int, default=40960)
     parser.add_argument("--device-memory-mib", type=int, nargs="*", default=None)
 
-    parser.add_argument("--benchmark-sizes-3d", default="256,512")
-    parser.add_argument("--benchmark-sizes-4d", default="40,64")
+    parser.add_argument(
+        "--benchmark-sizes-3d",
+        default="auto",
+        help="Comma-separated 3D benchmark side lengths, or 'auto' for per-GPU-count FFT-friendly fitting. Default: auto",
+    )
+    parser.add_argument(
+        "--benchmark-sizes-4d",
+        default="auto",
+        help="Comma-separated 4D benchmark side lengths, or 'auto' for per-GPU-count FFT-friendly fitting. Default: auto",
+    )
+    parser.add_argument(
+        "--auto-memory-fraction",
+        type=float,
+        default=0.72,
+        help="Fraction of per-GPU memory used by automatic benchmark size fitting. Default: 0.72",
+    )
+    parser.add_argument(
+        "--auto-reserve-memory-mib",
+        type=int,
+        default=2048,
+        help=(
+            "Hard per-GPU reserve cap for automatic fitting. The target is device_memory*auto_memory_fraction, "
+            "capped to device_memory-reserve. Default: 2048"
+        ),
+    )
+    parser.add_argument(
+        "--auto-bytes-per-point-3d",
+        type=float,
+        default=48.0,
+        help="Conservative per-global-point device-memory coefficient for 3D fitting. Default: 48",
+    )
+    parser.add_argument(
+        "--auto-bytes-per-point-4d",
+        type=float,
+        default=40.0,
+        help="Conservative per-global-point device-memory coefficient for 4D fitting. Default: 40",
+    )
+    parser.add_argument(
+        "--auto-reference-size-3d",
+        type=int,
+        default=None,
+        help=(
+            "Optional measured 1-GPU maximum 3D side length. When set, the runner infers the effective "
+            "bytes-per-point from device_memory*auto_memory_fraction and scales that size with GPU count."
+        ),
+    )
+    parser.add_argument(
+        "--auto-reference-size-4d",
+        type=int,
+        default=None,
+        help=(
+            "Optional measured 1-GPU maximum 4D side length. When set, the runner infers the effective "
+            "bytes-per-point from device_memory*auto_memory_fraction and scales that size with GPU count."
+        ),
+    )
+    parser.add_argument("--auto-min-size-3d", type=int, default=64)
+    parser.add_argument("--auto-min-size-4d", type=int, default=16)
+    parser.add_argument("--auto-max-size-3d", type=int, default=None)
+    parser.add_argument("--auto-max-size-4d", type=int, default=None)
     parser.add_argument("--versioned-size-3d", type=int, default=128)
     parser.add_argument("--versioned-size-4d", type=int, default=32)
     parser.add_argument("--benchmark-times", type=int, default=3)
@@ -613,7 +796,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", dest="validation_threshold", default="1.0e-11")
 
     parser.add_argument("--transports", default="cuda_aware,non_cuda_aware")
-    parser.add_argument("--modes", default="alltoallv,alltoallw,p2p-waitall,p2p-waitany")
+    parser.add_argument("--modes", default="alltoallv,p2p-waitall,p2p-waitany")
     parser.add_argument("--strategies-3d", default="slab-pencil,pencil-slab,pencil-pencil")
     parser.add_argument("--strategies-4d", default="slab-slab,pencil-pencil")
     parser.add_argument("--skip-ffts", action="store_true")

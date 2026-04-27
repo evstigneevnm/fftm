@@ -1,0 +1,25 @@
+\documentclass{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{array}
+\pagestyle{empty}
+\begin{document}
+\begin{center}
+{\fontsize{8.0pt}{9.4pt}\selectfont
+\textbf{Best Benchmark Configurations}
+
+\vspace{0.6em}
+\begin{tabular}{llllllllrr}
+\hline
+Dim & Impl. & Transport & Strategy & Mode & Size & Time [ms] & Gpts/s & Rel. to FFTS & GPU MiB \\
+\hline
+3D & FFTS, 1 GPU & single GPU & - & - & 1176\textasciicircum{}3 & 247.39 & 6.574 & 1.000 & 37,267 \\
+3D & FFTM, 5 GPU & CUDA-aware & slab-pencil & p2p-waitany & 2048\textasciicircum{}3 & 2073.74 & 4.142 & 0.630 & 65,651 \\
+3D & FFTM, 8 GPU & non-CUDA-aware & slab-pencil & p2p-waitall & 2352\textasciicircum{}3 & 1.12e+04 & 1.166 & 0.177 & 62,084 \\
+4D & FFTS, 1 GPU & single GPU & pencil-pencil-memcpy & - & 200\textasciicircum{}4 & 271.30 & 5.897 & 1.000 & 61,523 \\
+4D & FFTM, 3 GPU & CUDA-aware & slab-slab & alltoallv & 256\textasciicircum{}4 & 909.89 & 4.720 & 0.800 & 66,478 \\
+4D & FFTM, 8 GPU & non-CUDA-aware & slab-slab & p2p-waitany & 336\textasciicircum{}4 & 1.07e+04 & 1.195 & 0.203 & 73,292 \\
+\hline
+\end{tabular}
+}
+\end{center}
+\end{document}
