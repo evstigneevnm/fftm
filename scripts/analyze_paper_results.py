@@ -49,6 +49,7 @@ class ResultRow:
     num_gpus: int
     returncode: int
     sizes: Tuple[int, ...]
+    warmup: int
     avg_wall_ms: Optional[float]
     stddev_wall_ms: Optional[float]
     used_device_peak_max_mib: Optional[float]
@@ -334,6 +335,7 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
                     num_gpus=int(spec.get("num_gpus") or 0),
                     returncode=int(rec.get("returncode") if rec.get("returncode") is not None else -999),
                     sizes=sizes,
+                    warmup=int(summary.get("warmup") if summary.get("warmup") is not None else rec.get("warmup") or 0),
                     avg_wall_ms=as_float(summary.get("avg_wall_ms")),
                     stddev_wall_ms=as_float(summary.get("stddev_wall_ms")),
                     used_device_peak_max_mib=as_float(rec.get("used_device_peak_max_mib")),
@@ -467,6 +469,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                 "num_gpus",
                 "returncode",
                 "sizes",
+                "warmup",
                 "avg_wall_ms",
                 "stddev_wall_ms",
                 "throughput_gpoints_s",
@@ -494,6 +497,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                     r.num_gpus,
                     r.returncode,
                     "x".join(str(v) for v in r.sizes),
+                    r.warmup,
                     r.avg_wall_ms,
                     r.stddev_wall_ms,
                     r.throughput_gpoints_s,

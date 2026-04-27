@@ -101,6 +101,24 @@ int run_benchmark_case(
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_norm = T( 0 );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0xABCDEF0123456789ull + static_cast<unsigned long long>( iter );
+
+        for_each(
+            fftm::test::detail::fill_random_real_4d_functor<T, idx_t, real_array_t>{
+                work, seed, static_cast<int>( input_part.start_x[myid_i] ),
+                static_cast<int>( input_part.start_y[myid_j] ), static_cast<int>( input_part.start_z[myid_k] ), 0 },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
+        );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        distributed_fft.forward( work, hat );
+        distributed_fft.backward( hat, work );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         const unsigned long long seed = 0xABCDEF0123456789ull + static_cast<unsigned long long>( iter );
@@ -164,10 +182,10 @@ int run_benchmark_case(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "benchmark=fftm-4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
-            "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "benchmark=fftm-4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, "
+            "warmup=%d, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
-            options.nx, options.ny, options.nz, options.nw, options.times, stats.mean, stats.stddev
+            options.nx, options.ny, options.nz, options.nw, options.warmup, options.times, stats.mean, stats.stddev
         );
 
         std::ostringstream row;
@@ -175,13 +193,14 @@ int run_benchmark_case(
             << fftm::test::detail::csv_quote( fftm_t::strategy_name_4d() ) << ','
             << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ) ) << ','
             << p1 << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
-            << options.nw << ',' << options.times << ',' << options.epsilon << ',' << stats.mean << ',' << stats.stddev
-            << ',' << max_norm << ',' << fftm::test::detail::csv_quote( options.directory );
+            << options.nw << ',' << options.times << ',' << options.warmup << ',' << options.epsilon << ','
+            << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
+            << fftm::test::detail::csv_quote( options.directory );
 
         fftm::test::detail::append_csv_row(
             options.directory, "benchmark_fftm_4d.csv",
-            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_"
-            "diff,directory",
+            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
+            "max_l2_diff,directory",
             row.str()
         );
     }

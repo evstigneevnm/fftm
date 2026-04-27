@@ -394,6 +394,22 @@ int run_forward_random_benchmark(
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0xABCDEF0123456789ull + static_cast<unsigned long long>( iter );
+        for_each(
+            fill_random_real_functor<real_array_t>{
+                work, seed, static_cast<int>( input_part.start_x[myid_i] ),
+                static_cast<int>( input_part.start_y[myid_j] ), static_cast<int>( input_part.start_z[myid_k] ), 0 },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
+        );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        distributed_fft.forward( work, hat );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         const unsigned long long seed = 0xABCDEF0123456789ull + static_cast<unsigned long long>( iter );
@@ -426,10 +442,10 @@ int run_forward_random_benchmark(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=fftm_v0_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
-            "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "test=fftm_v0_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, "
+            "warmup=%d, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
-            options.nx, options.ny, options.nz, options.nw, options.times, stats.mean, stats.stddev
+            options.nx, options.ny, options.nz, options.nw, options.warmup, options.times, stats.mean, stats.stddev
         );
     }
 
@@ -516,6 +532,13 @@ int run_forward_reference_compare(
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_forward_rel_l2 = T( 0 );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        runtime_api_t::device_synchronize();
+        distributed_fft.forward( local_in, local_out );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         scfd::utils::system_timer_event t0, t1;
@@ -597,11 +620,11 @@ int run_forward_reference_compare(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=fftm_v1_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
-            "forward_rel_l2=%.8e, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "test=fftm_v1_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, "
+            "warmup=%d, times=%d: forward_rel_l2=%.8e, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
-            options.nx, options.ny, options.nz, options.nw, options.times, max_forward_rel_l2, stats.mean,
-            stats.stddev
+            options.nx, options.ny, options.nz, options.nw, options.warmup, options.times, max_forward_rel_l2,
+            stats.mean, stats.stddev
         );
     }
 
@@ -644,6 +667,17 @@ int run_backward_random_benchmark(
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0x1020304050607080ull + static_cast<unsigned long long>( iter );
+        for_each( fill_random_complex_functor<hat_array_t>{ hat, seed }, make_range( hat ) );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        distributed_fft.backward( hat, work );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         const unsigned long long seed = 0x1020304050607080ull + static_cast<unsigned long long>( iter );
@@ -671,10 +705,10 @@ int run_backward_random_benchmark(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=fftm_v2_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
-            "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "test=fftm_v2_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, "
+            "warmup=%d, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
-            options.nx, options.ny, options.nz, options.nw, options.times, stats.mean, stats.stddev
+            options.nx, options.ny, options.nz, options.nw, options.warmup, options.times, stats.mean, stats.stddev
         );
     }
 
@@ -727,6 +761,24 @@ int run_roundtrip_random_test(
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_l2 = T( 0 );
+
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0xABCDEF0123456789ull + static_cast<unsigned long long>( iter );
+
+        for_each(
+            fill_random_real_functor<real_array_t>{
+                work, seed, static_cast<int>( input_part.start_x[myid_i] ),
+                static_cast<int>( input_part.start_y[myid_j] ), static_cast<int>( input_part.start_z[myid_k] ), 0 },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
+        );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        distributed_fft.forward( work, hat );
+        distributed_fft.backward( hat, work );
+        runtime_api_t::device_synchronize();
+    }
 
     for ( int iter = 0; iter < options.times; ++iter )
     {
@@ -783,10 +835,11 @@ int run_roundtrip_random_test(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=fftm_v3_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
-            "max_l2=%.8e, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "test=fftm_v3_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, "
+            "warmup=%d, times=%d: max_l2=%.8e, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
-            options.nx, options.ny, options.nz, options.nw, options.times, max_l2, stats.mean, stats.stddev
+            options.nx, options.ny, options.nz, options.nw, options.warmup, options.times, max_l2, stats.mean,
+            stats.stddev
         );
     }
 
@@ -889,6 +942,27 @@ int run_periodic_laplacian_test(
 
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
+
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        runtime_api_t::device_synchronize();
+        distributed_fft.forward( rhs, rhs_hat );
+        for_each(
+            fftm::test::detail::solve_poisson_4d_functor<T, idx_t, hat_array_t>{
+                rhs_hat, solution_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+                static_cast<int>( options.nz ), static_cast<int>( output_part.start_y[myid_i] ),
+                static_cast<int>( output_part.start_z[myid_j] ), static_cast<int>( output_part.start_w[myid_k] ) },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( rhs_hat )
+        );
+        for_each.wait();
+        distributed_fft.backward( solution_hat, numerical_solution );
+        for_each(
+            fftm::test::detail::scale_real_4d_functor<T, idx_t, real_array_t>{ numerical_solution, normalization },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( numerical_solution )
+        );
+        for_each.wait();
+        runtime_api_t::device_synchronize();
+    }
 
     for ( int iter = 0; iter < options.times; ++iter )
     {
@@ -1001,10 +1075,11 @@ int run_periodic_laplacian_test(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "test=fftm_v4_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
-            "L2=%.8e, H1=%.8e, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "test=fftm_v4_4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, "
+            "warmup=%d, times=%d: L2=%.8e, H1=%.8e, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
-            options.nx, options.ny, options.nz, options.nw, options.times, l2_norm, h1_norm, stats.mean, stats.stddev
+            options.nx, options.ny, options.nz, options.nw, options.warmup, options.times, l2_norm, h1_norm,
+            stats.mean, stats.stddev
         );
     }
 

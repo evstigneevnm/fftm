@@ -32,6 +32,7 @@ struct ffts_3d_benchmark_options
     std::size_t ny        = 128;
     std::size_t nz        = 128;
     int         times     = 1;
+    int         warmup    = 0;
     T           epsilon   = default_benchmark_epsilon<T>();
     std::string directory = "./resutls";
 };
@@ -46,6 +47,7 @@ struct ffts_4d_benchmark_options
     std::size_t           nz        = 16;
     std::size_t           nw        = 16;
     int                   times     = 1;
+    int                   warmup    = 0;
     T                     epsilon   = default_benchmark_epsilon<T>();
     std::string           directory = "./resutls";
 };
@@ -62,6 +64,7 @@ struct fftm_3d_benchmark_options
     std::size_t                   p1        = 0;
     std::size_t                   p2        = 0;
     int                           times     = 1;
+    int                           warmup    = 0;
     T                             epsilon   = default_benchmark_epsilon<T>();
     std::string                   directory = "./resutls";
 };
@@ -80,20 +83,21 @@ struct fftm_4d_benchmark_options
     std::size_t                   p2        = 0;
     std::size_t                   p3        = 0;
     int                           times     = 1;
+    int                           warmup    = 0;
     T                             epsilon   = default_benchmark_epsilon<T>();
     std::string                   directory = "./resutls";
 };
 
 inline std::string usage_ffts_3d_benchmark( const std::string &binary_name )
 {
-    return "USAGE: " + binary_name + " [--times repeats] [--epsilon eps] [--directory path] [Nx Ny Nz]";
+    return "USAGE: " + binary_name + " [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path] [Nx Ny Nz]";
 }
 
 inline std::string usage_ffts_4d_benchmark( const std::string &binary_name )
 {
     return "USAGE: " + binary_name +
            " [--strategy pencil-direct|pencil-memcpy|slab-direct|slab-memcpy|all]"
-           " [--times repeats] [--epsilon eps] [--directory path] [Nx Ny Nz Nw]";
+           " [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path] [Nx Ny Nz Nw]";
 }
 
 inline std::string usage_fftm_3d_benchmark( const std::string &binary_name )
@@ -101,7 +105,7 @@ inline std::string usage_fftm_3d_benchmark( const std::string &binary_name )
     return "USAGE: " + binary_name +
            " [--strategy slab-pencil|pencil-slab|pencil-pencil|all]"
            " [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw]"
-           " [--grid P1 P2] [--times repeats] [--epsilon eps] [--directory path] [Nx Ny Nz]";
+           " [--grid P1 P2] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path] [Nx Ny Nz]";
 }
 
 inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
@@ -109,7 +113,7 @@ inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
     return "USAGE: " + binary_name +
            " [--strategy pencil-pencil|slab-slab|all]"
            " [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw]"
-           " [--grid P1 P2 P3] [--times repeats] [--epsilon eps] [--directory path] [Nx Ny Nz Nw]";
+           " [--grid P1 P2 P3] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path] [Nx Ny Nz Nw]";
 }
 
 template <class T>
@@ -129,6 +133,15 @@ parse_ffts_3d_benchmark_options( int argc, char *argv[], const std::string &bina
             options.times = std::atoi( argv[argi + 1] );
             if ( options.times < 1 )
                 throw std::logic_error( "--times must be at least 1" );
+            argi += 2;
+        }
+        else if ( arg == "--warmup" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --warmup" );
+            options.warmup = std::atoi( argv[argi + 1] );
+            if ( options.warmup < 0 )
+                throw std::logic_error( "--warmup must be non-negative" );
             argi += 2;
         }
         else if ( arg == "--epsilon" )
@@ -201,6 +214,15 @@ parse_ffts_4d_benchmark_options( int argc, char *argv[], const std::string &bina
             options.times = std::atoi( argv[argi + 1] );
             if ( options.times < 1 )
                 throw std::logic_error( "--times must be at least 1" );
+            argi += 2;
+        }
+        else if ( arg == "--warmup" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --warmup" );
+            options.warmup = std::atoi( argv[argi + 1] );
+            if ( options.warmup < 0 )
+                throw std::logic_error( "--warmup must be non-negative" );
             argi += 2;
         }
         else if ( arg == "--epsilon" )
@@ -300,6 +322,15 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.times = std::atoi( argv[argi + 1] );
             if ( options.times < 1 )
                 throw std::logic_error( "--times must be at least 1" );
+            argi += 2;
+        }
+        else if ( arg == "--warmup" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --warmup" );
+            options.warmup = std::atoi( argv[argi + 1] );
+            if ( options.warmup < 0 )
+                throw std::logic_error( "--warmup must be non-negative" );
             argi += 2;
         }
         else if ( arg == "--epsilon" )
@@ -412,6 +443,15 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.times = std::atoi( argv[argi + 1] );
             if ( options.times < 1 )
                 throw std::logic_error( "--times must be at least 1" );
+            argi += 2;
+        }
+        else if ( arg == "--warmup" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --warmup" );
+            options.warmup = std::atoi( argv[argi + 1] );
+            if ( options.warmup < 0 )
+                throw std::logic_error( "--warmup must be non-negative" );
             argi += 2;
         }
         else if ( arg == "--epsilon" )

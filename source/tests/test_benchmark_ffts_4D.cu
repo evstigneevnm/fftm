@@ -61,6 +61,22 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_norm = T( 0 );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0xCAFEBABE13579BDFull + static_cast<unsigned long long>( iter );
+
+        for_each(
+            fftm::test::detail::fill_random_real_4d_functor<T, idx_t, real_array_t>{ work, seed, 0, 0, 0, 0 },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( work )
+        );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        fft.forward( work, hat );
+        fft.backward( hat, work );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         const unsigned long long seed = 0xCAFEBABE13579BDFull + static_cast<unsigned long long>( iter );
@@ -108,22 +124,23 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "benchmark=ffts-4d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: avg_wall_ms=%.8e, "
+        "benchmark=ffts-4d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, warmup=%d, times=%d: avg_wall_ms=%.8e, "
         "stddev_wall_ms=%.8e",
-        ffts_t::strategy_name(), options.nx, options.ny, options.nz, options.nw, options.times, stats.mean, stats.stddev
+        ffts_t::strategy_name(), options.nx, options.ny, options.nz, options.nw, options.warmup, options.times,
+        stats.mean, stats.stddev
     );
 
     std::ostringstream row;
     row << fftm::test::detail::csv_quote( "ffts-4d" ) << ',' << 1 << ','
         << fftm::test::detail::csv_quote( ffts_t::strategy_name() ) << ',' << fftm::test::detail::csv_quote( "none" )
         << ',' << 1 << ',' << 1 << ',' << 1 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
-        << options.nw << ',' << options.times << ',' << options.epsilon << ',' << stats.mean << ',' << stats.stddev
-        << ',' << max_norm << ',' << fftm::test::detail::csv_quote( options.directory );
+        << options.nw << ',' << options.times << ',' << options.warmup << ',' << options.epsilon << ',' << stats.mean
+        << ',' << stats.stddev << ',' << max_norm << ',' << fftm::test::detail::csv_quote( options.directory );
 
     fftm::test::detail::append_csv_row(
         options.directory, "benchmark_ffts_4d.csv",
-        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_diff,"
-        "directory",
+        "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,max_l2_"
+        "diff,directory",
         row.str()
     );
 

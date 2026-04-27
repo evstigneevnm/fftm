@@ -525,11 +525,21 @@ class PaperClusterRunner:
     def times_for_spec(self, spec: RunSpec) -> int:
         return self.args.benchmark_times if spec.case_name == "benchmark" else self.args.validation_times
 
+    def warmup_for_spec(self, spec: RunSpec) -> int:
+        return self.args.test_warmup
+
     def plan_runs(self) -> List[Dict[str, Any]]:
         planned = []
         for spec in self.specs:
             for sizes in self.sizes_for_spec(spec):
-                planned.append({"spec": asdict(spec), "sizes": list(sizes), "times": self.times_for_spec(spec)})
+                planned.append(
+                    {
+                        "spec": asdict(spec),
+                        "sizes": list(sizes),
+                        "times": self.times_for_spec(spec),
+                        "warmup": self.warmup_for_spec(spec),
+                    }
+                )
         return planned
 
     def binary_args(self, spec: RunSpec, sizes: Tuple[int, ...], times: int) -> List[str]:
@@ -548,6 +558,9 @@ class PaperClusterRunner:
         else:
             args.extend(["--epsilon", str(self.args.validation_epsilon)])
         args.extend(["--times", str(times)])
+        warmup = self.warmup_for_spec(spec)
+        if warmup > 0:
+            args.extend(["--warmup", str(warmup)])
         args.extend(str(size) for size in sizes)
         return args
 
@@ -652,6 +665,8 @@ class PaperClusterRunner:
             "raw_log": str(raw_path),
             "spec": asdict(spec),
             "sizes": list(sizes),
+            "times": times,
+            "warmup": self.warmup_for_spec(spec),
             "parsed": parsed,
             "used_device_peak_max_bytes": used_device_peak_max_bytes,
             "used_device_peak_max_mib": bytes_to_mib(used_device_peak_max_bytes)
@@ -791,6 +806,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--versioned-size-3d", type=int, default=128)
     parser.add_argument("--versioned-size-4d", type=int, default=32)
     parser.add_argument("--benchmark-times", type=int, default=3)
+    parser.add_argument(
+        "--warmup",
+        "--benchmark-warmup",
+        dest="test_warmup",
+        type=int,
+        default=3,
+        help="Untimed warmup iterations for every scheduled test binary. Default: 3",
+    )
     parser.add_argument("--validation-times", type=int, default=1)
     parser.add_argument("--epsilon", dest="validation_epsilon", default="1.0e-11")
     parser.add_argument("--threshold", dest="validation_threshold", default="1.0e-11")
@@ -818,6 +841,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     if args.executor == "slurm-pyxis" and not args.container_image:
         parser.error("--container-image is required with --executor slurm-pyxis")
+    if args.test_warmup < 0:
+        parser.error("--warmup must be non-negative")
     runner = PaperClusterRunner(args)
     return runner.run()
 

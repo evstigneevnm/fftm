@@ -288,6 +288,20 @@ int run_forward_random_benchmark( log_std_t &log, const options_t &options )
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0x3141592653589793ull + static_cast<unsigned long long>( iter );
+        for_each(
+            fftm::test::detail::fill_random_real_3d_functor<T, idx_t, real_array_t>{ work, seed, 0, 0, 0 },
+            fftm::test::detail::make_range_3d<idx_t, rect_t>( work )
+        );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        fft.forward( work, hat );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         const unsigned long long seed = 0x3141592653589793ull + static_cast<unsigned long long>( iter );
@@ -309,8 +323,9 @@ int run_forward_random_benchmark( log_std_t &log, const options_t &options )
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "test=ffts_v0_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
-        "cufft-3d", options.nx, options.ny, options.nz, options.times, stats.mean, stats.stddev
+        "test=ffts_v0_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d: avg_wall_ms=%.8e, "
+        "stddev_wall_ms=%.8e",
+        "cufft-3d", options.nx, options.ny, options.nz, options.warmup, options.times, stats.mean, stats.stddev
     );
 
     return 0;
@@ -355,6 +370,13 @@ int run_forward_reference_compare( log_std_t &log, const options_t &options )
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_forward_rel_l2 = T( 0 );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        runtime_api_t::device_synchronize();
+        fft.forward( input, output );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         scfd::utils::system_timer_event t0, t1;
@@ -386,9 +408,10 @@ int run_forward_reference_compare( log_std_t &log, const options_t &options )
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "test=ffts_v1_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: forward_rel_l2=%.8e, avg_wall_ms=%.8e, "
-        "stddev_wall_ms=%.8e",
-        "cufft-3d", options.nx, options.ny, options.nz, options.times, max_forward_rel_l2, stats.mean, stats.stddev
+        "test=ffts_v1_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d: forward_rel_l2=%.8e, "
+        "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+        "cufft-3d", options.nx, options.ny, options.nz, options.warmup, options.times, max_forward_rel_l2,
+        stats.mean, stats.stddev
     );
 
     return max_forward_rel_l2 <= options.epsilon ? 0 : 1;
@@ -413,6 +436,17 @@ int run_backward_random_benchmark( log_std_t &log, const options_t &options )
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0x2718281828459045ull + static_cast<unsigned long long>( iter );
+        for_each( fill_random_complex_functor<hat_array_t>{ hat, seed }, make_range( hat ) );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        fft.backward( hat, work );
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         const unsigned long long seed = 0x2718281828459045ull + static_cast<unsigned long long>( iter );
@@ -431,8 +465,9 @@ int run_backward_random_benchmark( log_std_t &log, const options_t &options )
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "test=ffts_v2_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
-        "cufft-3d", options.nx, options.ny, options.nz, options.times, stats.mean, stats.stddev
+        "test=ffts_v2_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d: avg_wall_ms=%.8e, "
+        "stddev_wall_ms=%.8e",
+        "cufft-3d", options.nx, options.ny, options.nz, options.warmup, options.times, stats.mean, stats.stddev
     );
 
     return 0;
@@ -459,6 +494,21 @@ int run_roundtrip_random_test( log_std_t &log, const options_t &options )
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T max_l2 = T( 0 );
+
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        const unsigned long long seed = 0xABCDEF0123456789ull + static_cast<unsigned long long>( iter );
+        for_each(
+            fftm::test::detail::fill_random_real_3d_functor<T, idx_t, real_array_t>{ work, seed, 0, 0, 0 },
+            fftm::test::detail::make_range_3d<idx_t, rect_t>( work )
+        );
+        for_each.wait();
+
+        runtime_api_t::device_synchronize();
+        fft.forward( work, hat );
+        fft.backward( hat, work );
+        runtime_api_t::device_synchronize();
+    }
 
     for ( int iter = 0; iter < options.times; ++iter )
     {
@@ -498,9 +548,10 @@ int run_roundtrip_random_test( log_std_t &log, const options_t &options )
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "test=ffts_v3_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: max_l2=%.8e, avg_wall_ms=%.8e, "
-        "stddev_wall_ms=%.8e",
-        "cufft-3d", options.nx, options.ny, options.nz, options.times, max_l2, stats.mean, stats.stddev
+        "test=ffts_v3_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d: max_l2=%.8e, "
+        "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+        "cufft-3d", options.nx, options.ny, options.nz, options.warmup, options.times, max_l2, stats.mean,
+        stats.stddev
     );
 
     return max_l2 <= options.epsilon ? 0 : 1;
@@ -568,6 +619,24 @@ int run_periodic_laplacian_test( log_std_t &log, const options_t &options )
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
 
+    for ( int iter = 0; iter < options.warmup; ++iter )
+    {
+        runtime_api_t::device_synchronize();
+        fft.forward( rhs, rhs_hat );
+        for_each(
+            solve_poisson_3d_functor<hat_array_t>{ rhs_hat, solution_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ) },
+            fftm::test::detail::make_range_3d<idx_t, rect_t>( rhs_hat )
+        );
+        for_each.wait();
+        fft.backward( solution_hat, numerical_solution );
+        for_each(
+            fftm::test::detail::scale_real_functor<T, idx_t, real_array_t>{ numerical_solution, normalization },
+            fftm::test::detail::make_range_3d<idx_t, rect_t>( numerical_solution )
+        );
+        for_each.wait();
+        runtime_api_t::device_synchronize();
+    }
+
     for ( int iter = 0; iter < options.times; ++iter )
     {
         scfd::utils::system_timer_event t0, t1;
@@ -634,9 +703,10 @@ int run_periodic_laplacian_test( log_std_t &log, const options_t &options )
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
 
     log.info_f(
-        "test=ffts_v4_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, times=%d: L2=%.8e, H1=%.8e, avg_wall_ms=%.8e, "
-        "stddev_wall_ms=%.8e",
-        "cufft-3d", options.nx, options.ny, options.nz, options.times, l2_norm, h1_norm, stats.mean, stats.stddev
+        "test=ffts_v4_3d, strategy=%s, Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d: L2=%.8e, H1=%.8e, "
+        "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+        "cufft-3d", options.nx, options.ny, options.nz, options.warmup, options.times, l2_norm, h1_norm,
+        stats.mean, stats.stddev
     );
 
     return std::max( l2_norm, h1_norm ) <= options.epsilon ? 0 : 1;

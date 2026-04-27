@@ -36,6 +36,7 @@ struct fftm_4d_test_options
     std::size_t                   p3        = 0;
     double                        threshold = 1.0e-11;
     int                           times     = 1;
+    int                           warmup    = 0;
 };
 
 inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d( std::size_t num_procs )
@@ -96,7 +97,7 @@ usage_fftm_4d_test( const std::string &binary_name, bool allow_strategy_all, boo
     if ( allow_threshold )
         usage += " [--threshold eps]";
     if ( allow_times )
-        usage += " [--times repeats]";
+        usage += " [--times repeats] [--warmup repeats]";
     usage += " [Nx Ny Nz Nw]";
     return usage;
 }
@@ -179,6 +180,18 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.times = std::atoi( argv[argi + 1] );
             if ( options.times < 1 )
                 throw std::logic_error( "--times must be at least 1" );
+            argi += 2;
+        }
+        else if ( arg == "--warmup" )
+        {
+            if ( !allow_times )
+                throw std::logic_error( "Unknown option '--warmup'" );
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --warmup" );
+
+            options.warmup = std::atoi( argv[argi + 1] );
+            if ( options.warmup < 0 )
+                throw std::logic_error( "--warmup must be non-negative" );
             argi += 2;
         }
         else

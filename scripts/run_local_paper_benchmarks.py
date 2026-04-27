@@ -719,7 +719,7 @@ class LocalPaperBenchmarkRunner:
             return (n, n, n)
         return (n, n, n, n)
 
-    def build_command(self, spec: RunSpec, sizes: Tuple[int, ...], times: int) -> List[str]:
+    def build_command(self, spec: RunSpec, sizes: Tuple[int, ...], times: int, warmup: int = 0) -> List[str]:
         command: List[str] = []
         if spec.uses_mpi:
             command.extend(["mpiexec", "-n", str(spec.num_gpus)])
@@ -735,6 +735,8 @@ class LocalPaperBenchmarkRunner:
         else:
             command.extend(["--epsilon", str(self.args.validation_epsilon)])
         command.extend(["--times", str(times)])
+        if warmup > 0:
+            command.extend(["--warmup", str(warmup)])
         command.extend(str(size) for size in sizes)
         return command
 
@@ -744,7 +746,8 @@ class LocalPaperBenchmarkRunner:
 
     def execute_run(self, spec: RunSpec, sizes: Tuple[int, ...], times: int, phase: str) -> Dict[str, Any]:
         self.run_index += 1
-        command = self.build_command(spec, sizes, times)
+        warmup = self.args.test_warmup if phase == PHASE_MEASURE else 0
+        command = self.build_command(spec, sizes, times, warmup)
         command_string = " ".join(shlex.quote(arg) for arg in command)
         slug = slugify(
             f"{self.run_index:05d}_{phase}_{spec.suite}_{spec.case_name}_{spec.dim}d_"
@@ -782,6 +785,8 @@ class LocalPaperBenchmarkRunner:
             "raw_log": str(raw_path),
             "spec": asdict(spec),
             "sizes": list(sizes),
+            "times": times,
+            "warmup": warmup,
             "parsed": parsed,
             "used_device_peak_max_bytes": used_device_peak_max_bytes,
             "used_device_peak_max_mib": bytes_to_mib(used_device_peak_max_bytes)
@@ -1015,6 +1020,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Iteration count passed to the final measurement runs. Default: 10",
     )
     parser.add_argument(
+        "--warmup",
+        "--benchmark-warmup",
+        dest="test_warmup",
+        type=int,
+        default=3,
+        help="Untimed warmup iterations for final measurement runs. Probe runs remain un-warmed. Default: 3",
+    )
+    parser.add_argument(
         "--epsilon",
         dest="validation_epsilon",
         default="1.0e-11",
@@ -1095,6 +1108,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    if args.test_warmup < 0:
+        parser.error("--warmup must be non-negative")
     runner = LocalPaperBenchmarkRunner(args)
     return runner.run()
 
