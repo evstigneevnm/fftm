@@ -1,0 +1,55 @@
+\documentclass{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{array}
+\pagestyle{empty}
+\begin{document}
+\begin{center}
+{\fontsize{8.0pt}{9.4pt}\selectfont
+\textbf{Memory Profiler Breakdown for Best Benchmark Configurations}
+
+\vspace{0.6em}
+\begin{tabular}{llll p{0.35\linewidth} rrr}
+\hline
+Dim & Impl. & Config & Scope & Component & Peak max [MiB] & Current max [MiB] & Peak sum [MiB] \\
+\hline
+3D & FFTS/1GPU & - & category & device & 1.24e+04 & 1.24e+04 & 1.24e+04 \\
+3D & FFTS/1GPU & - & component & ffts/shared\_work\_buffer & 1.24e+04 & 1.24e+04 & 1.24e+04 \\
+3D & FFTM-CA/8GPU & pencil-slab, alltoallv & tracked & tracked\_device\_total & 6.24e+04 & 6.24e+04 & 4.97e+05 \\
+3D & FFTM-CA/8GPU & pencil-slab, alltoallv & tracked & internal\_device & 3.75e+04 & 3.75e+04 & 2.98e+05 \\
+3D & FFTM-CA/8GPU & pencil-slab, alltoallv & tracked & external\_test\_owned & 2.49e+04 & 2.49e+04 & 1.99e+05 \\
+3D & FFTM-CA/8GPU & pencil-slab, alltoallv & tracked & tracked\_total & 6.24e+04 & 6.24e+04 & 4.97e+05 \\
+3D & FFTM-CA/8GPU & pencil-slab, alltoallv & component & fftm/shared\_work\_buffer & 2.50e+04 & 2.50e+04 & 1.99e+05 \\
+3D & FFTM-CA/8GPU & pencil-slab, alltoallv & component & fftm/scratch\_stage0\_xfft\_3d & 1.25e+04 & 1.25e+04 & 9.94e+04 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & tracked & tracked\_device\_total & 6.21e+04 & 6.21e+04 & 4.97e+05 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & tracked & internal\_device & 3.73e+04 & 3.73e+04 & 2.98e+05 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & tracked & external\_test\_owned & 2.48e+04 & 2.48e+04 & 1.99e+05 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & tracked & host\_pinned\_internal & 2.48e+04 & 2.48e+04 & 1.99e+05 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & tracked & tracked\_total & 8.69e+04 & 8.69e+04 & 6.95e+05 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & component & fftm/shared\_host\_work\_buffer & 2.48e+04 & 2.48e+04 & 1.99e+05 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & component & fftm/shared\_work\_buffer & 2.48e+04 & 2.48e+04 & 1.99e+05 \\
+3D & FFTM-NCA/8GPU & slab-pencil, p2p-waitany & component & fftm/scratch\_stage0\_xfft\_3d & 1.24e+04 & 1.24e+04 & 9.94e+04 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & category & device & 3.70e+04 & 3.70e+04 & 3.70e+04 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & component & ffts/scratch\_stage0\_stage2\_4d & 1.23e+04 & 1.23e+04 & 1.23e+04 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & component & ffts/scratch\_stage1\_4d & 1.23e+04 & 1.23e+04 & 1.23e+04 \\
+4D & FFTS/1GPU & pencil-pencil-memcpy & component & ffts/shared\_work\_buffer & 1.23e+04 & 1.23e+04 & 1.23e+04 \\
+4D & FFTM-CA/8GPU & slab-slab, alltoallv & tracked & tracked\_device\_total & 7.33e+04 & 7.33e+04 & 5.86e+05 \\
+4D & FFTM-CA/8GPU & slab-slab, alltoallv & tracked & internal\_device & 4.89e+04 & 4.89e+04 & 3.91e+05 \\
+4D & FFTM-CA/8GPU & slab-slab, alltoallv & tracked & external\_test\_owned & 2.44e+04 & 2.44e+04 & 1.95e+05 \\
+4D & FFTM-CA/8GPU & slab-slab, alltoallv & tracked & tracked\_total & 7.33e+04 & 7.33e+04 & 5.86e+05 \\
+4D & FFTM-CA/8GPU & slab-slab, alltoallv & component & fftm/shared\_work\_buffer & 2.45e+04 & 2.45e+04 & 1.96e+05 \\
+4D & FFTM-CA/8GPU & slab-slab, alltoallv & component & fftm/scratch\_stage0\_stage2\_4d & 1.22e+04 & 1.22e+04 & 9.78e+04 \\
+4D & FFTM-CA/8GPU & slab-slab, alltoallv & component & fftm/scratch\_stage1\_4d & 1.22e+04 & 1.22e+04 & 9.78e+04 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & tracked & tracked\_device\_total & 7.33e+04 & 7.33e+04 & 5.86e+05 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & tracked & internal\_device & 4.89e+04 & 4.89e+04 & 3.91e+05 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & tracked & external\_test\_owned & 2.44e+04 & 2.44e+04 & 1.95e+05 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & tracked & host\_pinned\_internal & 2.45e+04 & 2.45e+04 & 1.96e+05 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & tracked & tracked\_total & 9.77e+04 & 9.77e+04 & 7.82e+05 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & component & fftm/shared\_host\_work\_buffer & 2.45e+04 & 2.45e+04 & 1.96e+05 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & component & fftm/shared\_work\_buffer & 2.45e+04 & 2.45e+04 & 1.96e+05 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & component & fftm/scratch\_stage0\_stage2\_4d & 1.22e+04 & 1.22e+04 & 9.78e+04 \\
+4D & FFTM-NCA/8GPU & slab-slab, p2p-waitany & component & fftm/scratch\_stage1\_4d & 1.22e+04 & 1.22e+04 & 9.78e+04 \\
+\hline
+\end{tabular}
+}
+\end{center}
+\end{document}
