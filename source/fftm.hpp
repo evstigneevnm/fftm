@@ -253,7 +253,7 @@ struct fftm_copy_same_indices_functor
 
 template <
     class BaseFFT, class MPIComm, class Backend,
-    class Strategy3D = strategy_3d_pencil_pencil<mpi_transpose_3d_mode::alltoallv>, class Log = scfd::utils::log_mpi,
+    class Strategy3D = strategy_3d_slab_pencil<mpi_transpose_3d_mode::alltoallv>, class Log = scfd::utils::log_mpi,
     class Strategy4D = strategy_4d_pencil_pencil_mpi<mpi_transpose_3d_mode::alltoallv>>
 class fftm
 {
@@ -904,7 +904,7 @@ private:
         init_done_ = true;
     }
 
-    void add_plan_z_r2c_(
+    void add_plan_z_r2c_legacy_y_fast_(
         const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int y_size
     )
     {
@@ -924,6 +924,8 @@ private:
         const std::string &forward_name, const std::string &inverse_name, long long int x_size
     )
     {
+        // Egger-style slab path: each local [y,z] plane is contiguous, so the
+        // first transform is a true batched 2D transform with unit stride.
         const long long int real_dist    = static_cast<long long int>( ny_ * nz_ );
         const long long int complex_dist = static_cast<long long int>( ny_ * nz_half_ );
 
@@ -1177,7 +1179,7 @@ private:
 
     void add_plans_3d_slab_pencil_layout_( std::false_type )
     {
-        SCFD_SAFE_CALL( add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], ny_ ) );
+        SCFD_SAFE_CALL( add_plan_z_r2c_legacy_y_fast_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], ny_ ) );
         SCFD_SAFE_CALL( add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], nz_half_ ) );
         SCFD_SAFE_CALL( add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], nz_half_ ) );
     }
@@ -1193,7 +1195,7 @@ private:
     void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::pencil_slab> )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_3d_pencil_slab" );
-        SCFD_SAFE_CALL( add_plan_z_r2c_( "forward_z", "inverse_z", nx_, input_dim_.size_y[myid_j_] ) );
+        SCFD_SAFE_CALL( add_plan_z_r2c_legacy_y_fast_( "forward_z", "inverse_z", nx_, input_dim_.size_y[myid_j_] ) );
         SCFD_SAFE_CALL( add_plan_y_c2c_( "forward_y", "inverse_y", nx_, output_dim_.size_z[myid_j_] ) );
         SCFD_SAFE_CALL( add_plan_x_c2c_( "forward_x", "inverse_x", ny_, output_dim_.size_z[myid_j_] ) );
     }
@@ -1202,7 +1204,7 @@ private:
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_3d_pencil_pencil" );
         SCFD_SAFE_CALL(
-            add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_] )
+            add_plan_z_r2c_legacy_y_fast_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_] )
         );
         SCFD_SAFE_CALL(
             add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_] )

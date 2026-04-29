@@ -46,7 +46,7 @@ enum class strategy_kind
 
 struct test_options
 {
-    strategy_kind               strategy  = strategy_kind::pencil_pencil;
+    strategy_kind               strategy  = strategy_kind::slab_pencil;
     bool                        run_all   = false;
     fftm::mpi_transpose_3d_mode mode      = fftm::mpi_transpose_3d_mode::alltoallv;
     std::size_t                 nx        = 16;

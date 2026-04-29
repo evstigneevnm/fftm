@@ -55,7 +55,7 @@ struct ffts_4d_benchmark_options
 template <class T>
 struct fftm_3d_benchmark_options
 {
-    fftm_3d_strategy_kind         strategy  = fftm_3d_strategy_kind::pencil_pencil;
+    fftm_3d_strategy_kind         strategy  = fftm_3d_strategy_kind::slab_pencil;
     bool                          run_all   = false;
     ::fftm::mpi_transpose_3d_mode mode      = ::fftm::mpi_transpose_3d_mode::alltoallv;
     std::size_t                   nx        = 128;
