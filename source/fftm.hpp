@@ -45,7 +45,7 @@ enum class transform_strategy_4d_mpi
     slab_slab
 };
 
-template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
+template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv, bool UseOptimized = true>
 struct strategy_3d_slab_pencil
 {
 };
@@ -74,6 +74,7 @@ struct fftm_init_options
 {
     std::string profiling_key                    = "fftm_prof";
     std::string memory_profiling_key             = "fftm_mem";
+    bool        use_optimized                    = true;
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;
     bool        print_memory_profile_on_destroy  = true;
@@ -86,11 +87,12 @@ namespace detail
 template <class Strategy3D>
 struct fftm_3d_strategy_traits;
 
-template <mpi_transpose_3d_mode Mode>
-struct fftm_3d_strategy_traits<strategy_3d_slab_pencil<Mode>>
+template <mpi_transpose_3d_mode Mode, bool UseOptimized>
+struct fftm_3d_strategy_traits<strategy_3d_slab_pencil<Mode, UseOptimized>>
 {
     static constexpr transform_strategy_3d family = transform_strategy_3d::slab_pencil;
     static constexpr mpi_transpose_3d_mode mode   = Mode;
+    static constexpr bool optimized_layout        = UseOptimized;
 
     static const char *name()
     {
@@ -103,6 +105,7 @@ struct fftm_3d_strategy_traits<strategy_3d_pencil_slab<Mode>>
 {
     static constexpr transform_strategy_3d family = transform_strategy_3d::pencil_slab;
     static constexpr mpi_transpose_3d_mode mode   = Mode;
+    static constexpr bool optimized_layout        = false;
 
     static const char *name()
     {
@@ -115,6 +118,7 @@ struct fftm_3d_strategy_traits<strategy_3d_pencil_pencil<Mode>>
 {
     static constexpr transform_strategy_3d family = transform_strategy_3d::pencil_pencil;
     static constexpr mpi_transpose_3d_mode mode   = Mode;
+    static constexpr bool optimized_layout        = false;
 
     static const char *name()
     {
@@ -153,7 +157,7 @@ template <class Real, class Complex, class Memory, class Strategy3D>
 struct fftm_3d_array_traits;
 
 template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
-struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_slab_pencil<Mode>>
+struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_slab_pencil<Mode, false>>
 {
     using real_array_t = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_102_t>;
     using stage0_complex_array_t =
@@ -161,6 +165,19 @@ struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_slab_pencil<Mode>
     using stage1_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
     using complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+    using x_fft_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
+};
+
+template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
+struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_slab_pencil<Mode, true>>
+{
+    using real_array_t = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_210_t>;
+    using stage0_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
+    using stage1_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
+    using complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
     using x_fft_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
 };
@@ -271,6 +288,7 @@ public:
 
     static constexpr transform_strategy_3d     strategy_family_3d = detail::fftm_3d_strategy_traits<Strategy3D>::family;
     static constexpr mpi_transpose_3d_mode     transpose_mode_3d  = detail::fftm_3d_strategy_traits<Strategy3D>::mode;
+    static constexpr bool strategy_3d_optimized_layout = detail::fftm_3d_strategy_traits<Strategy3D>::optimized_layout;
     static constexpr transform_strategy_4d_mpi strategy_family_4d = detail::fftm_4d_strategy_traits<Strategy4D>::family;
     static constexpr mpi_transpose_3d_mode     transpose_mode_4d  = detail::fftm_4d_strategy_traits<Strategy4D>::mode;
 
@@ -902,6 +920,26 @@ private:
         );
     }
 
+    void add_plan_yz_r2c_slab_optimized_(
+        const std::string &forward_name, const std::string &inverse_name, long long int x_size
+    )
+    {
+        const long long int real_dist    = static_cast<long long int>( ny_ * nz_ );
+        const long long int complex_dist = static_cast<long long int>( ny_ * nz_half_ );
+
+        base_fft_.template add_plan_2D<::fftm::direction::R2C>(
+            forward_name, static_cast<long long int>( ny_ ), static_cast<long long int>( nz_ ),
+            static_cast<long long int>( ny_ ), static_cast<long long int>( nz_ ), 1, real_dist,
+            static_cast<long long int>( ny_ ), static_cast<long long int>( nz_half_ ), 1, complex_dist, x_size
+        );
+
+        base_fft_.template add_plan_2D<::fftm::direction::C2R>(
+            inverse_name, static_cast<long long int>( ny_ ), static_cast<long long int>( nz_ ),
+            static_cast<long long int>( ny_ ), static_cast<long long int>( nz_half_ ), 1, complex_dist,
+            static_cast<long long int>( ny_ ), static_cast<long long int>( nz_ ), 1, real_dist, x_size
+        );
+    }
+
     void add_plan_y_c2c_(
         const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int z_size
     )
@@ -1134,8 +1172,21 @@ private:
     void add_plans_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil> )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_3d_slab_pencil" );
+        SCFD_SAFE_CALL( add_plans_3d_slab_pencil_layout_( std::integral_constant<bool, strategy_3d_optimized_layout>() ) );
+    }
+
+    void add_plans_3d_slab_pencil_layout_( std::false_type )
+    {
         SCFD_SAFE_CALL( add_plan_z_r2c_( "forward_z", "inverse_z", input_dim_.size_x[myid_i_], ny_ ) );
         SCFD_SAFE_CALL( add_plan_y_c2c_( "forward_y", "inverse_y", input_dim_.size_x[myid_i_], nz_half_ ) );
+        SCFD_SAFE_CALL( add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], nz_half_ ) );
+    }
+
+    void add_plans_3d_slab_pencil_layout_( std::true_type )
+    {
+        SCFD_SAFE_CALL( add_plan_yz_r2c_slab_optimized_(
+            "forward_yz", "inverse_yz", static_cast<long long int>( input_dim_.size_x[myid_i_] )
+        ) );
         SCFD_SAFE_CALL( add_plan_x_c2c_( "forward_x", "inverse_x", output_dim_.size_y[myid_i_], nz_half_ ) );
     }
 
@@ -1198,6 +1249,13 @@ private:
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_slab_pencil" );
+        SCFD_SAFE_CALL( forward_3d_slab_pencil_layout_(
+            std::integral_constant<bool, strategy_3d_optimized_layout>(), in, out
+        ) );
+    }
+
+    void forward_3d_slab_pencil_layout_( std::false_type, const real_array3_t &in, complex_array3_t &out )
+    {
         SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ ) );
         SCFD_SAFE_CALL(
             base_fft_.template exec<stage0_complex3_t, stage0_complex3_t>( "forward_y", stage0_3d_, stage0_3d_ )
@@ -1210,12 +1268,33 @@ private:
         SCFD_SAFE_CALL( reorder_x_stage_( x_fft_stage_3d_, out ) );
     }
 
+    void forward_3d_slab_pencil_layout_( std::true_type, const real_array3_t &in, complex_array3_t &out )
+    {
+        if ( !init_options_.use_optimized )
+        {
+            throw std::logic_error(
+                "fftm 3D slab-pencil optimized layout was selected at compile time; use "
+                "strategy_3d_slab_pencil<Mode, false> for the legacy runtime path."
+            );
+        }
+        SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_yz", in, stage0_3d_ ) );
+        SCFD_SAFE_CALL( same_z_.transpose_x_to_y_optimized_layout( stage0_3d_, out, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_x", out, out ) );
+    }
+
     void backward_3d_(
         std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil>, complex_array3_t &in,
         real_array3_t &out
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_slab_pencil" );
+        SCFD_SAFE_CALL( backward_3d_slab_pencil_layout_(
+            std::integral_constant<bool, strategy_3d_optimized_layout>(), in, out
+        ) );
+    }
+
+    void backward_3d_slab_pencil_layout_( std::false_type, complex_array3_t &in, real_array3_t &out )
+    {
         SCFD_SAFE_CALL( reorder_x_stage_( in, x_fft_stage_3d_ ) );
         SCFD_SAFE_CALL(
             base_fft_.template exec<x_fft_complex3_t, x_fft_complex3_t>( "inverse_x", x_fft_stage_3d_, x_fft_stage_3d_ )
@@ -1226,6 +1305,20 @@ private:
             base_fft_.template exec<stage0_complex3_t, stage0_complex3_t>( "inverse_y", stage0_3d_, stage0_3d_ )
         );
         SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
+    }
+
+    void backward_3d_slab_pencil_layout_( std::true_type, complex_array3_t &in, real_array3_t &out )
+    {
+        if ( !init_options_.use_optimized )
+        {
+            throw std::logic_error(
+                "fftm 3D slab-pencil optimized layout was selected at compile time; use "
+                "strategy_3d_slab_pencil<Mode, false> for the legacy runtime path."
+            );
+        }
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_x", in, in ) );
+        SCFD_SAFE_CALL( same_z_.transpose_y_to_x_optimized_layout( in, stage0_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_yz", stage0_3d_, out ) );
     }
 
     void forward_3d_(

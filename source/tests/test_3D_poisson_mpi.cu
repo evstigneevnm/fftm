@@ -46,7 +46,7 @@ int run_poisson(
         fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
     using real_array_t = typename fftm_t::template real_array_t<3>;
     using hat_array_t  = typename fftm_t::template complex_array_t<3>;
-    using err_array_t  = scfd::arrays::array_nd<T, 3, memory_t, scfd::arrays::custom_arranger_102_t>;
+    using err_array_t  = real_array_t;
 
     fftm::processor_grid grid;
     grid.init( options.p1, options.p2 );
