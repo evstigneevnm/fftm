@@ -166,26 +166,6 @@ parse_ffts_3d_benchmark_options( int argc, char *argv[], const std::string &bina
             options.directory = argv[argi + 1];
             argi += 2;
         }
-        else if ( arg == "--use-direct-backward-receive" )
-        {
-            options.use_direct_backward_receive = true;
-            argi += 1;
-        }
-        else if ( arg == "--no-direct-backward-receive" )
-        {
-            options.use_direct_backward_receive = false;
-            argi += 1;
-        }
-        else if ( arg == "--direct-p2p-cuda-aware" || arg == "--direct-p2p-CUDA-aware" )
-        {
-            options.direct_p2p_cuda_aware = true;
-            argi += 1;
-        }
-        else if ( arg == "--no-direct-p2p-cuda-aware" || arg == "--no-direct-p2p-CUDA-aware" )
-        {
-            options.direct_p2p_cuda_aware = false;
-            argi += 1;
-        }
         else
         {
             break;
@@ -374,6 +354,26 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
                 throw std::logic_error( "Missing value for --directory" );
             options.directory = argv[argi + 1];
             argi += 2;
+        }
+        else if ( arg == "--use-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = false;
+            argi += 1;
+        }
+        else if ( arg == "--direct-p2p-cuda-aware" || arg == "--direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-p2p-cuda-aware" || arg == "--no-direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = false;
+            argi += 1;
         }
         else
         {
