@@ -734,6 +734,17 @@ class LocalPaperBenchmarkRunner:
             command.extend(["--threshold", str(self.args.validation_threshold)])
         else:
             command.extend(["--epsilon", str(self.args.validation_epsilon)])
+        if spec.suite == "fftm":
+            command.append(
+                "--use-direct-backward-receive"
+                if self.args.use_direct_backward_receive
+                else "--no-direct-backward-receive"
+            )
+            command.append(
+                "--direct-p2p-cuda-aware"
+                if self.args.direct_p2p_cuda_aware
+                else "--no-direct-p2p-cuda-aware"
+            )
         command.extend(["--times", str(times)])
         if warmup > 0:
             command.extend(["--warmup", str(warmup)])
@@ -1026,6 +1037,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Untimed warmup iterations for final measurement runs. Probe runs remain un-warmed. Default: 3",
+    )
+    parser.add_argument(
+        "--use-direct-backward-receive",
+        action="store_true",
+        default=False,
+        help="Enable optional CUDA-aware direct backward peer receives in FFTM where supported. Default: disabled",
+    )
+    parser.add_argument(
+        "--no-direct-backward-receive",
+        action="store_false",
+        dest="use_direct_backward_receive",
+        help="Disable optional CUDA-aware direct backward peer receives.",
+    )
+    parser.add_argument(
+        "--direct-p2p-cuda-aware",
+        action="store_true",
+        default=True,
+        help="Allow direct CUDA-aware peer receive targets in FFTM p2p paths. Default: enabled",
+    )
+    parser.add_argument(
+        "--no-direct-p2p-cuda-aware",
+        action="store_false",
+        dest="direct_p2p_cuda_aware",
+        help="Force CUDA-aware FFTM p2p paths through packed receive buffers.",
     )
     parser.add_argument(
         "--epsilon",

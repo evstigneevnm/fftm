@@ -42,6 +42,8 @@ MODES="${FFTM_MODES:-alltoallv,p2p-waitall,p2p-waitany}"
 TRANSPORTS="${FFTM_TRANSPORTS:-cuda_aware,non_cuda_aware}"
 INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-0}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
+USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
+DIRECT_P2P_CUDA_AWARE="${FFTM_DIRECT_P2P_CUDA_AWARE:-1}"
 GPU_NAME="${FFTM_GPU_NAME:-A100}"
 DEVICE_MEMORY_MIB="${FFTM_DEVICE_MEMORY_MIB:-40960}"
 TIMEOUT_SECONDS="${FFTM_TIMEOUT_SECONDS:-7200}"
@@ -80,6 +82,16 @@ args=(
     --transports "${TRANSPORTS}"
     --timeout-seconds "${TIMEOUT_SECONDS}"
 )
+
+case "${USE_DIRECT_BACKWARD_RECEIVE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-direct-backward-receive) ;;
+    *) args+=(--no-direct-backward-receive) ;;
+esac
+
+case "${DIRECT_P2P_CUDA_AWARE}" in
+    0|false|FALSE|no|NO|off|OFF) args+=(--no-direct-p2p-cuda-aware) ;;
+    *) args+=(--direct-p2p-cuda-aware) ;;
+esac
 
 if [[ -n "${MAX_GPUS}" ]]; then
     args+=(--max-gpus "${MAX_GPUS}")

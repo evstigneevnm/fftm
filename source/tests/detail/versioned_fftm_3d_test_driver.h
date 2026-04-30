@@ -340,7 +340,7 @@ int run_forward_random_benchmark(
     sizes.init( options.nx, options.ny, options.nz );
 
     fftm_t distributed_fft( comm_info, log );
-    distributed_fft.template init<3>( grid, sizes );
+    distributed_fft.template init<3>( grid, sizes, make_fftm_init_options( options ) );
 
     const auto  in_sizes   = distributed_fft.get_local_input_sizes();
     const auto &input_part = distributed_fft.input_partition();
@@ -448,7 +448,7 @@ int run_forward_reference_compare(
     fftm_t     distributed_fft( comm_info, log );
     ref_ffts_t reference_fft;
 
-    distributed_fft.template init<3>( grid, sizes );
+    distributed_fft.template init<3>( grid, sizes, make_fftm_init_options( options ) );
     reference_fft.init( options.nx, options.ny, options.nz );
 
     const auto local_in_sizes  = distributed_fft.get_local_input_sizes();
@@ -609,7 +609,7 @@ int run_backward_random_benchmark(
     sizes.init( options.nx, options.ny, options.nz );
 
     fftm_t distributed_fft( comm_info, log );
-    distributed_fft.template init<3>( grid, sizes );
+    distributed_fft.template init<3>( grid, sizes, make_fftm_init_options( options ) );
 
     hat_array_t  hat;
     real_array_t work;
@@ -688,7 +688,7 @@ int run_roundtrip_random_test(
     sizes.init( options.nx, options.ny, options.nz );
 
     fftm_t distributed_fft( comm_info, log );
-    distributed_fft.template init<3>( grid, sizes );
+    distributed_fft.template init<3>( grid, sizes, make_fftm_init_options( options ) );
 
     const auto  in_sizes   = distributed_fft.get_local_input_sizes();
     const auto &input_part = distributed_fft.input_partition();
@@ -819,7 +819,7 @@ int run_periodic_laplacian_test(
     std::tie( myid_i, myid_j, myid_k ) = partitioning.get_my_grid();
 
     fftm_t distributed_fft( comm_info, log );
-    distributed_fft.template init<3>( grid, sizes );
+    distributed_fft.template init<3>( grid, sizes, make_fftm_init_options( options ) );
 
     const auto  in_sizes    = distributed_fft.get_local_input_sizes();
     const auto  out_sizes   = distributed_fft.get_local_output_sizes();

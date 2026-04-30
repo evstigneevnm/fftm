@@ -173,7 +173,7 @@ int run_compare(
     fftm_t     distributed_fft( comm_info, log );
     ref_ffts_t reference_fft;
 
-    distributed_fft.template init<4>( grid, sizes );
+    distributed_fft.template init<4>( grid, sizes, fftm::test::detail::make_fftm_init_options( options ) );
     reference_fft.init( options.nx, options.ny, options.nz, options.nw );
 
     const auto &input_part  = distributed_fft.input_partition();

@@ -37,6 +37,8 @@ struct fftm_4d_test_options
     double                        threshold = 1.0e-11;
     int                           times     = 1;
     int                           warmup    = 0;
+    bool                          use_direct_backward_receive = false;
+    bool                          direct_p2p_cuda_aware       = true;
 };
 
 inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d( std::size_t num_procs )
@@ -98,6 +100,8 @@ usage_fftm_4d_test( const std::string &binary_name, bool allow_strategy_all, boo
         usage += " [--threshold eps]";
     if ( allow_times )
         usage += " [--times repeats] [--warmup repeats]";
+    usage += " [--use-direct-backward-receive|--no-direct-backward-receive]";
+    usage += " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]";
     usage += " [Nx Ny Nz Nw]";
     return usage;
 }
@@ -194,6 +198,26 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
                 throw std::logic_error( "--warmup must be non-negative" );
             argi += 2;
         }
+        else if ( arg == "--use-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = false;
+            argi += 1;
+        }
+        else if ( arg == "--direct-p2p-cuda-aware" || arg == "--direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-p2p-cuda-aware" || arg == "--no-direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -216,6 +240,14 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
         throw std::logic_error( "Nw must be even." );
 
     return options;
+}
+
+inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_test_options &options )
+{
+    ::fftm::fftm_init_options init_options;
+    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    return init_options;
 }
 
 } // namespace detail

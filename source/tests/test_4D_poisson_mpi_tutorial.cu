@@ -66,7 +66,7 @@ int run_tutorial_case(
     std::tie( myid_i, myid_j, myid_k ) = partitioning.get_my_grid();
 
     fftm_t distributed_fft( comm_info, log );
-    distributed_fft.template init<4>( grid, sizes );
+    distributed_fft.template init<4>( grid, sizes, fftm::test::detail::make_fftm_init_options( options ) );
 
     const auto  in_sizes    = distributed_fft.get_local_input_sizes_4d();
     const auto  out_sizes   = distributed_fft.get_local_output_sizes_4d();

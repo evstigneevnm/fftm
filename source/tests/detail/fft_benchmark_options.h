@@ -67,6 +67,8 @@ struct fftm_3d_benchmark_options
     int                           warmup    = 0;
     T                             epsilon   = default_benchmark_epsilon<T>();
     std::string                   directory = "./resutls";
+    bool                          use_direct_backward_receive = false;
+    bool                          direct_p2p_cuda_aware       = true;
 };
 
 template <class T>
@@ -86,6 +88,8 @@ struct fftm_4d_benchmark_options
     int                           warmup    = 0;
     T                             epsilon   = default_benchmark_epsilon<T>();
     std::string                   directory = "./resutls";
+    bool                          use_direct_backward_receive = false;
+    bool                          direct_p2p_cuda_aware       = true;
 };
 
 inline std::string usage_ffts_3d_benchmark( const std::string &binary_name )
@@ -105,7 +109,9 @@ inline std::string usage_fftm_3d_benchmark( const std::string &binary_name )
     return "USAGE: " + binary_name +
            " [--strategy slab-pencil|pencil-slab|pencil-pencil|all]"
            " [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw]"
-           " [--grid P1 P2] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path] [Nx Ny Nz]";
+           " [--grid P1 P2] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path]"
+           " [--use-direct-backward-receive|--no-direct-backward-receive]"
+           " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] [Nx Ny Nz]";
 }
 
 inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
@@ -113,7 +119,9 @@ inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
     return "USAGE: " + binary_name +
            " [--strategy pencil-pencil|slab-slab|all]"
            " [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw]"
-           " [--grid P1 P2 P3] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path] [Nx Ny Nz Nw]";
+           " [--grid P1 P2 P3] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path]"
+           " [--use-direct-backward-receive|--no-direct-backward-receive]"
+           " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] [Nx Ny Nz Nw]";
 }
 
 template <class T>
@@ -157,6 +165,26 @@ parse_ffts_3d_benchmark_options( int argc, char *argv[], const std::string &bina
                 throw std::logic_error( "Missing value for --directory" );
             options.directory = argv[argi + 1];
             argi += 2;
+        }
+        else if ( arg == "--use-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = false;
+            argi += 1;
+        }
+        else if ( arg == "--direct-p2p-cuda-aware" || arg == "--direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-p2p-cuda-aware" || arg == "--no-direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = false;
+            argi += 1;
         }
         else
         {
@@ -376,6 +404,8 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
         base_options.p1       = options.p1;
         base_options.p2       = options.p2;
         base_options.times    = options.times;
+        base_options.use_direct_backward_receive = options.use_direct_backward_receive;
+        base_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
         const auto grid       = choose_grid_3d( base_options, options.strategy, num_procs );
         options.p1            = grid.first;
         options.p2            = grid.second;
@@ -468,6 +498,26 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.directory = argv[argi + 1];
             argi += 2;
         }
+        else if ( arg == "--use-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = false;
+            argi += 1;
+        }
+        else if ( arg == "--direct-p2p-cuda-aware" || arg == "--direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-p2p-cuda-aware" || arg == "--no-direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -503,6 +553,8 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
         base_options.p2       = options.p2;
         base_options.p3       = options.p3;
         base_options.times    = options.times;
+        base_options.use_direct_backward_receive = options.use_direct_backward_receive;
+        base_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
         const auto grid       = choose_grid_4d( base_options, options.strategy, num_procs );
         options.p1            = std::get<0>( grid );
         options.p2            = std::get<1>( grid );
@@ -510,6 +562,24 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
     }
 
     return options;
+}
+
+template <class T>
+inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_benchmark_options<T> &options )
+{
+    ::fftm::fftm_init_options init_options;
+    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    return init_options;
+}
+
+template <class T>
+inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_benchmark_options<T> &options )
+{
+    ::fftm::fftm_init_options init_options;
+    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    return init_options;
 }
 
 inline const char *ffts_4d_strategy_name( ffts_4d_strategy_kind strategy )

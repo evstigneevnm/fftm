@@ -25,6 +25,8 @@ MODES="${FFTM_MODES:-p2p-waitany}"
 TRANSPORTS="${FFTM_TRANSPORTS:-cuda_aware,non_cuda_aware}"
 INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-1}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
+USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
+DIRECT_P2P_CUDA_AWARE="${FFTM_DIRECT_P2P_CUDA_AWARE:-1}"
 BUILD_JOBS="${FFTM_BUILD_JOBS:-8}"
 CUDA_ARCH="${FFTM_CUDA_ARCH:--gencode arch=compute_80,code=sm_80 -gencode arch=compute_70,code=sm_70}"
 
@@ -68,6 +70,16 @@ args=(
     --modes "${MODES}"
     --transports "${TRANSPORTS}"
 )
+
+case "${USE_DIRECT_BACKWARD_RECEIVE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-direct-backward-receive) ;;
+    *) args+=(--no-direct-backward-receive) ;;
+esac
+
+case "${DIRECT_P2P_CUDA_AWARE}" in
+    0|false|FALSE|no|NO|off|OFF) args+=(--no-direct-p2p-cuda-aware) ;;
+    *) args+=(--direct-p2p-cuda-aware) ;;
+esac
 
 if [[ "${INCLUDE_VERSIONED}" == "1" ]]; then
     args+=(--include-versioned)

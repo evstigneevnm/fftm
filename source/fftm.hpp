@@ -75,6 +75,8 @@ struct fftm_init_options
     std::string profiling_key                    = "fftm_prof";
     std::string memory_profiling_key             = "fftm_mem";
     bool        use_optimized                    = true;
+    bool        use_direct_backward_receive      = false;
+    bool        direct_p2p_cuda_aware            = true;
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;
     bool        print_memory_profile_on_destroy  = true;
@@ -590,6 +592,7 @@ private:
         same_xy_.set_profiler( profiler_.native_ptr() );
         same_xw_.set_profiler( profiler_.native_ptr() );
         same_zw_.set_profiler( profiler_.native_ptr() );
+        same_z_.set_direct_transfer_options( options.use_direct_backward_receive, options.direct_p2p_cuda_aware );
     }
 
     void configure_memory_profiling_( const fftm_init_options &options )

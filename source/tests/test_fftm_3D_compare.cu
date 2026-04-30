@@ -55,6 +55,8 @@ struct test_options
     std::size_t                 p1        = 0;
     std::size_t                 p2        = 0;
     T                           threshold = T( 1.0e-11 );
+    bool                        use_direct_backward_receive = false;
+    bool                        direct_p2p_cuda_aware       = true;
 };
 
 std::pair<std::size_t, std::size_t> choose_pencil_grid( std::size_t num_procs )
@@ -126,6 +128,26 @@ test_options parse_options( int argc, char *argv[], int num_procs )
             options.threshold = static_cast<T>( std::atof( argv[argi + 1] ) );
             argi += 2;
         }
+        else if ( arg == "--use-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-backward-receive" )
+        {
+            options.use_direct_backward_receive = false;
+            argi += 1;
+        }
+        else if ( arg == "--direct-p2p-cuda-aware" || arg == "--direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-p2p-cuda-aware" || arg == "--no-direct-p2p-CUDA-aware" )
+        {
+            options.direct_p2p_cuda_aware = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -142,7 +164,9 @@ test_options parse_options( int argc, char *argv[], int num_procs )
     {
         throw std::logic_error(
             "USAGE: test_fftm_3D_compare.bin [--strategy slab-pencil|pencil-slab|pencil-pencil|all] "
-            "[--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2] [--threshold eps] [Nx Ny Nz]"
+            "[--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2] [--threshold eps] "
+            "[--use-direct-backward-receive|--no-direct-backward-receive] "
+            "[--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] [Nx Ny Nz]"
         );
     }
 
@@ -167,6 +191,14 @@ test_options parse_options( int argc, char *argv[], int num_procs )
     }
 
     return options;
+}
+
+fftm::fftm_init_options make_init_options( const test_options &options )
+{
+    fftm::fftm_init_options init_options;
+    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    return init_options;
 }
 
 template <class Array>
@@ -280,7 +312,7 @@ int run_compare(
     fftm_t     distributed_fft( comm_info, log );
     ref_ffts_t reference_fft;
 
-    distributed_fft.template init<3>( grid, sizes );
+    distributed_fft.template init<3>( grid, sizes, make_init_options( options ) );
     reference_fft.init( options.nx, options.ny, options.nz );
 
     local_real_t local_in;
