@@ -77,6 +77,7 @@ struct fftm_init_options
     bool        use_optimized                    = true;
     bool        use_direct_backward_receive      = false;
     bool        direct_p2p_cuda_aware            = true;
+    bool        use_p2p_send_thread              = true;
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;
     bool        print_memory_profile_on_destroy  = true;
@@ -593,6 +594,7 @@ private:
         same_xw_.set_profiler( profiler_.native_ptr() );
         same_zw_.set_profiler( profiler_.native_ptr() );
         same_z_.set_direct_transfer_options( options.use_direct_backward_receive, options.direct_p2p_cuda_aware );
+        same_z_.set_p2p_send_thread_enabled( options.use_p2p_send_thread );
     }
 
     void configure_memory_profiling_( const fftm_init_options &options )

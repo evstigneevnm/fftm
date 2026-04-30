@@ -44,6 +44,7 @@ INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-0}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
 USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
 DIRECT_P2P_CUDA_AWARE="${FFTM_DIRECT_P2P_CUDA_AWARE:-1}"
+USE_P2P_SEND_THREAD="${FFTM_USE_P2P_SEND_THREAD:-1}"
 GPU_NAME="${FFTM_GPU_NAME:-A100}"
 DEVICE_MEMORY_MIB="${FFTM_DEVICE_MEMORY_MIB:-40960}"
 TIMEOUT_SECONDS="${FFTM_TIMEOUT_SECONDS:-7200}"
@@ -91,6 +92,11 @@ esac
 case "${DIRECT_P2P_CUDA_AWARE}" in
     0|false|FALSE|no|NO|off|OFF) args+=(--no-direct-p2p-cuda-aware) ;;
     *) args+=(--direct-p2p-cuda-aware) ;;
+esac
+
+case "${USE_P2P_SEND_THREAD}" in
+    0|false|FALSE|no|NO|off|OFF) args+=(--no-p2p-send-thread) ;;
+    *) args+=(--use-p2p-send-thread) ;;
 esac
 
 if [[ -n "${MAX_GPUS}" ]]; then

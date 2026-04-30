@@ -37,6 +37,7 @@ struct fftm_3d_test_options
     int                           warmup   = 0;
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
+    bool                          use_p2p_send_thread         = true;
 };
 
 inline std::pair<std::size_t, std::size_t> choose_pencil_grid_3d( std::size_t num_procs )
@@ -77,6 +78,7 @@ usage_fftm_3d_test( const std::string &binary_name, bool allow_strategy_all, boo
         usage += " [--times repeats] [--warmup repeats]";
     usage += " [--use-direct-backward-receive|--no-direct-backward-receive]";
     usage += " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]";
+    usage += " [--use-p2p-send-thread|--no-p2p-send-thread]";
     usage += " [Nx Ny Nz]";
     return usage;
 }
@@ -185,6 +187,16 @@ inline fftm_3d_test_options parse_fftm_3d_test_options(
             options.direct_p2p_cuda_aware = false;
             argi += 1;
         }
+        else if ( arg == "--use-p2p-send-thread" )
+        {
+            options.use_p2p_send_thread = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-p2p-send-thread" )
+        {
+            options.use_p2p_send_thread = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -217,6 +229,7 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_test_opti
     ::fftm::fftm_init_options init_options;
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.use_p2p_send_thread         = options.use_p2p_send_thread;
     return init_options;
 }
 

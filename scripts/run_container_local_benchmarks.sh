@@ -27,6 +27,7 @@ INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-1}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
 USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
 DIRECT_P2P_CUDA_AWARE="${FFTM_DIRECT_P2P_CUDA_AWARE:-1}"
+USE_P2P_SEND_THREAD="${FFTM_USE_P2P_SEND_THREAD:-1}"
 BUILD_JOBS="${FFTM_BUILD_JOBS:-8}"
 CUDA_ARCH="${FFTM_CUDA_ARCH:--gencode arch=compute_80,code=sm_80 -gencode arch=compute_70,code=sm_70}"
 
@@ -79,6 +80,11 @@ esac
 case "${DIRECT_P2P_CUDA_AWARE}" in
     0|false|FALSE|no|NO|off|OFF) args+=(--no-direct-p2p-cuda-aware) ;;
     *) args+=(--direct-p2p-cuda-aware) ;;
+esac
+
+case "${USE_P2P_SEND_THREAD}" in
+    0|false|FALSE|no|NO|off|OFF) args+=(--no-p2p-send-thread) ;;
+    *) args+=(--use-p2p-send-thread) ;;
 esac
 
 if [[ "${INCLUDE_VERSIONED}" == "1" ]]; then

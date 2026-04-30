@@ -230,7 +230,7 @@ int dispatch_strategy(
 
 int main( int argc, char *argv[] )
 {
-    scfd::communication::mpi_wrap mpi( argc, argv );
+    scfd::communication::mpi_wrap mpi( argc, argv, MPI_THREAD_MULTIPLE );
     auto                          comm_info = mpi.comm_world();
     scfd::utils::log_mpi          log;
 

@@ -745,6 +745,10 @@ class LocalPaperBenchmarkRunner:
                 if self.args.direct_p2p_cuda_aware
                 else "--no-direct-p2p-cuda-aware"
             )
+            if spec.dim == 3:
+                command.append(
+                    "--use-p2p-send-thread" if self.args.use_p2p_send_thread else "--no-p2p-send-thread"
+                )
         command.extend(["--times", str(times)])
         if warmup > 0:
             command.extend(["--warmup", str(warmup)])
@@ -1061,6 +1065,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="direct_p2p_cuda_aware",
         help="Force CUDA-aware FFTM p2p paths through packed receive buffers.",
+    )
+    parser.add_argument(
+        "--use-p2p-send-thread",
+        action="store_true",
+        default=True,
+        help="Enable MPI sender-thread posting for optimized FFTM 3D p2p paths when MPI_THREAD_MULTIPLE is available. Default: enabled",
+    )
+    parser.add_argument(
+        "--no-p2p-send-thread",
+        action="store_false",
+        dest="use_p2p_send_thread",
+        help="Disable MPI sender-thread posting for optimized FFTM 3D p2p paths.",
     )
     parser.add_argument(
         "--epsilon",

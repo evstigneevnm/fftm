@@ -69,6 +69,7 @@ struct fftm_3d_benchmark_options
     std::string                   directory = "./resutls";
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
+    bool                          use_p2p_send_thread         = true;
 };
 
 template <class T>
@@ -111,7 +112,8 @@ inline std::string usage_fftm_3d_benchmark( const std::string &binary_name )
            " [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw]"
            " [--grid P1 P2] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path]"
            " [--use-direct-backward-receive|--no-direct-backward-receive]"
-           " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] [Nx Ny Nz]";
+           " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]"
+           " [--use-p2p-send-thread|--no-p2p-send-thread] [Nx Ny Nz]";
 }
 
 inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
@@ -375,6 +377,16 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.direct_p2p_cuda_aware = false;
             argi += 1;
         }
+        else if ( arg == "--use-p2p-send-thread" )
+        {
+            options.use_p2p_send_thread = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-p2p-send-thread" )
+        {
+            options.use_p2p_send_thread = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -406,6 +418,7 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
         base_options.times    = options.times;
         base_options.use_direct_backward_receive = options.use_direct_backward_receive;
         base_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+        base_options.use_p2p_send_thread         = options.use_p2p_send_thread;
         const auto grid       = choose_grid_3d( base_options, options.strategy, num_procs );
         options.p1            = grid.first;
         options.p2            = grid.second;
@@ -570,6 +583,7 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_benchmark
     ::fftm::fftm_init_options init_options;
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.use_p2p_send_thread         = options.use_p2p_send_thread;
     return init_options;
 }
 
