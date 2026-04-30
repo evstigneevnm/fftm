@@ -2,8 +2,10 @@
 #define __FFTM_DETAIL_MPI_TRANSPOSE_3D_H__
 
 #include <algorithm>
+#include <condition_variable>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -1798,20 +1800,21 @@ public:
         ensure_is_inited_();
         verify_forward_shapes_( in, out );
         reset_requests_();
-        pack_forward_optimized_layout_( in );
 
         switch ( mode )
         {
         case mpi_transpose_3d_mode::p2p_waitall:
-            forward_optimized_p2p_waitall_( out );
+            forward_optimized_p2p_waitall_( in, out );
             break;
         case mpi_transpose_3d_mode::p2p_waitany:
-            forward_optimized_p2p_waitany_( out );
+            forward_optimized_p2p_waitany_( in, out );
             break;
         case mpi_transpose_3d_mode::alltoallv:
+            pack_forward_optimized_layout_( in );
             forward_optimized_alltoallv_( out );
             break;
         case mpi_transpose_3d_mode::alltoallw:
+            pack_forward_optimized_layout_( in );
             forward_optimized_alltoallw_( out );
             break;
         }
@@ -1981,6 +1984,53 @@ private:
     {
         std::fill( send_requests_.begin(), send_requests_.end(), mpi_request_t() );
         std::fill( recv_requests_.begin(), recv_requests_.end(), mpi_request_t() );
+    }
+
+    struct send_ready_state_t
+    {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        std::vector<int>        ready_peers;
+    };
+
+    struct send_ready_callback_t
+    {
+        send_ready_state_t *state = nullptr;
+        int                 peer  = 0;
+    };
+
+    static void send_ready_callback_( void *data )
+    {
+        send_ready_callback_t *callback = static_cast<send_ready_callback_t *>( data );
+        {
+            std::lock_guard<std::mutex> lock( callback->state->mutex );
+            callback->state->ready_peers.push_back( callback->peer );
+        }
+        callback->state->cv.notify_one();
+    }
+
+    void enqueue_send_ready_callback_( int peer, send_ready_state_t &state, std::vector<send_ready_callback_t> &callbacks )
+    {
+        callbacks[peer].state = &state;
+        callbacks[peer].peer  = peer;
+        runtime_api_t::launch_host_func( streams_[peer].stream(), &send_ready_callback_, &callbacks[peer] );
+    }
+
+    template <class StartSend>
+    void wait_ready_and_post_sends_( int expected_sends, send_ready_state_t &state, StartSend start_send )
+    {
+        auto scope = profile_scope_( "wait_pack_ready_post_send" );
+        for ( int posted = 0; posted < expected_sends; ++posted )
+        {
+            int peer = 0;
+            {
+                std::unique_lock<std::mutex> lock( state.mutex );
+                state.cv.wait( lock, [&state] { return !state.ready_peers.empty(); } );
+                peer = state.ready_peers.back();
+                state.ready_peers.pop_back();
+            }
+            start_send( peer );
+        }
     }
 
     std::size_t bytes_from_elems_( std::size_t elems ) const
@@ -2287,7 +2337,7 @@ private:
 
     void pack_forward_optimized_chunk_async_(
         const value_type *src_ptr, std::size_t src_y_offset, std::size_t packed_y_size, value_type *dst_ptr,
-        typename runtime_api_t::stream_t stream
+        typename runtime_api_t::memcpy_kind_t kind, typename runtime_api_t::stream_t stream
     ) const
     {
         typename runtime_api_t::memcpy_3d_params_t params = {};
@@ -2302,8 +2352,18 @@ private:
             dst_ptr, dst_pitch_elems * sizeof( value_type ), dst_pitch_elems, nx_local_
         );
         params.extent = runtime_api_t::make_extent( dst_pitch_elems * sizeof( value_type ), nx_local_, 1 );
-        params.kind   = runtime_api_t::device_to_device_kind();
+        params.kind   = kind;
         runtime_api_t::memcpy_3d_async( &params, stream );
+    }
+
+    void pack_forward_optimized_chunk_async_(
+        const value_type *src_ptr, std::size_t src_y_offset, std::size_t packed_y_size, value_type *dst_ptr,
+        typename runtime_api_t::stream_t stream
+    ) const
+    {
+        pack_forward_optimized_chunk_async_(
+            src_ptr, src_y_offset, packed_y_size, dst_ptr, runtime_api_t::device_to_device_kind(), stream
+        );
     }
 
     void copy_backward_optimized_chunk_to_output_async_(
@@ -2374,6 +2434,34 @@ private:
         );
     }
 
+    template <class ArrayIn, class ArrayOut>
+    void copy_forward_optimized_self_from_input_to_output_async_( const ArrayIn &in, ArrayOut &out )
+    {
+        pack_forward_optimized_chunk_async_(
+            in.raw_ptr(), output_dim_.start_y[myid_i_], output_dim_.size_y[myid_i_],
+            out.raw_ptr() + forward_output_offset_elems_( myid_i_ ), runtime_api_t::device_to_device_kind(),
+            streams_[myid_i_].stream()
+        );
+    }
+
+    template <class ArrayIn>
+    void pack_forward_optimized_send_chunk_for_p2p_async_( const ArrayIn &in, int peer )
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        pack_forward_optimized_chunk_async_(
+            in.raw_ptr(), output_dim_.start_y[peer], output_dim_.size_y[peer],
+            send_buffer_.raw_ptr() + forward_send_offsets_[peer], runtime_api_t::device_to_device_kind(),
+            streams_[peer].stream()
+        );
+#else
+        pack_forward_optimized_chunk_async_(
+            in.raw_ptr(), output_dim_.start_y[peer], output_dim_.size_y[peer],
+            host_send_buffer_.raw_ptr() + forward_send_offsets_[peer], runtime_api_t::device_to_host_kind(),
+            streams_[peer].stream()
+        );
+#endif
+    }
+
     template <class ArrayOut>
     void copy_host_forward_optimized_chunk_to_output_async_( int source_i, ArrayOut &out )
     {
@@ -2438,45 +2526,72 @@ private:
 #endif
     }
 
-    template <class ArrayOut>
-    void forward_optimized_p2p_waitall_( ArrayOut &out )
+    template <class ArrayIn>
+    void copy_backward_optimized_send_chunk_to_host_async_( const ArrayIn &in, int peer )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        runtime_api_t::memcpy_async(
+            host_send_buffer_.raw_ptr() + backward_send_offsets_[peer], in.raw_ptr() + backward_send_offsets_[peer],
+            bytes_from_elems_( input_dim_.size_x[peer] * ny_local_ * nz_local_ ),
+            runtime_api_t::device_to_host_kind(), streams_[peer].stream()
+        );
+#else
+        (void)in;
+        (void)peer;
+#endif
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void forward_optimized_p2p_waitall_( const ArrayIn &in, ArrayOut &out )
     {
         auto      scope     = profile_scope_( "forward_optimized_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         {
-            auto phase = profile_scope_( "stage_send_to_host" );
-            copy_send_buffer_to_host_();
-        }
-#endif
-        {
-            auto phase = profile_scope_( "post_recv_send" );
+            auto phase = profile_scope_( "post_recv" );
             for ( int p = 0; p < comm_size; ++p )
             {
                 if ( p == myid_i_ )
                     continue;
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 value_type *recv_ptr = out.raw_ptr() + forward_output_offset_elems_( p );
-                value_type *send_ptr = send_buffer_.raw_ptr() + forward_send_offsets_[p];
 #else
                 value_type *recv_ptr = host_recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p );
-                value_type *send_ptr = host_send_buffer_.raw_ptr() + forward_send_offsets_[p];
 #endif
                 line_comm_info_.irecv(
                     recv_ptr,
                     detail::mpi_int_cast( forward_recv_elems_( p ), "same_z opt forward recv count" ),
                     mpi_value_type_, p, p, recv_requests_[p]
                 );
-                line_comm_info_.isend(
-                    send_ptr, detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z opt forward send count" ),
-                    mpi_value_type_, p, myid_i_, send_requests_[p]
-                );
+            }
+        }
+        send_ready_state_t                    send_ready;
+        std::vector<send_ready_callback_t>    callbacks( comm_size );
+        send_ready.ready_peers.reserve( comm_size );
+        {
+            auto phase = profile_scope_( "pack_send_chunks" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                pack_forward_optimized_send_chunk_for_p2p_async_( in, p );
+                enqueue_send_ready_callback_( p, send_ready, callbacks );
             }
         }
         {
             auto phase = profile_scope_( "self_copy" );
-            copy_forward_optimized_self_to_output_async_( out );
+            copy_forward_optimized_self_from_input_to_output_async_( in, out );
         }
+        wait_ready_and_post_sends_( comm_size - 1, send_ready, [this]( int p ) {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            value_type *send_ptr = send_buffer_.raw_ptr() + forward_send_offsets_[p];
+#else
+            value_type *send_ptr = host_send_buffer_.raw_ptr() + forward_send_offsets_[p];
+#endif
+            line_comm_info_.isend(
+                send_ptr, detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z opt forward send count" ),
+                mpi_value_type_, p, myid_i_, send_requests_[p]
+            );
+        } );
         {
             auto phase = profile_scope_( "wait_recv" );
             line_comm_info_.waitall( comm_size, recv_requests_.data() );
@@ -2496,45 +2611,57 @@ private:
         }
     }
 
-    template <class ArrayOut>
-    void forward_optimized_p2p_waitany_( ArrayOut &out )
+    template <class ArrayIn, class ArrayOut>
+    void forward_optimized_p2p_waitany_( const ArrayIn &in, ArrayOut &out )
     {
         auto      scope     = profile_scope_( "forward_optimized_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         {
-            auto phase = profile_scope_( "stage_send_to_host" );
-            copy_send_buffer_to_host_();
-        }
-#endif
-        {
-            auto phase = profile_scope_( "post_recv_send" );
+            auto phase = profile_scope_( "post_recv" );
             for ( int p = 0; p < comm_size; ++p )
             {
                 if ( p == myid_i_ )
                     continue;
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 value_type *recv_ptr = out.raw_ptr() + forward_output_offset_elems_( p );
-                value_type *send_ptr = send_buffer_.raw_ptr() + forward_send_offsets_[p];
 #else
                 value_type *recv_ptr = host_recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p );
-                value_type *send_ptr = host_send_buffer_.raw_ptr() + forward_send_offsets_[p];
 #endif
                 line_comm_info_.irecv(
                     recv_ptr,
                     detail::mpi_int_cast( forward_recv_elems_( p ), "same_z opt forward recv count" ),
                     mpi_value_type_, p, p, recv_requests_[p]
                 );
-                line_comm_info_.isend(
-                    send_ptr, detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z opt forward send count" ),
-                    mpi_value_type_, p, myid_i_, send_requests_[p]
-                );
+            }
+        }
+        send_ready_state_t                    send_ready;
+        std::vector<send_ready_callback_t>    callbacks( comm_size );
+        send_ready.ready_peers.reserve( comm_size );
+        {
+            auto phase = profile_scope_( "pack_send_chunks" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                pack_forward_optimized_send_chunk_for_p2p_async_( in, p );
+                enqueue_send_ready_callback_( p, send_ready, callbacks );
             }
         }
         {
             auto phase = profile_scope_( "self_copy" );
-            copy_forward_optimized_self_to_output_async_( out );
+            copy_forward_optimized_self_from_input_to_output_async_( in, out );
         }
+        wait_ready_and_post_sends_( comm_size - 1, send_ready, [this]( int p ) {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            value_type *send_ptr = send_buffer_.raw_ptr() + forward_send_offsets_[p];
+#else
+            value_type *send_ptr = host_send_buffer_.raw_ptr() + forward_send_offsets_[p];
+#endif
+            line_comm_info_.isend(
+                send_ptr, detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z opt forward send count" ),
+                mpi_value_type_, p, myid_i_, send_requests_[p]
+            );
+        } );
         {
             int completed = 0;
             while ( completed < comm_size - 1 )
@@ -2644,12 +2771,6 @@ private:
     {
         auto      scope     = profile_scope_( "backward_optimized_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        {
-            auto phase = profile_scope_( "stage_send_to_host" );
-            copy_backward_optimized_input_to_host_( in );
-        }
-#endif
         {
             auto phase = profile_scope_( "post_recv_send" );
             for ( int p = 0; p < comm_size; ++p )
@@ -2667,17 +2788,44 @@ private:
                     recv_ptr, detail::mpi_int_cast( backward_chunk_elems_( p ), "same_z opt backward recv count" ),
                     mpi_value_type_, p, p, recv_requests_[p]
                 );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 line_comm_info_.isend(
                     const_cast<value_type *>( send_ptr ),
                     detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count" ),
                     mpi_value_type_, p, myid_i_, send_requests_[p]
                 );
+#endif
             }
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        send_ready_state_t                 send_ready;
+        std::vector<send_ready_callback_t> callbacks( comm_size );
+        send_ready.ready_peers.reserve( comm_size );
+        {
+            auto phase = profile_scope_( "stage_send_to_host_chunks" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                copy_backward_optimized_send_chunk_to_host_async_( in, p );
+                enqueue_send_ready_callback_( p, send_ready, callbacks );
+            }
+        }
+#endif
         {
             auto phase = profile_scope_( "self_copy" );
             copy_backward_optimized_self_to_output_async_( in, out );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        wait_ready_and_post_sends_( comm_size - 1, send_ready, [this]( int p ) {
+            value_type *send_ptr = host_send_buffer_.raw_ptr() + backward_send_offsets_[p];
+            line_comm_info_.isend(
+                send_ptr,
+                detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count" ),
+                mpi_value_type_, p, myid_i_, send_requests_[p]
+            );
+        } );
+#endif
         {
             auto phase = profile_scope_( "wait_recv" );
             line_comm_info_.waitall( comm_size, recv_requests_.data() );
@@ -2709,12 +2857,6 @@ private:
     {
         auto      scope     = profile_scope_( "backward_optimized_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        {
-            auto phase = profile_scope_( "stage_send_to_host" );
-            copy_backward_optimized_input_to_host_( in );
-        }
-#endif
         {
             auto phase = profile_scope_( "post_recv_send" );
             for ( int p = 0; p < comm_size; ++p )
@@ -2732,17 +2874,44 @@ private:
                     recv_ptr, detail::mpi_int_cast( backward_chunk_elems_( p ), "same_z opt backward recv count" ),
                     mpi_value_type_, p, p, recv_requests_[p]
                 );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 line_comm_info_.isend(
                     const_cast<value_type *>( send_ptr ),
                     detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count" ),
                     mpi_value_type_, p, myid_i_, send_requests_[p]
                 );
+#endif
             }
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        send_ready_state_t                 send_ready;
+        std::vector<send_ready_callback_t> callbacks( comm_size );
+        send_ready.ready_peers.reserve( comm_size );
+        {
+            auto phase = profile_scope_( "stage_send_to_host_chunks" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_i_ )
+                    continue;
+                copy_backward_optimized_send_chunk_to_host_async_( in, p );
+                enqueue_send_ready_callback_( p, send_ready, callbacks );
+            }
+        }
+#endif
         {
             auto phase = profile_scope_( "self_copy" );
             copy_backward_optimized_self_to_output_async_( in, out );
         }
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        wait_ready_and_post_sends_( comm_size - 1, send_ready, [this]( int p ) {
+            value_type *send_ptr = host_send_buffer_.raw_ptr() + backward_send_offsets_[p];
+            line_comm_info_.isend(
+                send_ptr,
+                detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count" ),
+                mpi_value_type_, p, myid_i_, send_requests_[p]
+            );
+        } );
+#endif
         {
             int completed = 0;
             while ( completed < comm_size - 1 )

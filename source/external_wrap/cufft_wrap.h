@@ -27,6 +27,7 @@ struct cuda_runtime_api
     using stream_t           = cudaStream_t;
     using memcpy_kind_t      = cudaMemcpyKind;
     using memcpy_3d_params_t = cudaMemcpy3DParms;
+    using host_func_t        = cudaHostFn_t;
     using pos_t              = cudaPos;
     using pitched_ptr_t      = cudaPitchedPtr;
     using extent_t           = cudaExtent;
@@ -89,6 +90,11 @@ struct cuda_runtime_api
     static void stream_synchronize( stream_t stream )
     {
         CUDA_SAFE_CALL( cudaStreamSynchronize( stream ) );
+    }
+
+    static void launch_host_func( stream_t stream, host_func_t func, void *data )
+    {
+        CUDA_SAFE_CALL( cudaLaunchHostFunc( stream, func, data ) );
     }
 };
 
