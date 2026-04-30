@@ -2306,9 +2306,9 @@ private:
         runtime_api_t::memcpy_3d_async( &params, stream );
     }
 
-    void unpack_backward_optimized_chunk_async_(
+    void copy_backward_optimized_chunk_to_output_async_(
         const value_type *src_ptr, std::size_t src_y_size, std::size_t dst_y_offset, value_type *dst_ptr,
-        typename runtime_api_t::stream_t stream
+        typename runtime_api_t::memcpy_kind_t kind, typename runtime_api_t::stream_t stream
     ) const
     {
         typename runtime_api_t::memcpy_3d_params_t params = {};
@@ -2323,8 +2323,18 @@ private:
             dst_ptr, dst_pitch_elems * sizeof( value_type ), dst_pitch_elems, nx_local_
         );
         params.extent = runtime_api_t::make_extent( src_pitch_elems * sizeof( value_type ), nx_local_, 1 );
-        params.kind   = runtime_api_t::device_to_device_kind();
+        params.kind   = kind;
         runtime_api_t::memcpy_3d_async( &params, stream );
+    }
+
+    void unpack_backward_optimized_chunk_async_(
+        const value_type *src_ptr, std::size_t src_y_size, std::size_t dst_y_offset, value_type *dst_ptr,
+        typename runtime_api_t::stream_t stream
+    ) const
+    {
+        copy_backward_optimized_chunk_to_output_async_(
+            src_ptr, src_y_size, dst_y_offset, dst_ptr, runtime_api_t::device_to_device_kind(), stream
+        );
     }
 
     template <class ArrayIn>
@@ -2388,6 +2398,31 @@ private:
             recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( source_i ), output_dim_.size_y[source_i],
             output_dim_.start_y[source_i], out.raw_ptr(), streams_[source_i].stream()
         );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void copy_backward_optimized_self_to_output_async_( const ArrayIn &in, ArrayOut &out )
+    {
+        copy_backward_optimized_chunk_to_output_async_(
+            in.raw_ptr() + backward_send_offsets_[myid_i_], output_dim_.size_y[myid_i_],
+            output_dim_.start_y[myid_i_], out.raw_ptr(), runtime_api_t::device_to_device_kind(),
+            streams_[myid_i_].stream()
+        );
+    }
+
+    template <class ArrayOut>
+    void copy_host_backward_optimized_chunk_to_output_async_( int source_i, ArrayOut &out )
+    {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        copy_backward_optimized_chunk_to_output_async_(
+            host_recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( source_i ), output_dim_.size_y[source_i],
+            output_dim_.start_y[source_i], out.raw_ptr(), runtime_api_t::host_to_device_kind(),
+            streams_[source_i].stream()
+        );
+#else
+        (void)source_i;
+        (void)out;
+#endif
     }
 
     template <class ArrayIn>
@@ -2641,11 +2676,7 @@ private:
         }
         {
             auto phase = profile_scope_( "self_copy" );
-            runtime_api_t::memcpy_async(
-                recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
-                in.raw_ptr() + backward_send_offsets_[myid_i_], bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
-                runtime_api_t::device_to_device_kind(), streams_[myid_i_].stream()
-            );
+            copy_backward_optimized_self_to_output_async_( in, out );
         }
         {
             auto phase = profile_scope_( "wait_recv" );
@@ -2656,14 +2687,16 @@ private:
             auto phase = profile_scope_( "stage_recv_to_device" );
             for ( int p = 0; p < comm_size; ++p )
                 if ( p != myid_i_ )
-                    copy_host_backward_chunk_to_device_async_( p );
+                    copy_host_backward_optimized_chunk_to_output_async_( p, out );
         }
-#endif
+#else
         {
             auto phase = profile_scope_( "unpack_recv" );
             for ( int p = 0; p < comm_size; ++p )
-                unpack_backward_optimized_chunk_async_( p, out );
+                if ( p != myid_i_ )
+                    unpack_backward_optimized_chunk_async_( p, out );
         }
+#endif
         synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
@@ -2708,15 +2741,7 @@ private:
         }
         {
             auto phase = profile_scope_( "self_copy" );
-            runtime_api_t::memcpy_async(
-                recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( myid_i_ ),
-                in.raw_ptr() + backward_send_offsets_[myid_i_], bytes_from_elems_( backward_chunk_elems_( myid_i_ ) ),
-                runtime_api_t::device_to_device_kind(), streams_[myid_i_].stream()
-            );
-        }
-        {
-            auto phase = profile_scope_( "unpack_self" );
-            unpack_backward_optimized_chunk_async_( myid_i_, out );
+            copy_backward_optimized_self_to_output_async_( in, out );
         }
         {
             int completed = 0;
@@ -2732,13 +2757,14 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 {
                     auto phase = profile_scope_( "stage_recv_chunk_to_device" );
-                    copy_host_backward_chunk_to_device_async_( p );
+                    copy_host_backward_optimized_chunk_to_output_async_( p, out );
                 }
-#endif
+#else
                 {
                     auto phase = profile_scope_( "unpack_recv_chunk" );
                     unpack_backward_optimized_chunk_async_( p, out );
                 }
+#endif
                 completed++;
             }
         }
@@ -2764,19 +2790,20 @@ private:
         );
         {
             auto phase = profile_scope_( "stage_recv_to_device" );
-            copy_host_recv_buffer_to_device_();
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                copy_host_backward_optimized_chunk_to_output_async_( p, out );
         }
 #else
         line_comm_info_.alltoallv(
             const_cast<value_type *>( in.raw_ptr() ), backward_sendcounts_.data(), backward_sdispls_.data(), mpi_value_type_,
             recv_buffer_.raw_ptr(), backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
         );
-#endif
         {
             auto phase = profile_scope_( "unpack_recv" );
             for ( int p = 0; p < line_comm_info_.num_procs; ++p )
                 unpack_backward_optimized_chunk_async_( p, out );
         }
+#endif
         synchronize_streams_( "recv_copy_complete" );
     }
 
@@ -2814,7 +2841,8 @@ private:
         }
         {
             auto phase = profile_scope_( "stage_recv_to_device" );
-            copy_host_recv_buffer_to_device_();
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                copy_host_backward_optimized_chunk_to_output_async_( p, out );
         }
 #else
         {
@@ -2825,12 +2853,12 @@ private:
                 backward_rdispls_w.data(), backward_recvtypes_w_.data()
             );
         }
-#endif
         {
             auto phase = profile_scope_( "unpack_recv" );
             for ( int p = 0; p < line_comm_info_.num_procs; ++p )
                 unpack_backward_optimized_chunk_async_( p, out );
         }
+#endif
         synchronize_streams_( "recv_copy_complete" );
     }
 
