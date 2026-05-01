@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 FFTM_STRATEGIES_3D = ("slab-pencil", "pencil-slab", "pencil-pencil")
 FFTM_STRATEGIES_4D = ("pencil-pencil", "slab-slab")
 FFTM_MODES = ("p2p-waitall", "p2p-waitany", "alltoallv")
+FFTM_P2P_VARIANTS = ("value-packed", "datatype-direct", "byte-packed", "byte-direct")
 FFTS_STRATEGIES_4D = ("pencil-direct", "pencil-memcpy", "slab-direct", "slab-memcpy")
 
 SUMMARY_KEY_RE = re.compile(r"([A-Za-z0-9_]+)=((?:\([^)]*\))|[^,]+)")
@@ -80,6 +81,83 @@ def parse_scalar(value: str) -> Any:
     if re.fullmatch(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", value):
         return float(value)
     return value
+
+
+def parse_int_list(value: str) -> List[int]:
+    if not value:
+        return []
+    return [int(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def parse_gpu_size_map(value: str) -> Dict[int, List[int]]:
+    result: Dict[int, List[int]] = {}
+    if not value:
+        return result
+    for item in value.split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" in item:
+            gpu_text, size_text = item.split(":", 1)
+        elif "=" in item:
+            gpu_text, size_text = item.split("=", 1)
+        else:
+            raise ValueError(
+                "--extra-sizes-3d-by-gpu entries must have the form GPU:SIZES, "
+                "for example '1:1050;2:1344' or '1:540,729;2:686,900'"
+            )
+        gpu_count = int(gpu_text.strip())
+        sizes = parse_int_list(size_text)
+        if not sizes:
+            continue
+        result.setdefault(gpu_count, [])
+        result[gpu_count].extend(sizes)
+    return {gpu: sorted(set(sizes)) for gpu, sizes in result.items()}
+
+
+def parse_p2p_variants(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_P2P_VARIANTS)
+    selected = [item.strip() for item in value.split(",") if item.strip()]
+    unknown = [item for item in selected if item not in FFTM_P2P_VARIANTS]
+    if unknown:
+        raise ValueError(
+            f"unknown --p2p-variants value(s): {', '.join(unknown)}; "
+            f"allowed: configured, all, {', '.join(FFTM_P2P_VARIANTS)}"
+        )
+    return selected or [None]
+
+
+def p2p_variant_flags(
+    variant: Optional[str],
+    default_direct_backward_receive: bool,
+    default_direct_p2p_cuda_aware: bool,
+    default_p2p_byte_transfer: bool,
+) -> Tuple[bool, bool, bool]:
+    if variant is None or variant == "nca-staging":
+        return default_direct_backward_receive, default_direct_p2p_cuda_aware, default_p2p_byte_transfer
+    if variant == "value-packed":
+        return False, True, False
+    if variant == "datatype-direct":
+        return True, True, False
+    if variant == "byte-packed":
+        return False, True, True
+    if variant == "byte-direct":
+        return True, True, True
+    raise ValueError(f"unknown p2p variant: {variant}")
+
+
+def p2p_variants_for_spec(
+    dim: int, transport: str, strategy: str, mode: str, selected: Sequence[Optional[str]]
+) -> List[Optional[str]]:
+    if dim == 3 and transport == "cuda_aware" and strategy == "slab-pencil" and mode.startswith("p2p-"):
+        return list(selected)
+    if dim == 3 and transport == "non_cuda_aware" and strategy == "slab-pencil" and mode.startswith("p2p-"):
+        return ["nca-staging"] if selected != [None] else [None]
+    return [None]
 
 
 def parse_summary_line(line: str) -> Optional[Dict[str, Any]]:
@@ -358,6 +436,7 @@ class RunSpec:
     uses_mpi: bool
     supports_directory: bool
     memory_family: str
+    p2p_variant: Optional[str] = None
 
     def size_arity(self) -> int:
         return 3 if self.dim == 3 else 4
@@ -463,7 +542,13 @@ def add_ffts_specs(specs: List[RunSpec], binaries: Dict[str, Path]) -> None:
             )
 
 
-def add_fftm_specs(specs: List[RunSpec], binaries: Dict[str, Path], max_gpus: int, include_nca: bool) -> None:
+def add_fftm_specs(
+    specs: List[RunSpec],
+    binaries: Dict[str, Path],
+    max_gpus: int,
+    include_nca: bool,
+    p2p_variants: Sequence[Optional[str]],
+) -> None:
     transports: List[Tuple[str, str]] = [("cuda_aware", ".bin")]
     if include_nca:
         transports.append(("non_cuda_aware", "_nca.bin"))
@@ -476,22 +561,24 @@ def add_fftm_specs(specs: List[RunSpec], binaries: Dict[str, Path], max_gpus: in
             if benchmark_3d in binaries:
                 for strategy in FFTM_STRATEGIES_3D:
                     for mode in FFTM_MODES:
-                        specs.append(
-                            RunSpec(
-                                suite="fftm",
-                                dim=3,
-                                case_name="benchmark",
-                                binary_name=benchmark_3d,
-                                binary_path=str(binaries[benchmark_3d]),
-                                num_gpus=num_gpus,
-                                transport=transport_name,
-                                strategy=strategy,
-                                mode=mode,
-                                uses_mpi=True,
-                                supports_directory=True,
-                                memory_family=f"fftm:3d:small:{num_gpus}:{strategy}",
+                        for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
+                            specs.append(
+                                RunSpec(
+                                    suite="fftm",
+                                    dim=3,
+                                    case_name="benchmark",
+                                    binary_name=benchmark_3d,
+                                    binary_path=str(binaries[benchmark_3d]),
+                                    num_gpus=num_gpus,
+                                    transport=transport_name,
+                                    strategy=strategy,
+                                    mode=mode,
+                                    uses_mpi=True,
+                                    supports_directory=True,
+                                    memory_family=f"fftm:3d:small:{num_gpus}:{strategy}",
+                                    p2p_variant=variant,
+                                )
                             )
-                        )
 
             if benchmark_4d in binaries:
                 for strategy in FFTM_STRATEGIES_4D:
@@ -519,22 +606,24 @@ def add_fftm_specs(specs: List[RunSpec], binaries: Dict[str, Path], max_gpus: in
                     family_kind = "compare" if testcase == 1 else "poisson" if testcase == 4 else "small"
                     for strategy in FFTM_STRATEGIES_3D:
                         for mode in FFTM_MODES:
-                            specs.append(
-                                RunSpec(
-                                    suite="fftm",
-                                    dim=3,
-                                    case_name=f"v{testcase}",
-                                    binary_name=name_3d,
-                                    binary_path=str(binaries[name_3d]),
-                                    num_gpus=num_gpus,
-                                    transport=transport_name,
-                                    strategy=strategy,
-                                    mode=mode,
-                                    uses_mpi=True,
-                                    supports_directory=False,
-                                    memory_family=f"fftm:3d:{family_kind}:{num_gpus}:{strategy}",
+                            for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
+                                specs.append(
+                                    RunSpec(
+                                        suite="fftm",
+                                        dim=3,
+                                        case_name=f"v{testcase}",
+                                        binary_name=name_3d,
+                                        binary_path=str(binaries[name_3d]),
+                                        num_gpus=num_gpus,
+                                        transport=transport_name,
+                                        strategy=strategy,
+                                        mode=mode,
+                                        uses_mpi=True,
+                                        supports_directory=False,
+                                        memory_family=f"fftm:3d:{family_kind}:{num_gpus}:{strategy}",
+                                        p2p_variant=variant,
+                                    )
                                 )
-                            )
 
                 name_4d = f"test_fftm_v{testcase}_4D{suffix}"
                 if name_4d in binaries:
@@ -559,10 +648,12 @@ def add_fftm_specs(specs: List[RunSpec], binaries: Dict[str, Path], max_gpus: in
                             )
 
 
-def build_measurement_specs(binaries: Dict[str, Path], max_gpus: int, include_nca: bool) -> List[RunSpec]:
+def build_measurement_specs(
+    binaries: Dict[str, Path], max_gpus: int, include_nca: bool, p2p_variants: Sequence[Optional[str]]
+) -> List[RunSpec]:
     specs: List[RunSpec] = []
     add_ffts_specs(specs, binaries)
-    add_fftm_specs(specs, binaries, max_gpus=max_gpus, include_nca=include_nca)
+    add_fftm_specs(specs, binaries, max_gpus=max_gpus, include_nca=include_nca, p2p_variants=p2p_variants)
     return specs
 
 
@@ -633,8 +724,14 @@ class LocalPaperBenchmarkRunner:
             raise RuntimeError("No GPUs detected. Use --device-memory-mib to override if needed.")
         self.max_gpus = min(self.args.max_gpus or len(self.effective_gpus), len(self.effective_gpus))
         self.binaries = discover_binaries(self.tests_root)
+        self.p2p_variants = parse_p2p_variants(self.args.p2p_variants)
+        self.extra_sizes_3d = parse_int_list(self.args.extra_sizes_3d)
+        self.extra_sizes_3d_by_gpu = parse_gpu_size_map(self.args.extra_sizes_3d_by_gpu)
         self.specs = build_measurement_specs(
-            self.binaries, max_gpus=self.max_gpus, include_nca=not self.args.skip_nca
+            self.binaries,
+            max_gpus=self.max_gpus,
+            include_nca=not self.args.skip_nca,
+            p2p_variants=self.p2p_variants,
         )
         if not self.specs:
             raise RuntimeError(f"No runnable benchmark/test binaries were found under {self.tests_root}")
@@ -735,14 +832,20 @@ class LocalPaperBenchmarkRunner:
         else:
             command.extend(["--epsilon", str(self.args.validation_epsilon)])
         if spec.suite == "fftm":
+            use_direct_backward_receive, direct_p2p_cuda_aware, use_p2p_byte_transfer = p2p_variant_flags(
+                spec.p2p_variant,
+                self.args.use_direct_backward_receive,
+                self.args.direct_p2p_cuda_aware,
+                self.args.use_p2p_byte_transfer,
+            )
             command.append(
                 "--use-direct-backward-receive"
-                if self.args.use_direct_backward_receive
+                if use_direct_backward_receive
                 else "--no-direct-backward-receive"
             )
             command.append(
                 "--direct-p2p-cuda-aware"
-                if self.args.direct_p2p_cuda_aware
+                if direct_p2p_cuda_aware
                 else "--no-direct-p2p-cuda-aware"
             )
             if spec.dim == 3:
@@ -751,7 +854,7 @@ class LocalPaperBenchmarkRunner:
                 )
                 command.append(
                     "--use-p2p-byte-transfer"
-                    if self.args.use_p2p_byte_transfer
+                    if use_p2p_byte_transfer
                     else "--no-p2p-byte-transfer"
                 )
         command.extend(["--times", str(times)])
@@ -772,7 +875,7 @@ class LocalPaperBenchmarkRunner:
         slug = slugify(
             f"{self.run_index:05d}_{phase}_{spec.suite}_{spec.case_name}_{spec.dim}d_"
             f"g{spec.num_gpus}_{spec.transport}_{spec.strategy or 'default'}_{spec.mode or 'none'}_"
-            f"{'x'.join(str(s) for s in sizes)}"
+            f"{spec.p2p_variant or 'configured'}_{'x'.join(str(s) for s in sizes)}"
         )
         raw_path = self.raw_dir / f"{slug}.log"
         started_at = now_iso()
@@ -951,9 +1054,16 @@ class LocalPaperBenchmarkRunner:
             if chosen_n is None:
                 skipped_runs += 1
                 continue
-            record = self.execute_run(spec, self.size_tuple(spec.dim, int(chosen_n)), self.args.measure_times, PHASE_MEASURE)
-            if record["returncode"] != 0:
-                failed_runs += 1
+            side_lengths = [int(chosen_n)]
+            if spec.dim == 3 and spec.case_name == "benchmark":
+                side_lengths.extend(self.extra_sizes_3d)
+                side_lengths.extend(self.extra_sizes_3d_by_gpu.get(spec.num_gpus, []))
+            for side_length in sorted(set(side_lengths)):
+                record = self.execute_run(
+                    spec, self.size_tuple(spec.dim, int(side_length)), self.args.measure_times, PHASE_MEASURE
+                )
+                if record["returncode"] != 0:
+                    failed_runs += 1
 
         summary = {
             "created_at": now_iso(),
@@ -1094,6 +1204,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="use_p2p_byte_transfer",
         help="Disable MPI_BYTE chunked peer transfers.",
+    )
+    parser.add_argument(
+        "--p2p-variants",
+        default="configured",
+        help=(
+            "3D slab-pencil CUDA-aware p2p variant matrix: configured, all, or comma-separated subset of "
+            "value-packed,datatype-direct,byte-packed,byte-direct. Default: configured"
+        ),
+    )
+    parser.add_argument(
+        "--extra-sizes-3d",
+        default="",
+        help="Extra 3D benchmark side lengths to run in addition to fitted sizes, e.g. 540,686,729,900.",
+    )
+    parser.add_argument(
+        "--extra-sizes-3d-by-gpu",
+        default="",
+        help=(
+            "Per-GPU-count 3D benchmark side lengths appended to fitted/global sizes, "
+            "e.g. '1:1050;2:1344;3:1536' or '1:540,729;2:686,900'."
+        ),
     )
     parser.add_argument(
         "--epsilon",

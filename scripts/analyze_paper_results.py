@@ -46,6 +46,7 @@ class ResultRow:
     transport: str
     strategy: str
     mode: str
+    p2p_variant: str
     num_gpus: int
     returncode: int
     sizes: Tuple[int, ...]
@@ -301,6 +302,7 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
             sizes = extract_sizes(spec, summary, rec)
             strategy = summary.get("strategy") or spec.get("strategy") or "-"
             mode = summary.get("mode") or spec.get("mode") or "-"
+            p2p_variant = spec.get("p2p_variant") or "configured"
             transport = spec.get("transport") or "unknown"
             suite = spec.get("suite") or "unknown"
             dim = int(spec.get("dim") or len(sizes) or 0)
@@ -332,6 +334,7 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
                     transport=transport,
                     strategy=strategy,
                     mode=mode,
+                    p2p_variant=p2p_variant,
                     num_gpus=int(spec.get("num_gpus") or 0),
                     returncode=int(rec.get("returncode") if rec.get("returncode") is not None else -999),
                     sizes=sizes,
@@ -466,6 +469,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                 "transport",
                 "strategy",
                 "mode",
+                "p2p_variant",
                 "num_gpus",
                 "returncode",
                 "sizes",
@@ -494,6 +498,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                     r.transport,
                     r.strategy,
                     r.mode,
+                    r.p2p_variant,
                     r.num_gpus,
                     r.returncode,
                     "x".join(str(v) for v in r.sizes),
@@ -626,6 +631,7 @@ def best_configs_table(rows: List[ResultRow], table_dir: Path, font_size: float)
                     latex_escape(transport_label(best.transport)),
                     latex_escape(best.strategy),
                     latex_escape(best.mode),
+                    latex_escape(best.p2p_variant),
                     latex_escape(fmt_size(best.sizes)),
                     fmt_float(best.avg_wall_ms, 2),
                     fmt_float(best.throughput_gpoints_s, 3),
@@ -636,13 +642,14 @@ def best_configs_table(rows: List[ResultRow], table_dir: Path, font_size: float)
     return write_table(
         table_dir / "table_best_configs.tex",
         "Best Benchmark Configurations",
-        "llllllllrr",
+        "lllllllrrrr",
         [
             "Dim",
             "Impl.",
             "Transport",
             "Strategy",
             "Mode",
+            "Variant",
             "Size",
             "Time [ms]",
             "Gpts/s",
@@ -659,7 +666,7 @@ def mode_transport_table(rows: List[ResultRow], table_dir: Path, font_size: floa
     failures = defaultdict(list)
     for r in benchmark:
         if not r.ok:
-            failures[(r.dim, r.transport, r.strategy)].append(r.mode)
+            failures[(r.dim, r.transport, r.strategy)].append(f"{r.mode}/{r.p2p_variant}")
     table_rows: List[List[str]] = []
     for dim in [3, 4]:
         strategies = STRATEGY_ORDER.get(dim, sorted(set(r.strategy for r in benchmark if r.dim == dim)))
@@ -684,6 +691,7 @@ def mode_transport_table(rows: List[ResultRow], table_dir: Path, font_size: floa
                         latex_escape(strategy),
                         latex_escape(transport_label(transport)),
                         latex_escape(best.mode if best else "-"),
+                        latex_escape(best.p2p_variant if best else "-"),
                         fmt_float(best.avg_wall_ms if best else None, 2),
                         fmt_float(best.throughput_gpoints_s if best else None, 3),
                         latex_escape(failed_modes or "-"),
@@ -692,8 +700,8 @@ def mode_transport_table(rows: List[ResultRow], table_dir: Path, font_size: floa
     return write_table(
         table_dir / "table_mode_transport.tex",
         "Best FFTM Mode by Strategy and Transport",
-        "llllrrl",
-        ["Dim", "Strategy", "Transport", "Best mode", "Time [ms]", "Gpts/s", "Failed modes"],
+        "lllllrrl",
+        ["Dim", "Strategy", "Transport", "Best mode", "Best variant", "Time [ms]", "Gpts/s", "Failed modes"],
         table_rows,
         font_size,
     )
@@ -742,15 +750,15 @@ def failures_table(rows: List[ResultRow], table_dir: Path, font_size: float) -> 
     for r in rows:
         if r.ok:
             continue
-        key = (r.suite, r.dim, r.transport, r.strategy, r.mode)
+        key = (r.suite, r.dim, r.transport, r.strategy, r.mode, r.p2p_variant)
         counter[key] += 1
         case_sets[key].add(r.case_name)
     if not counter:
-        table_rows = [["-", "-", "-", "-", "-", "0", "-"]]
+        table_rows = [["-", "-", "-", "-", "-", "-", "0", "-"]]
     else:
         table_rows = []
-        for key, count in sorted(counter.items(), key=lambda kv: (kv[0][1], kv[0][0], kv[0][2], kv[0][3], kv[0][4])):
-            suite, dim, transport, strategy, mode = key
+        for key, count in sorted(counter.items(), key=lambda kv: (kv[0][1], kv[0][0], kv[0][2], kv[0][3], kv[0][4], kv[0][5])):
+            suite, dim, transport, strategy, mode, p2p_variant = key
             table_rows.append(
                 [
                     f"{dim}D",
@@ -758,6 +766,7 @@ def failures_table(rows: List[ResultRow], table_dir: Path, font_size: float) -> 
                     latex_escape(transport_label(transport)),
                     latex_escape(strategy),
                     latex_escape(mode),
+                    latex_escape(p2p_variant),
                     str(count),
                     latex_escape(",".join(sorted(case_sets[key]))),
                 ]
@@ -765,8 +774,8 @@ def failures_table(rows: List[ResultRow], table_dir: Path, font_size: float) -> 
     return write_table(
         table_dir / "table_failures.tex",
         "Failed Measurement Summary",
-        "lllllrl",
-        ["Dim", "Impl.", "Transport", "Strategy", "Mode", "Count", "Cases"],
+        "llllllrl",
+        ["Dim", "Impl.", "Transport", "Strategy", "Mode", "Variant", "Count", "Cases"],
         table_rows,
         font_size,
     )
@@ -780,9 +789,14 @@ def impl_label(row: ResultRow) -> str:
 
 
 def config_label(row: ResultRow) -> str:
+    parts: List[str] = []
+    if row.strategy and row.strategy != "-":
+        parts.append(row.strategy)
     if row.mode and row.mode != "-":
-        return f"{row.strategy}, {row.mode}"
-    return row.strategy
+        parts.append(row.mode)
+    if row.p2p_variant and row.p2p_variant not in {"configured", "nca-staging"}:
+        parts.append(row.p2p_variant)
+    return ", ".join(parts) if parts else row.strategy
 
 
 def entry_float(entry: dict, key: str) -> Optional[float]:

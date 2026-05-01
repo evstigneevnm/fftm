@@ -2461,13 +2461,36 @@ private:
 #endif
     }
 
-    bool direct_backward_receive_enabled_() const
+    bool direct_backward_receive_requested_() const
     {
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        return direct_p2p_cuda_aware_ && use_direct_backward_receive_ && !cuda_aware_byte_p2p_enabled_();
+        return direct_p2p_cuda_aware_ && use_direct_backward_receive_;
 #else
         return false;
 #endif
+    }
+
+    bool direct_backward_value_receive_enabled_() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return direct_backward_receive_requested_() && !cuda_aware_byte_p2p_enabled_();
+#else
+        return false;
+#endif
+    }
+
+    bool direct_backward_byte_receive_enabled_() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return direct_backward_receive_requested_() && cuda_aware_byte_p2p_enabled_();
+#else
+        return false;
+#endif
+    }
+
+    bool direct_backward_receive_enabled_() const
+    {
+        return direct_backward_value_receive_enabled_() || direct_backward_byte_receive_enabled_();
     }
 
     std::size_t max_mpi_byte_chunk_bytes_() const
@@ -2540,6 +2563,86 @@ private:
     std::size_t direct_backward_recv_base_offset_elems_( int source_i ) const
     {
         return output_dim_.start_y[source_i] * nz_local_;
+    }
+
+    std::size_t direct_backward_recv_base_offset_bytes_( int source_i ) const
+    {
+        return bytes_from_elems_( direct_backward_recv_base_offset_elems_( source_i ) );
+    }
+
+    std::size_t direct_backward_row_bytes_( int source_i ) const
+    {
+        return bytes_from_elems_( output_dim_.size_y[source_i] * nz_local_ );
+    }
+
+    std::size_t direct_backward_stride_bytes_() const
+    {
+        return bytes_from_elems_( ny_global_ * nz_local_ );
+    }
+
+    std::size_t direct_backward_byte_rows_per_chunk_( int source_i ) const
+    {
+        const std::size_t row_bytes = direct_backward_row_bytes_( source_i );
+        if ( row_bytes == 0 )
+            return 1;
+        return std::max<std::size_t>( 1, max_mpi_byte_chunk_bytes_() / row_bytes );
+    }
+
+    std::size_t direct_backward_send_row_bytes_() const
+    {
+        return bytes_from_elems_( ny_local_ * nz_local_ );
+    }
+
+    std::size_t direct_backward_byte_send_rows_per_chunk_() const
+    {
+        const std::size_t row_bytes = direct_backward_send_row_bytes_();
+        if ( row_bytes == 0 )
+            return 1;
+        return std::max<std::size_t>( 1, max_mpi_byte_chunk_bytes_() / row_bytes );
+    }
+
+    struct direct_byte_recv_chunk_t
+    {
+        int         peer         = 0;
+        std::size_t offset_bytes = 0;
+        mpi_dtype_t datatype;
+    };
+
+    void post_direct_backward_byte_irecv_(
+        void *base_ptr, int source, std::vector<mpi_request_t> &requests,
+        std::vector<int> *request_peers = nullptr, std::vector<int> *remaining_by_peer = nullptr
+    )
+    {
+        char *base = static_cast<char *>( base_ptr );
+        for ( std::size_t i = 0; i < direct_backward_byte_recv_chunks_[source].size(); ++i )
+        {
+            const direct_byte_recv_chunk_t &chunk = direct_backward_byte_recv_chunks_[source][i];
+            requests.push_back( mpi_request_t() );
+            line_comm_info_.irecv( base + chunk.offset_bytes, 1, chunk.datatype, source, source, requests.back() );
+            if ( request_peers != nullptr )
+                request_peers->push_back( source );
+            if ( remaining_by_peer != nullptr )
+                ++( *remaining_by_peer )[source];
+        }
+    }
+
+    void post_direct_backward_byte_isend_( const void *ptr, int dest, std::vector<mpi_request_t> &requests )
+    {
+        const char       *base      = static_cast<const char *>( ptr );
+        const mpi_dtype_t byte_type = scfd::communication::detail::mpi_data_type<char>::mpi_type();
+        const std::size_t row_bytes = direct_backward_send_row_bytes_();
+        const std::size_t rows_step = direct_backward_byte_send_rows_per_chunk_();
+        const std::size_t rows_total = input_dim_.size_x[dest];
+        for ( std::size_t row = 0; row < rows_total; row += rows_step )
+        {
+            const std::size_t rows       = std::min( rows_step, rows_total - row );
+            const std::size_t this_bytes = rows * row_bytes;
+            requests.push_back( mpi_request_t() );
+            line_comm_info_.isend(
+                base + row * row_bytes, detail::mpi_int_cast( this_bytes, "same_z direct byte backward send count" ),
+                byte_type, dest, myid_i_, requests.back()
+            );
+        }
     }
 
     void init_forward_layout_()
@@ -2620,10 +2723,13 @@ private:
     {
         const int comm_size = line_comm_info_.num_procs;
         free_direct_backward_recv_types_();
-        if ( !direct_backward_receive_enabled_() )
+        if ( !direct_backward_receive_requested_() )
             return;
 
-        direct_backward_recvtypes_.assign( comm_size, mpi_dtype_t() );
+        if ( direct_backward_value_receive_enabled_() )
+            direct_backward_recvtypes_.assign( comm_size, mpi_dtype_t() );
+        if ( direct_backward_byte_receive_enabled_() )
+            direct_backward_byte_recv_chunks_.assign( comm_size, std::vector<direct_byte_recv_chunk_t>() );
 
         for ( int p = 0; p < comm_size; ++p )
         {
@@ -2631,14 +2737,42 @@ private:
                 continue;
 
             const int count = detail::mpi_int_cast( nx_local_, "same_z direct backward recv count" );
-            const int blocklength =
-                detail::mpi_int_cast( output_dim_.size_y[p] * nz_local_, "same_z direct backward recv blocklength" );
-            const int stride =
-                detail::mpi_int_cast( ny_global_ * nz_local_, "same_z direct backward recv stride" );
 
-            direct_backward_recvtypes_[p] =
-                scfd::communication::detail::type_vector( count, blocklength, stride, mpi_value_type_ );
-            scfd::communication::detail::type_commit( direct_backward_recvtypes_[p] );
+            if ( direct_backward_value_receive_enabled_() )
+            {
+                const int blocklength = detail::mpi_int_cast(
+                    output_dim_.size_y[p] * nz_local_, "same_z direct backward recv blocklength"
+                );
+                const int stride =
+                    detail::mpi_int_cast( ny_global_ * nz_local_, "same_z direct backward recv stride" );
+
+                direct_backward_recvtypes_[p] =
+                    scfd::communication::detail::type_vector( count, blocklength, stride, mpi_value_type_ );
+                scfd::communication::detail::type_commit( direct_backward_recvtypes_[p] );
+            }
+            if ( direct_backward_byte_receive_enabled_() )
+            {
+                const int         blocklength = detail::mpi_int_cast(
+                    direct_backward_row_bytes_( p ), "same_z direct byte backward recv blocklength"
+                );
+                const int         stride =
+                    detail::mpi_int_cast( direct_backward_stride_bytes_(), "same_z direct byte backward recv stride" );
+                const mpi_dtype_t byte_type = scfd::communication::detail::mpi_data_type<char>::mpi_type();
+                const std::size_t rows_step = direct_backward_byte_rows_per_chunk_( p );
+                for ( std::size_t row = 0; row < nx_local_; row += rows_step )
+                {
+                    const std::size_t rows = std::min( rows_step, nx_local_ - row );
+                    direct_byte_recv_chunk_t chunk;
+                    chunk.peer         = p;
+                    chunk.offset_bytes = direct_backward_recv_base_offset_bytes_( p ) + row * direct_backward_stride_bytes_();
+                    chunk.datatype     = scfd::communication::detail::type_vector(
+                        detail::mpi_int_cast( rows, "same_z direct byte backward recv rows" ), blocklength, stride,
+                        byte_type
+                    );
+                    scfd::communication::detail::type_commit( chunk.datatype );
+                    direct_backward_byte_recv_chunks_[p].push_back( chunk );
+                }
+            }
         }
     }
 
@@ -2663,6 +2797,14 @@ private:
             scfd::communication::detail::type_free( direct_backward_recvtypes_[i] );
         }
         direct_backward_recvtypes_.clear();
+        for ( std::size_t p = 0; p < direct_backward_byte_recv_chunks_.size(); ++p )
+        {
+            for ( std::size_t i = 0; i < direct_backward_byte_recv_chunks_[p].size(); ++i )
+            {
+                scfd::communication::detail::type_free( direct_backward_byte_recv_chunks_[p][i].datatype );
+            }
+        }
+        direct_backward_byte_recv_chunks_.clear();
     }
 
     void synchronize_streams_( const char *label = "stream_synchronize" )
@@ -3379,14 +3521,18 @@ private:
                     continue;
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 const value_type *send_ptr = in.raw_ptr() + backward_send_offsets_[p];
-                if ( cuda_aware_byte_p2p_enabled_() )
+                if ( direct_backward_byte_receive_enabled_() )
+                {
+                    post_direct_backward_byte_irecv_( out.raw_ptr(), p, byte_recv_requests );
+                }
+                else if ( cuda_aware_byte_p2p_enabled_() )
                 {
                     value_type *recv_ptr = recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p );
                     post_byte_irecv_(
                         recv_ptr, bytes_from_elems_( backward_chunk_elems_( p ) ), p, p, byte_recv_requests
                     );
                 }
-                else if ( direct_backward_receive_enabled_() )
+                else if ( direct_backward_value_receive_enabled_() )
                 {
                     value_type *recv_ptr = out.raw_ptr() + direct_backward_recv_base_offset_elems_( p );
                     line_comm_info_.irecv( recv_ptr, 1, direct_backward_recvtypes_[p], p, p, recv_requests_[p] );
@@ -3411,10 +3557,13 @@ private:
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 if ( cuda_aware_byte_p2p_enabled_() )
                 {
-                    post_byte_isend_(
-                        send_ptr, bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), p, myid_i_,
-                        byte_send_requests
-                    );
+                    if ( direct_backward_byte_receive_enabled_() )
+                        post_direct_backward_byte_isend_( send_ptr, p, byte_send_requests );
+                    else
+                        post_byte_isend_(
+                            send_ptr, bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), p, myid_i_,
+                            byte_send_requests
+                        );
                 }
                 else
                 {
@@ -3535,7 +3684,13 @@ private:
                     continue;
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 const value_type *send_ptr = in.raw_ptr() + backward_send_offsets_[p];
-                if ( cuda_aware_byte_p2p_enabled_() )
+                if ( direct_backward_byte_receive_enabled_() )
+                {
+                    post_direct_backward_byte_irecv_(
+                        out.raw_ptr(), p, byte_recv_requests, &byte_recv_peers, &byte_recv_remaining
+                    );
+                }
+                else if ( cuda_aware_byte_p2p_enabled_() )
                 {
                     value_type *recv_ptr = recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p );
                     post_byte_irecv_(
@@ -3543,7 +3698,7 @@ private:
                         &byte_recv_peers, &byte_recv_remaining
                     );
                 }
-                else if ( direct_backward_receive_enabled_() )
+                else if ( direct_backward_value_receive_enabled_() )
                 {
                     value_type *recv_ptr = out.raw_ptr() + direct_backward_recv_base_offset_elems_( p );
                     line_comm_info_.irecv( recv_ptr, 1, direct_backward_recvtypes_[p], p, p, recv_requests_[p] );
@@ -3568,10 +3723,13 @@ private:
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 if ( cuda_aware_byte_p2p_enabled_() )
                 {
-                    post_byte_isend_(
-                        send_ptr, bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), p, myid_i_,
-                        byte_send_requests
-                    );
+                    if ( direct_backward_byte_receive_enabled_() )
+                        post_direct_backward_byte_isend_( send_ptr, p, byte_send_requests );
+                    else
+                        post_byte_isend_(
+                            send_ptr, bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), p, myid_i_,
+                            byte_send_requests
+                        );
                 }
                 else
                 {
@@ -3645,7 +3803,7 @@ private:
                         break;
                     const int p = byte_recv_peers[request_index];
                     --byte_recv_remaining[p];
-                    if ( byte_recv_remaining[p] == 0 )
+                    if ( byte_recv_remaining[p] == 0 && !direct_backward_byte_receive_enabled_() )
                     {
                         auto phase = profile_scope_( "unpack_recv_chunk" );
                         unpack_backward_optimized_chunk_async_( p, out );
@@ -4643,6 +4801,7 @@ private:
     std::vector<mpi_dtype_t> backward_sendtypes_w_;
     std::vector<mpi_dtype_t> backward_recvtypes_w_;
     std::vector<mpi_dtype_t> direct_backward_recvtypes_;
+    std::vector<std::vector<direct_byte_recv_chunk_t>> direct_backward_byte_recv_chunks_;
 };
 
 } // namespace fftm

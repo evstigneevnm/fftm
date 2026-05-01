@@ -38,6 +38,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from run_local_paper_benchmarks import (  # noqa: E402
     FFTM_MODES,
+    FFTM_P2P_VARIANTS,
     FFTM_STRATEGIES_3D,
     FFTM_STRATEGIES_4D,
     FFTS_STRATEGIES_4D,
@@ -48,6 +49,10 @@ from run_local_paper_benchmarks import (  # noqa: E402
     mib_to_bytes,
     now_iso,
     parse_run_output,
+    p2p_variant_flags,
+    p2p_variants_for_spec,
+    parse_gpu_size_map,
+    parse_p2p_variants,
     slugify,
 )
 
@@ -177,6 +182,7 @@ def build_specs(
     modes: Sequence[str],
     strategies_3d: Sequence[str],
     strategies_4d: Sequence[str],
+    p2p_variants: Sequence[Optional[str]],
 ) -> List[RunSpec]:
     specs: List[RunSpec] = []
 
@@ -237,22 +243,24 @@ def build_specs(
                     if name in binaries:
                         for strategy in strategies:
                             for mode in modes:
-                                specs.append(
-                                    RunSpec(
-                                        suite="fftm",
-                                        dim=dim,
-                                        case_name="benchmark",
-                                        binary_name=name,
-                                        binary_path=str(binaries[name]),
-                                        num_gpus=num_gpus,
-                                        transport=transport,
-                                        strategy=strategy,
-                                        mode=mode,
-                                        uses_mpi=True,
-                                        supports_directory=True,
-                                        memory_family=f"fftm:{dim}d:benchmark:{num_gpus}:{transport}:{strategy}",
+                                for variant in p2p_variants_for_spec(dim, transport, strategy, mode, p2p_variants):
+                                    specs.append(
+                                        RunSpec(
+                                            suite="fftm",
+                                            dim=dim,
+                                            case_name="benchmark",
+                                            binary_name=name,
+                                            binary_path=str(binaries[name]),
+                                            num_gpus=num_gpus,
+                                            transport=transport,
+                                            strategy=strategy,
+                                            mode=mode,
+                                            uses_mpi=True,
+                                            supports_directory=True,
+                                            memory_family=f"fftm:{dim}d:benchmark:{num_gpus}:{transport}:{strategy}",
+                                            p2p_variant=variant,
+                                        )
                                     )
-                                )
 
                     if include_versioned:
                         versioned_modes = modes if versioned_full_matrix else ("p2p-waitany",)
@@ -262,22 +270,24 @@ def build_specs(
                                 continue
                             for strategy in strategies:
                                 for mode in versioned_modes:
-                                    specs.append(
-                                        RunSpec(
-                                            suite="fftm",
-                                            dim=dim,
-                                            case_name=case_name,
-                                            binary_name=name,
-                                            binary_path=str(binaries[name]),
-                                            num_gpus=num_gpus,
-                                            transport=transport,
-                                            strategy=strategy,
-                                            mode=mode,
-                                            uses_mpi=True,
-                                            supports_directory=False,
-                                            memory_family=f"fftm:{dim}d:{case_name}:{num_gpus}:{transport}:{strategy}",
+                                    for variant in p2p_variants_for_spec(dim, transport, strategy, mode, p2p_variants):
+                                        specs.append(
+                                            RunSpec(
+                                                suite="fftm",
+                                                dim=dim,
+                                                case_name=case_name,
+                                                binary_name=name,
+                                                binary_path=str(binaries[name]),
+                                                num_gpus=num_gpus,
+                                                transport=transport,
+                                                strategy=strategy,
+                                                mode=mode,
+                                                uses_mpi=True,
+                                                supports_directory=False,
+                                                memory_family=f"fftm:{dim}d:{case_name}:{num_gpus}:{transport}:{strategy}",
+                                                p2p_variant=variant,
+                                            )
                                         )
-                                    )
     return specs
 
 
@@ -308,6 +318,9 @@ class PaperClusterRunner:
         self.modes = parse_csv_strings(args.modes, FFTM_MODES, "--modes")
         self.strategies_3d = parse_csv_strings(args.strategies_3d, FFTM_STRATEGIES_3D, "--strategies-3d")
         self.strategies_4d = parse_csv_strings(args.strategies_4d, FFTM_STRATEGIES_4D, "--strategies-4d")
+        self.p2p_variants = parse_p2p_variants(args.p2p_variants)
+        self.extra_sizes_3d = parse_csv_ints(args.extra_sizes_3d)
+        self.extra_sizes_3d_by_gpu = parse_gpu_size_map(args.extra_sizes_3d_by_gpu)
         self.benchmark_sizes_3d = parse_size_list_or_auto(args.benchmark_sizes_3d)
         self.benchmark_sizes_4d = parse_size_list_or_auto(args.benchmark_sizes_4d)
         self.size_plan = self.build_size_plan()
@@ -323,6 +336,7 @@ class PaperClusterRunner:
             modes=self.modes,
             strategies_3d=self.strategies_3d,
             strategies_4d=self.strategies_4d,
+            p2p_variants=self.p2p_variants,
         )
         if not self.specs:
             raise RuntimeError("no runnable specifications were selected")
@@ -439,6 +453,8 @@ class PaperClusterRunner:
                 "auto_min_size_4d": self.args.auto_min_size_4d,
                 "auto_max_size_3d": self.args.auto_max_size_3d,
                 "auto_max_size_4d": self.args.auto_max_size_4d,
+                "extra_sizes_3d": self.extra_sizes_3d,
+                "extra_sizes_3d_by_gpu": self.extra_sizes_3d_by_gpu,
                 "fft_friendly": "largest even 7-smooth N below the memory target",
             },
             "sizes": {},
@@ -454,7 +470,10 @@ class PaperClusterRunner:
                 else:
                     values = list(explicit)
                     mode = "explicit"
-                estimated = self.estimated_per_rank_memory_bytes(dim, gpu_count, values[0])
+                if dim == 3:
+                    values = sorted(set(values + self.extra_sizes_3d))
+                    values = sorted(set(values + self.extra_sizes_3d_by_gpu.get(gpu_count, [])))
+                estimated = self.estimated_per_rank_memory_bytes(dim, gpu_count, max(values))
                 target = self.per_rank_memory_target_bytes(gpu_count)
                 plan["sizes"][dim_key][str(gpu_count)] = {
                     "mode": mode,
@@ -558,14 +577,20 @@ class PaperClusterRunner:
         else:
             args.extend(["--epsilon", str(self.args.validation_epsilon)])
         if spec.suite == "fftm":
+            use_direct_backward_receive, direct_p2p_cuda_aware, use_p2p_byte_transfer = p2p_variant_flags(
+                spec.p2p_variant,
+                self.args.use_direct_backward_receive,
+                self.args.direct_p2p_cuda_aware,
+                self.args.use_p2p_byte_transfer,
+            )
             args.append(
                 "--use-direct-backward-receive"
-                if self.args.use_direct_backward_receive
+                if use_direct_backward_receive
                 else "--no-direct-backward-receive"
             )
             args.append(
                 "--direct-p2p-cuda-aware"
-                if self.args.direct_p2p_cuda_aware
+                if direct_p2p_cuda_aware
                 else "--no-direct-p2p-cuda-aware"
             )
             if spec.dim == 3:
@@ -574,7 +599,7 @@ class PaperClusterRunner:
                 )
                 args.append(
                     "--use-p2p-byte-transfer"
-                    if self.args.use_p2p_byte_transfer
+                    if use_p2p_byte_transfer
                     else "--no-p2p-byte-transfer"
                 )
         args.extend(["--times", str(times)])
@@ -641,7 +666,7 @@ class PaperClusterRunner:
         slug = slugify(
             f"{self.run_index:05d}_measure_{spec.suite}_{spec.case_name}_{spec.dim}d_"
             f"g{spec.num_gpus}_{spec.transport}_{spec.strategy or 'default'}_{spec.mode or 'none'}_"
-            f"{'x'.join(str(s) for s in sizes)}"
+            f"{spec.p2p_variant or 'configured'}_{'x'.join(str(s) for s in sizes)}"
         )
         raw_path = self.raw_dir / f"{slug}.log"
         started_at = now_iso()
@@ -696,7 +721,8 @@ class PaperClusterRunner:
         self.record_run(record)
         print(
             f"[{self.run_index:05d}] rc={returncode} g={spec.num_gpus} {spec.suite} {spec.case_name} "
-            f"{spec.dim}D {spec.transport} {spec.strategy or '-'} {spec.mode or '-'} sizes={sizes}",
+            f"{spec.dim}D {spec.transport} {spec.strategy or '-'} {spec.mode or '-'} "
+            f"{spec.p2p_variant or 'configured'} sizes={sizes}",
             flush=True,
         )
         return record
@@ -881,6 +907,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="use_p2p_byte_transfer",
         help="Disable MPI_BYTE chunked peer transfers.",
+    )
+    parser.add_argument(
+        "--p2p-variants",
+        default="configured",
+        help=(
+            "3D slab-pencil CUDA-aware p2p variant matrix: configured, all, or comma-separated subset of "
+            f"{','.join(FFTM_P2P_VARIANTS)}. Default: configured"
+        ),
+    )
+    parser.add_argument(
+        "--extra-sizes-3d",
+        default="",
+        help="Extra 3D benchmark side lengths to run in addition to auto or explicit sizes.",
+    )
+    parser.add_argument(
+        "--extra-sizes-3d-by-gpu",
+        default="",
+        help=(
+            "Per-GPU-count 3D benchmark side lengths appended to auto/global sizes, "
+            "e.g. '1:1050;2:1344;3:1536'."
+        ),
     )
     parser.add_argument("--validation-times", type=int, default=1)
     parser.add_argument("--epsilon", dest="validation_epsilon", default="1.0e-11")

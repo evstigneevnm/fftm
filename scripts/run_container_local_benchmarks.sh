@@ -29,6 +29,9 @@ USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
 DIRECT_P2P_CUDA_AWARE="${FFTM_DIRECT_P2P_CUDA_AWARE:-1}"
 USE_P2P_SEND_THREAD="${FFTM_USE_P2P_SEND_THREAD:-1}"
 USE_P2P_BYTE_TRANSFER="${FFTM_USE_P2P_BYTE_TRANSFER:-0}"
+P2P_VARIANTS="${FFTM_P2P_VARIANTS:-configured}"
+EXTRA_SIZES_3D="${FFTM_EXTRA_SIZES_3D:-}"
+EXTRA_SIZES_3D_BY_GPU="${FFTM_EXTRA_SIZES_3D_BY_GPU:-}"
 BUILD_JOBS="${FFTM_BUILD_JOBS:-8}"
 CUDA_ARCH="${FFTM_CUDA_ARCH:--gencode arch=compute_80,code=sm_80 -gencode arch=compute_70,code=sm_70}"
 
@@ -71,6 +74,9 @@ args=(
     --validation-times "${VALIDATION_TIMES}"
     --modes "${MODES}"
     --transports "${TRANSPORTS}"
+    --p2p-variants "${P2P_VARIANTS}"
+    --extra-sizes-3d "${EXTRA_SIZES_3D}"
+    --extra-sizes-3d-by-gpu "${EXTRA_SIZES_3D_BY_GPU}"
 )
 
 case "${USE_DIRECT_BACKWARD_RECEIVE}" in
