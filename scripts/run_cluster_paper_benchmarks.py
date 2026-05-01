@@ -572,6 +572,11 @@ class PaperClusterRunner:
                 args.append(
                     "--use-p2p-send-thread" if self.args.use_p2p_send_thread else "--no-p2p-send-thread"
                 )
+                args.append(
+                    "--use-p2p-byte-transfer"
+                    if self.args.use_p2p_byte_transfer
+                    else "--no-p2p-byte-transfer"
+                )
         args.extend(["--times", str(times)])
         warmup = self.warmup_for_spec(spec)
         if warmup > 0:
@@ -864,6 +869,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="use_p2p_send_thread",
         help="Disable MPI sender-thread posting for optimized FFTM 3D p2p paths.",
+    )
+    parser.add_argument(
+        "--use-p2p-byte-transfer",
+        action="store_true",
+        default=False,
+        help="Use MPI_BYTE chunked peer transfers for optimized FFTM 3D CUDA-aware p2p paths. Default: disabled",
+    )
+    parser.add_argument(
+        "--no-p2p-byte-transfer",
+        action="store_false",
+        dest="use_p2p_byte_transfer",
+        help="Disable MPI_BYTE chunked peer transfers.",
     )
     parser.add_argument("--validation-times", type=int, default=1)
     parser.add_argument("--epsilon", dest="validation_epsilon", default="1.0e-11")

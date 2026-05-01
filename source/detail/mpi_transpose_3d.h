@@ -100,6 +100,11 @@ public:
         profiler_ = profiler;
     }
 
+    void set_p2p_byte_transfer_enabled( bool enabled )
+    {
+        use_p2p_byte_transfer_ = enabled;
+    }
+
     void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
     {
         memory_profiler_       = profiler;
@@ -634,6 +639,76 @@ private:
         scfd::communication::detail::type_free( mpi_value_type_ );
     }
 
+    bool cuda_aware_byte_p2p_enabled_() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return use_p2p_byte_transfer_;
+#else
+        return false;
+#endif
+    }
+
+    std::size_t max_mpi_byte_chunk_bytes_() const
+    {
+        return static_cast<std::size_t>( std::numeric_limits<int>::max() );
+    }
+
+    void post_byte_irecv_(
+        void *ptr, std::size_t bytes, int source, int tag, std::vector<mpi_request_t> &requests,
+        std::vector<int> *request_peers = nullptr, std::vector<int> *remaining_by_peer = nullptr
+    )
+    {
+        char              *base      = static_cast<char *>( ptr );
+        const mpi_dtype_t  byte_type = scfd::communication::detail::mpi_data_type<char>::mpi_type();
+        const std::size_t  max_bytes = max_mpi_byte_chunk_bytes_();
+        int                chunks    = 0;
+        for ( std::size_t offset = 0; offset < bytes; offset += max_bytes )
+        {
+            const std::size_t this_bytes = std::min( max_bytes, bytes - offset );
+            requests.push_back( mpi_request_t() );
+            row_comm_info_.irecv(
+                base + offset, detail::mpi_int_cast( this_bytes, "same_x byte p2p recv count" ), byte_type, source,
+                tag, requests.back()
+            );
+            if ( request_peers != nullptr )
+            {
+                request_peers->push_back( source );
+            }
+            ++chunks;
+        }
+        if ( remaining_by_peer != nullptr )
+        {
+            ( *remaining_by_peer )[source] += chunks;
+        }
+    }
+
+    void post_byte_isend_(
+        const void *ptr, std::size_t bytes, int dest, int tag, std::vector<mpi_request_t> &requests
+    )
+    {
+        const char        *base      = static_cast<const char *>( ptr );
+        const mpi_dtype_t  byte_type = scfd::communication::detail::mpi_data_type<char>::mpi_type();
+        const std::size_t  max_bytes = max_mpi_byte_chunk_bytes_();
+        for ( std::size_t offset = 0; offset < bytes; offset += max_bytes )
+        {
+            const std::size_t this_bytes = std::min( max_bytes, bytes - offset );
+            requests.push_back( mpi_request_t() );
+            row_comm_info_.isend(
+                base + offset, detail::mpi_int_cast( this_bytes, "same_x byte p2p send count" ), byte_type, dest, tag,
+                requests.back()
+            );
+        }
+    }
+
+    void waitall_vector_( std::vector<mpi_request_t> &requests, const char *what )
+    {
+        if ( requests.empty() )
+        {
+            return;
+        }
+        row_comm_info_.waitall( detail::mpi_int_cast( requests.size(), what ), requests.data() );
+    }
+
     void synchronize_streams_( const char *label = "stream_synchronize" )
     {
         auto scope = profile_scope_( label );
@@ -716,6 +791,8 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope    = profile_scope_( "forward_p2p_waitall" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
         {
             auto phase = profile_scope_( "self_copy" );
             copy_forward_self_block_async_( in, out );
@@ -774,6 +851,8 @@ private:
 #else
         auto      scope    = profile_scope_( "forward_p2p_waitall" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
         {
             auto phase = profile_scope_( "self_copy" );
             copy_forward_self_block_async_( in, out );
@@ -785,22 +864,39 @@ private:
                 if ( p == myid_j_ )
                     continue;
 
-                row_comm_info_.irecv(
-                    recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
-                    detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ), mpi_value_type_,
-                    p, p, recv_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_irecv_(
+                        recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
+                        bytes_from_elems_( forward_recv_chunk_elems_( p ) ), p, p, byte_recv_requests
+                    );
+                    post_byte_isend_(
+                        in.raw_ptr() + forward_send_offset_elems_( p ),
+                        bytes_from_elems_( forward_send_chunk_elems_( p ) ), p, myid_j_, byte_send_requests
+                    );
+                }
+                else
+                {
+                    row_comm_info_.irecv(
+                        recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
+                        detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ),
+                        mpi_value_type_, p, p, recv_requests_[p]
+                    );
 
-                row_comm_info_.isend(
-                    in.raw_ptr() + forward_send_offset_elems_( p ),
-                    detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ), mpi_value_type_,
-                    p, myid_j_, send_requests_[p]
-                );
+                    row_comm_info_.isend(
+                        in.raw_ptr() + forward_send_offset_elems_( p ),
+                        detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ),
+                        mpi_value_type_, p, myid_j_, send_requests_[p]
+                    );
+                }
             }
         }
         {
             auto phase = profile_scope_( "wait_recv" );
-            row_comm_info_.waitall( row_size, recv_requests_.data() );
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_recv_requests, "same_x byte forward recv request count" );
+            else
+                row_comm_info_.waitall( row_size, recv_requests_.data() );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
@@ -813,7 +909,10 @@ private:
         synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
-            row_comm_info_.waitall( row_size, send_requests_.data() );
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_x byte forward send request count" );
+            else
+                row_comm_info_.waitall( row_size, send_requests_.data() );
         }
 #endif
     }
@@ -824,6 +923,10 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope    = profile_scope_( "forward_p2p_waitany" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
+        std::vector<int>           byte_recv_peers;
+        std::vector<int>           byte_recv_remaining( row_size, 0 );
         {
             auto phase = profile_scope_( "self_copy" );
             copy_forward_self_block_async_( in, out );
@@ -884,6 +987,10 @@ private:
 #else
         auto      scope    = profile_scope_( "forward_p2p_waitany" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
+        std::vector<int>           byte_recv_peers;
+        std::vector<int>           byte_recv_remaining( row_size, 0 );
         {
             auto phase = profile_scope_( "self_copy" );
             copy_forward_self_block_async_( in, out );
@@ -895,43 +1002,88 @@ private:
                 if ( p == myid_j_ )
                     continue;
 
-                row_comm_info_.irecv(
-                    recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
-                    detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ), mpi_value_type_,
-                    p, p, recv_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_irecv_(
+                        recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
+                        bytes_from_elems_( forward_recv_chunk_elems_( p ) ), p, p, byte_recv_requests,
+                        &byte_recv_peers, &byte_recv_remaining
+                    );
+                    post_byte_isend_(
+                        in.raw_ptr() + forward_send_offset_elems_( p ),
+                        bytes_from_elems_( forward_send_chunk_elems_( p ) ), p, myid_j_, byte_send_requests
+                    );
+                }
+                else
+                {
+                    row_comm_info_.irecv(
+                        recv_buffer_.raw_ptr() + forward_recv_offset_elems_( p ),
+                        detail::mpi_int_cast( forward_recv_chunk_elems_( p ), "forward p2p recv count" ),
+                        mpi_value_type_, p, p, recv_requests_[p]
+                    );
 
-                row_comm_info_.isend(
-                    in.raw_ptr() + forward_send_offset_elems_( p ),
-                    detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ), mpi_value_type_,
-                    p, myid_j_, send_requests_[p]
-                );
+                    row_comm_info_.isend(
+                        in.raw_ptr() + forward_send_offset_elems_( p ),
+                        detail::mpi_int_cast( forward_send_chunk_elems_( p ), "forward p2p send count" ),
+                        mpi_value_type_, p, myid_j_, send_requests_[p]
+                    );
+                }
             }
         }
 
         {
-            int completed = 0;
-            while ( completed < row_size - 1 )
+            if ( cuda_aware_byte_p2p_enabled_() )
             {
-                int p = MPI_UNDEFINED;
+                int completed = 0;
+                const int total_requests =
+                    detail::mpi_int_cast( byte_recv_requests.size(), "same_x byte forward waitany request count" );
+                while ( completed < total_requests )
                 {
-                    auto phase = profile_scope_( "wait_recv_any" );
-                    p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                    int request_index = MPI_UNDEFINED;
+                    {
+                        auto phase   = profile_scope_( "wait_recv_any" );
+                        request_index = row_comm_info_.waitany( total_requests, byte_recv_requests.data() );
+                    }
+                    if ( request_index == MPI_UNDEFINED )
+                        break;
+                    const int p = byte_recv_peers[request_index];
+                    --byte_recv_remaining[p];
+                    if ( byte_recv_remaining[p] == 0 )
+                    {
+                        auto phase = profile_scope_( "unpack_recv_chunk" );
+                        unpack_forward_received_chunk_async_( p, out );
+                    }
+                    completed++;
                 }
-                if ( p == MPI_UNDEFINED )
-                    break;
+            }
+            else
+            {
+                int completed = 0;
+                while ( completed < row_size - 1 )
                 {
-                    auto phase = profile_scope_( "unpack_recv_chunk" );
-                    unpack_forward_received_chunk_async_( p, out );
+                    int p = MPI_UNDEFINED;
+                    {
+                        auto phase = profile_scope_( "wait_recv_any" );
+                        p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                    }
+                    if ( p == MPI_UNDEFINED )
+                        break;
+                    {
+                        auto phase = profile_scope_( "unpack_recv_chunk" );
+                        unpack_forward_received_chunk_async_( p, out );
+                    }
+                    completed++;
                 }
-                completed++;
             }
         }
 
         synchronize_streams_( "recv_copy_complete" );
         {
             auto phase = profile_scope_( "wait_send" );
-            row_comm_info_.waitall( row_size, send_requests_.data() );
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_x byte forward send request count" );
+            else
+                row_comm_info_.waitall( row_size, send_requests_.data() );
         }
 #endif
     }
@@ -1057,6 +1209,8 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope    = profile_scope_( "backward_p2p_waitall" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
 
         {
             auto phase = profile_scope_( "pack_and_post_recv" );
@@ -1133,6 +1287,8 @@ private:
 #else
         auto      scope    = profile_scope_( "backward_p2p_waitall" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
 
         {
             auto phase = profile_scope_( "pack_and_post_recv" );
@@ -1143,11 +1299,21 @@ private:
                 if ( p == myid_j_ )
                     continue;
 
-                row_comm_info_.irecv(
-                    out.raw_ptr() + backward_recv_offset_elems_( p ),
-                    detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ), mpi_value_type_,
-                    p, myid_j_, recv_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_irecv_(
+                        out.raw_ptr() + backward_recv_offset_elems_( p ),
+                        bytes_from_elems_( backward_recv_chunk_elems_( p ) ), p, myid_j_, byte_recv_requests
+                    );
+                }
+                else
+                {
+                    row_comm_info_.irecv(
+                        out.raw_ptr() + backward_recv_offset_elems_( p ),
+                        detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ),
+                        mpi_value_type_, p, myid_j_, recv_requests_[p]
+                    );
+                }
             }
         }
 
@@ -1160,11 +1326,21 @@ private:
                 if ( p == myid_j_ )
                     continue;
 
-                row_comm_info_.isend(
-                    send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
-                    detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ), mpi_value_type_,
-                    p, p, send_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_isend_(
+                        send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
+                        bytes_from_elems_( backward_send_chunk_elems_( p ) ), p, p, byte_send_requests
+                    );
+                }
+                else
+                {
+                    row_comm_info_.isend(
+                        send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
+                        detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ),
+                        mpi_value_type_, p, p, send_requests_[p]
+                    );
+                }
             }
         }
 
@@ -1180,11 +1356,17 @@ private:
 
         {
             auto phase = profile_scope_( "wait_recv" );
-            row_comm_info_.waitall( row_size, recv_requests_.data() );
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_recv_requests, "same_x byte backward recv request count" );
+            else
+                row_comm_info_.waitall( row_size, recv_requests_.data() );
         }
         {
             auto phase = profile_scope_( "wait_send" );
-            row_comm_info_.waitall( row_size, send_requests_.data() );
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_x byte backward send request count" );
+            else
+                row_comm_info_.waitall( row_size, send_requests_.data() );
         }
         synchronize_streams_( "recv_copy_complete" );
 #endif
@@ -1196,6 +1378,10 @@ private:
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         auto      scope    = profile_scope_( "backward_p2p_waitany" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
+        std::vector<int>           byte_recv_peers;
+        std::vector<int>           byte_recv_remaining( row_size, 0 );
 
         {
             auto phase = profile_scope_( "pack_and_post_recv" );
@@ -1276,6 +1462,10 @@ private:
 #else
         auto      scope    = profile_scope_( "backward_p2p_waitany" );
         const int row_size = row_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
+        std::vector<int>           byte_recv_peers;
+        std::vector<int>           byte_recv_remaining( row_size, 0 );
 
         {
             auto phase = profile_scope_( "pack_and_post_recv" );
@@ -1286,11 +1476,22 @@ private:
                 if ( p == myid_j_ )
                     continue;
 
-                row_comm_info_.irecv(
-                    out.raw_ptr() + backward_recv_offset_elems_( p ),
-                    detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ), mpi_value_type_,
-                    p, myid_j_, recv_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_irecv_(
+                        out.raw_ptr() + backward_recv_offset_elems_( p ),
+                        bytes_from_elems_( backward_recv_chunk_elems_( p ) ), p, myid_j_, byte_recv_requests,
+                        &byte_recv_peers, &byte_recv_remaining
+                    );
+                }
+                else
+                {
+                    row_comm_info_.irecv(
+                        out.raw_ptr() + backward_recv_offset_elems_( p ),
+                        detail::mpi_int_cast( backward_recv_chunk_elems_( p ), "backward p2p recv count" ),
+                        mpi_value_type_, p, myid_j_, recv_requests_[p]
+                    );
+                }
             }
         }
 
@@ -1302,11 +1503,21 @@ private:
             {
                 if ( p == myid_j_ )
                     continue;
-                row_comm_info_.isend(
-                    send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
-                    detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ), mpi_value_type_,
-                    p, p, send_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_isend_(
+                        send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
+                        bytes_from_elems_( backward_send_chunk_elems_( p ) ), p, p, byte_send_requests
+                    );
+                }
+                else
+                {
+                    row_comm_info_.isend(
+                        send_buffer_.raw_ptr() + backward_send_pack_offset_elems_( p ),
+                        detail::mpi_int_cast( backward_send_chunk_elems_( p ), "backward p2p send count" ),
+                        mpi_value_type_, p, p, send_requests_[p]
+                    );
+                }
             }
         }
 
@@ -1321,23 +1532,48 @@ private:
         }
 
         {
-            int completed = 0;
-            while ( completed < row_size - 1 )
+            if ( cuda_aware_byte_p2p_enabled_() )
             {
-                int p = MPI_UNDEFINED;
+                int completed = 0;
+                const int total_requests =
+                    detail::mpi_int_cast( byte_recv_requests.size(), "same_x byte backward waitany request count" );
+                while ( completed < total_requests )
                 {
-                    auto phase = profile_scope_( "wait_recv_any" );
-                    p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                    int request_index = MPI_UNDEFINED;
+                    {
+                        auto phase   = profile_scope_( "wait_recv_any" );
+                        request_index = row_comm_info_.waitany( total_requests, byte_recv_requests.data() );
+                    }
+                    if ( request_index == MPI_UNDEFINED )
+                        break;
+                    const int p = byte_recv_peers[request_index];
+                    --byte_recv_remaining[p];
+                    completed++;
                 }
-                if ( p == MPI_UNDEFINED )
-                    break;
-                completed++;
+            }
+            else
+            {
+                int completed = 0;
+                while ( completed < row_size - 1 )
+                {
+                    int p = MPI_UNDEFINED;
+                    {
+                        auto phase = profile_scope_( "wait_recv_any" );
+                        p          = row_comm_info_.waitany( row_size, recv_requests_.data() );
+                    }
+                    if ( p == MPI_UNDEFINED )
+                        break;
+                    completed++;
+                }
             }
         }
 
         {
             auto phase = profile_scope_( "wait_send" );
-            row_comm_info_.waitall( row_size, send_requests_.data() );
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_x byte backward send request count" );
+            else
+                row_comm_info_.waitall( row_size, send_requests_.data() );
         }
         synchronize_streams_( "recv_copy_complete" );
 #endif
@@ -1526,6 +1762,7 @@ private:
     void                                            *external_work_area_     = nullptr;
     bool                                             use_external_host_work_area_ = false;
     void                                            *external_host_work_area_     = nullptr;
+    bool                                             use_p2p_byte_transfer_       = false;
     std::vector<mpi_request_t>                       send_requests_;
     std::vector<mpi_request_t>                       recv_requests_;
     std::vector<typename runtime_api_t::stream_wrap> streams_;
@@ -1604,6 +1841,11 @@ public:
     void set_p2p_send_thread_enabled( bool enabled )
     {
         use_p2p_send_thread_ = enabled;
+    }
+
+    void set_p2p_byte_transfer_enabled( bool enabled )
+    {
+        use_p2p_byte_transfer_ = enabled;
     }
 
     void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
@@ -2210,13 +2452,89 @@ private:
 #endif
     }
 
-    bool direct_backward_receive_enabled_() const
+    bool cuda_aware_byte_p2p_enabled_() const
     {
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        return direct_p2p_cuda_aware_ && use_direct_backward_receive_;
+        return use_p2p_byte_transfer_;
 #else
         return false;
 #endif
+    }
+
+    bool direct_backward_receive_enabled_() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return direct_p2p_cuda_aware_ && use_direct_backward_receive_ && !cuda_aware_byte_p2p_enabled_();
+#else
+        return false;
+#endif
+    }
+
+    std::size_t max_mpi_byte_chunk_bytes_() const
+    {
+        return static_cast<std::size_t>( std::numeric_limits<int>::max() );
+    }
+
+    int mpi_byte_chunk_count_( std::size_t bytes ) const
+    {
+        const std::size_t chunk = max_mpi_byte_chunk_bytes_();
+        return detail::mpi_int_cast( ( bytes + chunk - 1 ) / chunk, "same_z byte p2p chunk count" );
+    }
+
+    void post_byte_irecv_(
+        void *ptr, std::size_t bytes, int source, int tag, std::vector<mpi_request_t> &requests,
+        std::vector<int> *request_peers = nullptr, std::vector<int> *remaining_by_peer = nullptr
+    )
+    {
+        char              *base      = static_cast<char *>( ptr );
+        const mpi_dtype_t  byte_type = scfd::communication::detail::mpi_data_type<char>::mpi_type();
+        const std::size_t  max_bytes = max_mpi_byte_chunk_bytes_();
+        int                chunks    = 0;
+        for ( std::size_t offset = 0; offset < bytes; offset += max_bytes )
+        {
+            const std::size_t this_bytes = std::min( max_bytes, bytes - offset );
+            requests.push_back( mpi_request_t() );
+            line_comm_info_.irecv(
+                base + offset, detail::mpi_int_cast( this_bytes, "same_z byte p2p recv count" ), byte_type, source,
+                tag, requests.back()
+            );
+            if ( request_peers != nullptr )
+            {
+                request_peers->push_back( source );
+            }
+            ++chunks;
+        }
+        if ( remaining_by_peer != nullptr )
+        {
+            ( *remaining_by_peer )[source] += chunks;
+        }
+    }
+
+    void post_byte_isend_(
+        const void *ptr, std::size_t bytes, int dest, int tag, std::vector<mpi_request_t> &requests
+    )
+    {
+        const char        *base      = static_cast<const char *>( ptr );
+        const mpi_dtype_t  byte_type = scfd::communication::detail::mpi_data_type<char>::mpi_type();
+        const std::size_t  max_bytes = max_mpi_byte_chunk_bytes_();
+        for ( std::size_t offset = 0; offset < bytes; offset += max_bytes )
+        {
+            const std::size_t this_bytes = std::min( max_bytes, bytes - offset );
+            requests.push_back( mpi_request_t() );
+            line_comm_info_.isend(
+                base + offset, detail::mpi_int_cast( this_bytes, "same_z byte p2p send count" ), byte_type, dest, tag,
+                requests.back()
+            );
+        }
+    }
+
+    void waitall_vector_( std::vector<mpi_request_t> &requests, const char *what )
+    {
+        if ( requests.empty() )
+        {
+            return;
+        }
+        line_comm_info_.waitall( detail::mpi_int_cast( requests.size(), what ), requests.data() );
     }
 
     std::size_t direct_backward_recv_base_offset_elems_( int source_i ) const
@@ -2683,6 +3001,8 @@ private:
     {
         auto      scope     = profile_scope_( "forward_optimized_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
         {
             auto phase = profile_scope_( "post_recv" );
             for ( int p = 0; p < comm_size; ++p )
@@ -2696,6 +3016,15 @@ private:
 #else
                 value_type *recv_ptr = host_recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p );
 #endif
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_irecv_(
+                        recv_ptr, bytes_from_elems_( forward_recv_elems_( p ) ), p, p, byte_recv_requests
+                    );
+                }
+                else
+#endif
                 line_comm_info_.irecv(
                     recv_ptr,
                     detail::mpi_int_cast( forward_recv_elems_( p ), "same_z opt forward recv count" ),
@@ -2706,11 +3035,20 @@ private:
         send_ready_state_t                    send_ready;
         std::vector<send_ready_callback_t>    callbacks( comm_size );
         send_ready.ready_peers.reserve( comm_size );
-        auto start_send = [this]( int p ) {
+        auto start_send = [this, &byte_send_requests]( int p ) {
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
             value_type *send_ptr = send_buffer_.raw_ptr() + forward_send_offsets_[p];
 #else
             value_type *send_ptr = host_send_buffer_.raw_ptr() + forward_send_offsets_[p];
+#endif
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+            {
+                post_byte_isend_(
+                    send_ptr, bytes_from_elems_( forward_chunk_elems_( p ) ), p, myid_i_, byte_send_requests
+                );
+                return;
+            }
 #endif
             line_comm_info_.isend(
                 send_ptr, detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z opt forward send count" ),
@@ -2745,7 +3083,12 @@ private:
             wait_ready_and_post_sends_( comm_size - 1, send_ready, start_send );
         {
             auto phase = profile_scope_( "wait_recv" );
-            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_recv_requests, "same_z byte forward recv request count" );
+            else
+#endif
+                line_comm_info_.waitall( comm_size, recv_requests_.data() );
         }
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         {
@@ -2767,7 +3110,12 @@ private:
         join_ready_send_thread_( send_ready, send_thread, send_exception );
         {
             auto phase = profile_scope_( "wait_send" );
-            line_comm_info_.waitall( comm_size, send_requests_.data() );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_z byte forward send request count" );
+            else
+#endif
+                line_comm_info_.waitall( comm_size, send_requests_.data() );
         }
         }
         catch ( ... )
@@ -2782,6 +3130,10 @@ private:
     {
         auto      scope     = profile_scope_( "forward_optimized_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
+        std::vector<int>           byte_recv_peers;
+        std::vector<int>           byte_recv_remaining( comm_size, 0 );
         {
             auto phase = profile_scope_( "post_recv" );
             for ( int p = 0; p < comm_size; ++p )
@@ -2795,6 +3147,16 @@ private:
 #else
                 value_type *recv_ptr = host_recv_buffer_.raw_ptr() + forward_recv_pack_offset_elems_( p );
 #endif
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_irecv_(
+                        recv_ptr, bytes_from_elems_( forward_recv_elems_( p ) ), p, p, byte_recv_requests,
+                        &byte_recv_peers, &byte_recv_remaining
+                    );
+                }
+                else
+#endif
                 line_comm_info_.irecv(
                     recv_ptr,
                     detail::mpi_int_cast( forward_recv_elems_( p ), "same_z opt forward recv count" ),
@@ -2805,11 +3167,20 @@ private:
         send_ready_state_t                    send_ready;
         std::vector<send_ready_callback_t>    callbacks( comm_size );
         send_ready.ready_peers.reserve( comm_size );
-        auto start_send = [this]( int p ) {
+        auto start_send = [this, &byte_send_requests]( int p ) {
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
             value_type *send_ptr = send_buffer_.raw_ptr() + forward_send_offsets_[p];
 #else
             value_type *send_ptr = host_send_buffer_.raw_ptr() + forward_send_offsets_[p];
+#endif
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+            {
+                post_byte_isend_(
+                    send_ptr, bytes_from_elems_( forward_chunk_elems_( p ) ), p, myid_i_, byte_send_requests
+                );
+                return;
+            }
 #endif
             line_comm_info_.isend(
                 send_ptr, detail::mpi_int_cast( forward_chunk_elems_( p ), "same_z opt forward send count" ),
@@ -2843,6 +3214,34 @@ private:
         if ( !use_send_thread )
             wait_ready_and_post_sends_( comm_size - 1, send_ready, start_send );
         {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+            {
+                int completed = 0;
+                const int total_requests =
+                    detail::mpi_int_cast( byte_recv_requests.size(), "same_z byte forward waitany request count" );
+                while ( completed < total_requests )
+                {
+                    int request_index = MPI_UNDEFINED;
+                    {
+                        auto phase   = profile_scope_( "wait_recv_any" );
+                        request_index = line_comm_info_.waitany( total_requests, byte_recv_requests.data() );
+                    }
+                    if ( request_index == MPI_UNDEFINED )
+                        break;
+                    const int p = byte_recv_peers[request_index];
+                    --byte_recv_remaining[p];
+                    if ( byte_recv_remaining[p] == 0 && !cuda_aware_direct_p2p_enabled_() )
+                    {
+                        auto phase = profile_scope_( "unpack_recv_chunk" );
+                        unpack_forward_optimized_chunk_async_( p, out );
+                    }
+                    completed++;
+                }
+            }
+            else
+#endif
+            {
             int completed = 0;
             while ( completed < comm_size - 1 )
             {
@@ -2867,12 +3266,18 @@ private:
 #endif
                 completed++;
             }
+            }
         }
         synchronize_streams_( "recv_copy_complete" );
         join_ready_send_thread_( send_ready, send_thread, send_exception );
         {
             auto phase = profile_scope_( "wait_send" );
-            line_comm_info_.waitall( comm_size, send_requests_.data() );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_z byte forward send request count" );
+            else
+#endif
+                line_comm_info_.waitall( comm_size, send_requests_.data() );
         }
         }
         catch ( ... )
@@ -2964,6 +3369,8 @@ private:
     {
         auto      scope     = profile_scope_( "backward_optimized_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
         {
             auto phase = profile_scope_( "post_recv_send" );
             for ( int p = 0; p < comm_size; ++p )
@@ -2972,7 +3379,14 @@ private:
                     continue;
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 const value_type *send_ptr = in.raw_ptr() + backward_send_offsets_[p];
-                if ( direct_backward_receive_enabled_() )
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    value_type *recv_ptr = recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p );
+                    post_byte_irecv_(
+                        recv_ptr, bytes_from_elems_( backward_chunk_elems_( p ) ), p, p, byte_recv_requests
+                    );
+                }
+                else if ( direct_backward_receive_enabled_() )
                 {
                     value_type *recv_ptr = out.raw_ptr() + direct_backward_recv_base_offset_elems_( p );
                     line_comm_info_.irecv( recv_ptr, 1, direct_backward_recvtypes_[p], p, p, recv_requests_[p] );
@@ -2995,11 +3409,23 @@ private:
                 );
 #endif
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-                line_comm_info_.isend(
-                    const_cast<value_type *>( send_ptr ),
-                    detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count" ),
-                    mpi_value_type_, p, myid_i_, send_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_isend_(
+                        send_ptr, bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), p, myid_i_,
+                        byte_send_requests
+                    );
+                }
+                else
+                {
+                    line_comm_info_.isend(
+                        const_cast<value_type *>( send_ptr ),
+                        detail::mpi_int_cast(
+                            input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count"
+                        ),
+                        mpi_value_type_, p, myid_i_, send_requests_[p]
+                    );
+                }
 #endif
             }
         }
@@ -3046,7 +3472,12 @@ private:
 #endif
         {
             auto phase = profile_scope_( "wait_recv" );
-            line_comm_info_.waitall( comm_size, recv_requests_.data() );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_recv_requests, "same_z byte backward recv request count" );
+            else
+#endif
+                line_comm_info_.waitall( comm_size, recv_requests_.data() );
         }
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         {
@@ -3070,7 +3501,12 @@ private:
 #endif
         {
             auto phase = profile_scope_( "wait_send" );
-            line_comm_info_.waitall( comm_size, send_requests_.data() );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_z byte backward send request count" );
+            else
+#endif
+                line_comm_info_.waitall( comm_size, send_requests_.data() );
         }
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         }
@@ -3087,6 +3523,10 @@ private:
     {
         auto      scope     = profile_scope_( "backward_optimized_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
+        std::vector<mpi_request_t> byte_recv_requests;
+        std::vector<mpi_request_t> byte_send_requests;
+        std::vector<int>           byte_recv_peers;
+        std::vector<int>           byte_recv_remaining( comm_size, 0 );
         {
             auto phase = profile_scope_( "post_recv_send" );
             for ( int p = 0; p < comm_size; ++p )
@@ -3095,7 +3535,15 @@ private:
                     continue;
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
                 const value_type *send_ptr = in.raw_ptr() + backward_send_offsets_[p];
-                if ( direct_backward_receive_enabled_() )
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    value_type *recv_ptr = recv_buffer_.raw_ptr() + backward_recv_pack_offset_elems_( p );
+                    post_byte_irecv_(
+                        recv_ptr, bytes_from_elems_( backward_chunk_elems_( p ) ), p, p, byte_recv_requests,
+                        &byte_recv_peers, &byte_recv_remaining
+                    );
+                }
+                else if ( direct_backward_receive_enabled_() )
                 {
                     value_type *recv_ptr = out.raw_ptr() + direct_backward_recv_base_offset_elems_( p );
                     line_comm_info_.irecv( recv_ptr, 1, direct_backward_recvtypes_[p], p, p, recv_requests_[p] );
@@ -3118,11 +3566,23 @@ private:
                 );
 #endif
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-                line_comm_info_.isend(
-                    const_cast<value_type *>( send_ptr ),
-                    detail::mpi_int_cast( input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count" ),
-                    mpi_value_type_, p, myid_i_, send_requests_[p]
-                );
+                if ( cuda_aware_byte_p2p_enabled_() )
+                {
+                    post_byte_isend_(
+                        send_ptr, bytes_from_elems_( input_dim_.size_x[p] * ny_local_ * nz_local_ ), p, myid_i_,
+                        byte_send_requests
+                    );
+                }
+                else
+                {
+                    line_comm_info_.isend(
+                        const_cast<value_type *>( send_ptr ),
+                        detail::mpi_int_cast(
+                            input_dim_.size_x[p] * ny_local_ * nz_local_, "same_z opt backward send count"
+                        ),
+                        mpi_value_type_, p, myid_i_, send_requests_[p]
+                    );
+                }
 #endif
             }
         }
@@ -3168,6 +3628,34 @@ private:
             wait_ready_and_post_sends_( comm_size - 1, send_ready, start_send );
 #endif
         {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+            {
+                int completed = 0;
+                const int total_requests =
+                    detail::mpi_int_cast( byte_recv_requests.size(), "same_z byte backward waitany request count" );
+                while ( completed < total_requests )
+                {
+                    int request_index = MPI_UNDEFINED;
+                    {
+                        auto phase   = profile_scope_( "wait_recv_any" );
+                        request_index = line_comm_info_.waitany( total_requests, byte_recv_requests.data() );
+                    }
+                    if ( request_index == MPI_UNDEFINED )
+                        break;
+                    const int p = byte_recv_peers[request_index];
+                    --byte_recv_remaining[p];
+                    if ( byte_recv_remaining[p] == 0 )
+                    {
+                        auto phase = profile_scope_( "unpack_recv_chunk" );
+                        unpack_backward_optimized_chunk_async_( p, out );
+                    }
+                    completed++;
+                }
+            }
+            else
+#endif
+            {
             int completed = 0;
             while ( completed < comm_size - 1 )
             {
@@ -3192,6 +3680,7 @@ private:
 #endif
                 completed++;
             }
+            }
         }
         synchronize_streams_( "recv_copy_complete" );
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
@@ -3199,7 +3688,12 @@ private:
 #endif
         {
             auto phase = profile_scope_( "wait_send" );
-            line_comm_info_.waitall( comm_size, send_requests_.data() );
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            if ( cuda_aware_byte_p2p_enabled_() )
+                waitall_vector_( byte_send_requests, "same_z byte backward send request count" );
+            else
+#endif
+                line_comm_info_.waitall( comm_size, send_requests_.data() );
         }
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
         }
@@ -4129,6 +4623,7 @@ private:
     bool                                             use_direct_backward_receive_ = false;
     bool                                             direct_p2p_cuda_aware_       = true;
     bool                                             use_p2p_send_thread_         = true;
+    bool                                             use_p2p_byte_transfer_       = false;
 
     std::vector<std::size_t> forward_send_offsets_;
     std::vector<std::size_t> forward_recv_offsets_;

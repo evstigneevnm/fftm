@@ -749,6 +749,11 @@ class LocalPaperBenchmarkRunner:
                 command.append(
                     "--use-p2p-send-thread" if self.args.use_p2p_send_thread else "--no-p2p-send-thread"
                 )
+                command.append(
+                    "--use-p2p-byte-transfer"
+                    if self.args.use_p2p_byte_transfer
+                    else "--no-p2p-byte-transfer"
+                )
         command.extend(["--times", str(times)])
         if warmup > 0:
             command.extend(["--warmup", str(warmup)])
@@ -1077,6 +1082,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="use_p2p_send_thread",
         help="Disable MPI sender-thread posting for optimized FFTM 3D p2p paths.",
+    )
+    parser.add_argument(
+        "--use-p2p-byte-transfer",
+        action="store_true",
+        default=False,
+        help="Use MPI_BYTE chunked peer transfers for optimized FFTM 3D CUDA-aware p2p paths. Default: disabled",
+    )
+    parser.add_argument(
+        "--no-p2p-byte-transfer",
+        action="store_false",
+        dest="use_p2p_byte_transfer",
+        help="Disable MPI_BYTE chunked peer transfers.",
     )
     parser.add_argument(
         "--epsilon",

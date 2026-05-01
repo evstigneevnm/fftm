@@ -70,6 +70,7 @@ struct fftm_3d_benchmark_options
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
     bool                          use_p2p_send_thread         = true;
+    bool                          use_p2p_byte_transfer       = false;
 };
 
 template <class T>
@@ -91,6 +92,7 @@ struct fftm_4d_benchmark_options
     std::string                   directory = "./resutls";
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
+    bool                          use_p2p_byte_transfer       = false;
 };
 
 inline std::string usage_ffts_3d_benchmark( const std::string &binary_name )
@@ -113,7 +115,8 @@ inline std::string usage_fftm_3d_benchmark( const std::string &binary_name )
            " [--grid P1 P2] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path]"
            " [--use-direct-backward-receive|--no-direct-backward-receive]"
            " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]"
-           " [--use-p2p-send-thread|--no-p2p-send-thread] [Nx Ny Nz]";
+           " [--use-p2p-send-thread|--no-p2p-send-thread]"
+           " [--use-p2p-byte-transfer|--no-p2p-byte-transfer] [Nx Ny Nz]";
 }
 
 inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
@@ -123,7 +126,8 @@ inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
            " [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw]"
            " [--grid P1 P2 P3] [--times repeats] [--warmup repeats] [--epsilon eps] [--directory path]"
            " [--use-direct-backward-receive|--no-direct-backward-receive]"
-           " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] [Nx Ny Nz Nw]";
+           " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]"
+           " [--use-p2p-byte-transfer|--no-p2p-byte-transfer] [Nx Ny Nz Nw]";
 }
 
 template <class T>
@@ -387,6 +391,16 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.use_p2p_send_thread = false;
             argi += 1;
         }
+        else if ( arg == "--use-p2p-byte-transfer" )
+        {
+            options.use_p2p_byte_transfer = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-p2p-byte-transfer" )
+        {
+            options.use_p2p_byte_transfer = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -419,6 +433,7 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
         base_options.use_direct_backward_receive = options.use_direct_backward_receive;
         base_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
         base_options.use_p2p_send_thread         = options.use_p2p_send_thread;
+        base_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
         const auto grid       = choose_grid_3d( base_options, options.strategy, num_procs );
         options.p1            = grid.first;
         options.p2            = grid.second;
@@ -531,6 +546,16 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.direct_p2p_cuda_aware = false;
             argi += 1;
         }
+        else if ( arg == "--use-p2p-byte-transfer" )
+        {
+            options.use_p2p_byte_transfer = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-p2p-byte-transfer" )
+        {
+            options.use_p2p_byte_transfer = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -568,6 +593,7 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
         base_options.times    = options.times;
         base_options.use_direct_backward_receive = options.use_direct_backward_receive;
         base_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+        base_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
         const auto grid       = choose_grid_4d( base_options, options.strategy, num_procs );
         options.p1            = std::get<0>( grid );
         options.p2            = std::get<1>( grid );
@@ -584,6 +610,7 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_benchmark
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
     init_options.use_p2p_send_thread         = options.use_p2p_send_thread;
+    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
     return init_options;
 }
 
@@ -593,6 +620,7 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_benchmark
     ::fftm::fftm_init_options init_options;
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
     return init_options;
 }
 

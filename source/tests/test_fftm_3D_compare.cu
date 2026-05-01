@@ -57,6 +57,7 @@ struct test_options
     T                           threshold = T( 1.0e-11 );
     bool                        use_direct_backward_receive = false;
     bool                        direct_p2p_cuda_aware       = true;
+    bool                        use_p2p_byte_transfer       = false;
 };
 
 std::pair<std::size_t, std::size_t> choose_pencil_grid( std::size_t num_procs )
@@ -148,6 +149,16 @@ test_options parse_options( int argc, char *argv[], int num_procs )
             options.direct_p2p_cuda_aware = false;
             argi += 1;
         }
+        else if ( arg == "--use-p2p-byte-transfer" )
+        {
+            options.use_p2p_byte_transfer = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-p2p-byte-transfer" )
+        {
+            options.use_p2p_byte_transfer = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -166,7 +177,8 @@ test_options parse_options( int argc, char *argv[], int num_procs )
             "USAGE: test_fftm_3D_compare.bin [--strategy slab-pencil|pencil-slab|pencil-pencil|all] "
             "[--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2] [--threshold eps] "
             "[--use-direct-backward-receive|--no-direct-backward-receive] "
-            "[--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] [Nx Ny Nz]"
+            "[--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] "
+            "[--use-p2p-byte-transfer|--no-p2p-byte-transfer] [Nx Ny Nz]"
         );
     }
 
@@ -198,6 +210,7 @@ fftm::fftm_init_options make_init_options( const test_options &options )
     fftm::fftm_init_options init_options;
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
     return init_options;
 }
 
