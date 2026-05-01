@@ -4780,7 +4780,7 @@ private:
     mpi_dtype_t                                      mpi_value_type_;
     bool                                             use_direct_backward_receive_ = false;
     bool                                             direct_p2p_cuda_aware_       = true;
-    bool                                             use_p2p_send_thread_         = true;
+    bool                                             use_p2p_send_thread_         = false;
     bool                                             use_p2p_byte_transfer_       = false;
 
     std::vector<std::size_t> forward_send_offsets_;

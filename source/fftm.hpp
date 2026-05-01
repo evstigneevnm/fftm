@@ -77,7 +77,7 @@ struct fftm_init_options
     bool        use_optimized                    = true;
     bool        use_direct_backward_receive      = false;
     bool        direct_p2p_cuda_aware            = true;
-    bool        use_p2p_send_thread              = true;
+    bool        use_p2p_send_thread              = false;
     bool        use_p2p_byte_transfer            = false;
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;

@@ -887,8 +887,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--use-p2p-send-thread",
         action="store_true",
-        default=True,
-        help="Enable MPI sender-thread posting for optimized FFTM 3D p2p paths when MPI_THREAD_MULTIPLE is available. Default: enabled",
+        default=False,
+        help="Enable MPI sender-thread posting for optimized FFTM 3D p2p paths when MPI_THREAD_MULTIPLE is available. Default: disabled",
     )
     parser.add_argument(
         "--no-p2p-send-thread",
