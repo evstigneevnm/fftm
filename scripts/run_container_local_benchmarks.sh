@@ -32,6 +32,18 @@ USE_P2P_BYTE_TRANSFER="${FFTM_USE_P2P_BYTE_TRANSFER:-0}"
 P2P_VARIANTS="${FFTM_P2P_VARIANTS:-configured}"
 EXTRA_SIZES_3D="${FFTM_EXTRA_SIZES_3D:-}"
 EXTRA_SIZES_3D_BY_GPU="${FFTM_EXTRA_SIZES_3D_BY_GPU:-}"
+MAX_GPUS="${FFTM_MAX_GPUS:-}"
+DEVICE_MEMORY_MIB="${FFTM_DEVICE_MEMORY_MIB:-40960}"
+AUTO_MEMORY_FRACTION="${FFTM_AUTO_MEMORY_FRACTION:-0.72}"
+AUTO_RESERVE_MEMORY_MIB="${FFTM_AUTO_RESERVE_MEMORY_MIB:-2048}"
+AUTO_BYTES_PER_POINT_3D="${FFTM_AUTO_BYTES_PER_POINT_3D:-48}"
+AUTO_BYTES_PER_POINT_4D="${FFTM_AUTO_BYTES_PER_POINT_4D:-40}"
+AUTO_REFERENCE_SIZE_3D="${FFTM_AUTO_REFERENCE_SIZE_3D:-}"
+AUTO_REFERENCE_SIZE_4D="${FFTM_AUTO_REFERENCE_SIZE_4D:-}"
+AUTO_MIN_SIZE_3D="${FFTM_AUTO_MIN_SIZE_3D:-64}"
+AUTO_MIN_SIZE_4D="${FFTM_AUTO_MIN_SIZE_4D:-16}"
+AUTO_MAX_SIZE_3D="${FFTM_AUTO_MAX_SIZE_3D:-}"
+AUTO_MAX_SIZE_4D="${FFTM_AUTO_MAX_SIZE_4D:-}"
 BUILD_JOBS="${FFTM_BUILD_JOBS:-8}"
 CUDA_ARCH="${FFTM_CUDA_ARCH:--gencode arch=compute_80,code=sm_80 -gencode arch=compute_70,code=sm_70}"
 
@@ -72,12 +84,35 @@ args=(
     --benchmark-times "${BENCHMARK_TIMES}"
     --warmup "${TEST_WARMUP}"
     --validation-times "${VALIDATION_TIMES}"
+    --device-memory-mib "${DEVICE_MEMORY_MIB}"
+    --auto-memory-fraction "${AUTO_MEMORY_FRACTION}"
+    --auto-reserve-memory-mib "${AUTO_RESERVE_MEMORY_MIB}"
+    --auto-bytes-per-point-3d "${AUTO_BYTES_PER_POINT_3D}"
+    --auto-bytes-per-point-4d "${AUTO_BYTES_PER_POINT_4D}"
+    --auto-min-size-3d "${AUTO_MIN_SIZE_3D}"
+    --auto-min-size-4d "${AUTO_MIN_SIZE_4D}"
     --modes "${MODES}"
     --transports "${TRANSPORTS}"
     --p2p-variants "${P2P_VARIANTS}"
     --extra-sizes-3d "${EXTRA_SIZES_3D}"
     --extra-sizes-3d-by-gpu "${EXTRA_SIZES_3D_BY_GPU}"
 )
+
+if [[ -n "${MAX_GPUS}" ]]; then
+    args+=(--max-gpus "${MAX_GPUS}")
+fi
+if [[ -n "${AUTO_REFERENCE_SIZE_3D}" ]]; then
+    args+=(--auto-reference-size-3d "${AUTO_REFERENCE_SIZE_3D}")
+fi
+if [[ -n "${AUTO_REFERENCE_SIZE_4D}" ]]; then
+    args+=(--auto-reference-size-4d "${AUTO_REFERENCE_SIZE_4D}")
+fi
+if [[ -n "${AUTO_MAX_SIZE_3D}" ]]; then
+    args+=(--auto-max-size-3d "${AUTO_MAX_SIZE_3D}")
+fi
+if [[ -n "${AUTO_MAX_SIZE_4D}" ]]; then
+    args+=(--auto-max-size-4d "${AUTO_MAX_SIZE_4D}")
+fi
 
 case "${USE_DIRECT_BACKWARD_RECEIVE}" in
     1|true|TRUE|yes|YES|on|ON) args+=(--use-direct-backward-receive) ;;
@@ -111,6 +146,8 @@ fi
     --ipc=host \
     -e NVIDIA_VISIBLE_DEVICES="${DOCKER_GPUS}" \
     -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    -e OMPI_ALLOW_RUN_AS_ROOT=1 \
+    -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
     -v "${DATA_DIR}:/data" \
     "${IMAGE}" \
     "${args[@]}"
