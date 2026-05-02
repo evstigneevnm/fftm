@@ -62,6 +62,9 @@ fi
 
 mkdir -p "${DATA_DIR}"
 
+DEVICE_MEMORY_ARGS=()
+read -r -a DEVICE_MEMORY_ARGS <<< "${DEVICE_MEMORY_MIB//,/ }"
+
 if [[ "${BUILD_IMAGE}" == "1" ]]; then
     "${DOCKER_CMD[@]}" build \
         -f "${DOCKERFILE}" \
@@ -84,7 +87,6 @@ args=(
     --benchmark-times "${BENCHMARK_TIMES}"
     --warmup "${TEST_WARMUP}"
     --validation-times "${VALIDATION_TIMES}"
-    --device-memory-mib "${DEVICE_MEMORY_MIB}"
     --auto-memory-fraction "${AUTO_MEMORY_FRACTION}"
     --auto-reserve-memory-mib "${AUTO_RESERVE_MEMORY_MIB}"
     --auto-bytes-per-point-3d "${AUTO_BYTES_PER_POINT_3D}"
@@ -97,6 +99,10 @@ args=(
     --extra-sizes-3d "${EXTRA_SIZES_3D}"
     --extra-sizes-3d-by-gpu "${EXTRA_SIZES_3D_BY_GPU}"
 )
+
+if [[ ${#DEVICE_MEMORY_ARGS[@]} -gt 0 ]]; then
+    args+=(--device-memory-mib "${DEVICE_MEMORY_ARGS[@]}")
+fi
 
 if [[ -n "${MAX_GPUS}" ]]; then
     args+=(--max-gpus "${MAX_GPUS}")
