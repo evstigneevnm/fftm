@@ -37,7 +37,7 @@ struct fftm_3d_test_options
     int                           warmup   = 0;
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
-    bool                          use_p2p_send_thread         = true;
+    bool                          use_p2p_send_thread         = false;
     bool                          use_p2p_byte_transfer       = false;
 };
 
