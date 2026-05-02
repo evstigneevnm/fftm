@@ -30,6 +30,7 @@ DOCKER_GPUS="${DOCKER_GPUS:-${FFTM_DOCKER_GPUS:-all}}"
 BUILD_IMAGE="${BUILD_IMAGE:-${FFTM_BUILD_IMAGE:-0}}"
 
 mkdir -p "${DATA_DIR}"
+DATA_DIR="$(cd "${DATA_DIR}" && pwd)"
 
 echo "FFTM Docker image: ${IMAGE}"
 echo "Output data dir:   ${DATA_DIR}"
