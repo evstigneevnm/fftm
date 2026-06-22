@@ -24,6 +24,8 @@
 #include <fftm.hpp>
 #include <ffts.hpp>
 
+#include "detail/mpi_cuda_test_init.h"
+
 namespace
 {
 
@@ -55,9 +57,14 @@ struct test_options
     std::size_t                 p1        = 0;
     std::size_t                 p2        = 0;
     T                           threshold = T( 1.0e-11 );
-    bool                        use_direct_backward_receive = false;
-    bool                        direct_p2p_cuda_aware       = true;
-    bool                        use_p2p_byte_transfer       = false;
+    bool                                      use_direct_backward_receive = false;
+    bool                                      direct_p2p_cuda_aware       = true;
+    bool                                      use_p2p_byte_transfer       = false;
+    bool                                      print_pencil_schedule       = false;
+    bool                                      use_direct_forward_byte_receive = false;
+    fftm::fftm_3d_large_count_p2p_transport  large_count_p2p_transport =
+        fftm::fftm_3d_large_count_p2p_transport::hindexed;
+    fftm::fftm_3d_pencil_pipeline            pencil_pipeline = fftm::fftm_3d_pencil_pipeline::staged;
 };
 
 std::pair<std::size_t, std::size_t> choose_pencil_grid( std::size_t num_procs )
@@ -159,6 +166,61 @@ test_options parse_options( int argc, char *argv[], int num_procs )
             options.use_p2p_byte_transfer = false;
             argi += 1;
         }
+        else if ( arg == "--print-pencil-schedule" )
+        {
+            options.print_pencil_schedule = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-print-pencil-schedule" )
+        {
+            options.print_pencil_schedule = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-direct-forward-byte-receive" )
+        {
+            options.use_direct_forward_byte_receive = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-forward-byte-receive" )
+        {
+            options.use_direct_forward_byte_receive = false;
+            argi += 1;
+        }
+        else if ( arg == "--large-count-p2p-transport" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --large-count-p2p-transport" );
+            const std::string value = argv[argi + 1];
+            if ( value == "hindexed" )
+                options.large_count_p2p_transport = fftm::fftm_3d_large_count_p2p_transport::hindexed;
+            else if ( value == "mpi-count" || value == "mpi_count" )
+                options.large_count_p2p_transport = fftm::fftm_3d_large_count_p2p_transport::mpi_count;
+            else if ( value == "element-count" || value == "element_count" || value == "complex-count" ||
+                      value == "complex_count" )
+                options.large_count_p2p_transport = fftm::fftm_3d_large_count_p2p_transport::element_count;
+            else if ( value == "chunked" )
+                options.large_count_p2p_transport = fftm::fftm_3d_large_count_p2p_transport::chunked;
+            else
+                throw std::logic_error( "Unknown large-count P2P transport '" + value + "'" );
+            argi += 2;
+        }
+        else if ( arg == "--pencil-pipeline" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --pencil-pipeline" );
+            const std::string value = argv[argi + 1];
+            if ( value == "staged" )
+                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::staged;
+            else if ( value == "fused" )
+                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::fused;
+            else if ( value == "egger" )
+                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::egger;
+            else if ( value == "egger-parity" || value == "egger_parity" )
+                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::egger_parity;
+            else
+                throw std::logic_error( "Unknown pencil pipeline '" + value + "'" );
+            argi += 2;
+        }
         else
         {
             break;
@@ -177,8 +239,12 @@ test_options parse_options( int argc, char *argv[], int num_procs )
             "USAGE: test_fftm_3D_compare.bin [--strategy slab-pencil|pencil-slab|pencil-pencil|all] "
             "[--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2] [--threshold eps] "
             "[--use-direct-backward-receive|--no-direct-backward-receive] "
-            "[--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] "
-            "[--use-p2p-byte-transfer|--no-p2p-byte-transfer] [Nx Ny Nz]"
+	            "[--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware] "
+            "[--use-p2p-byte-transfer|--no-p2p-byte-transfer] "
+            "[--print-pencil-schedule|--no-print-pencil-schedule] "
+            "[--use-direct-forward-byte-receive|--no-direct-forward-byte-receive] "
+            "[--large-count-p2p-transport hindexed|mpi-count|element-count|chunked] "
+            "[--pencil-pipeline staged|fused|egger|egger-parity] [Nx Ny Nz]"
         );
     }
 
@@ -209,8 +275,12 @@ fftm::fftm_init_options make_init_options( const test_options &options )
 {
     fftm::fftm_init_options init_options;
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
-    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
-    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+    init_options.direct_p2p_cuda_aware      = options.direct_p2p_cuda_aware;
+    init_options.use_p2p_byte_transfer      = options.use_p2p_byte_transfer;
+    init_options.print_pencil_schedule      = options.print_pencil_schedule;
+    init_options.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
+    init_options.large_count_p2p_transport = options.large_count_p2p_transport;
+    init_options.pencil_pipeline_3d         = options.pencil_pipeline;
     return init_options;
 }
 
@@ -476,7 +546,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
 
         const test_options options = parse_options( argc, argv, comm_info.num_procs );
 

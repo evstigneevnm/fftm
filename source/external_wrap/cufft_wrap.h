@@ -87,9 +87,32 @@ struct cuda_runtime_api
         CUDA_SAFE_CALL( cudaDeviceSynchronize() );
     }
 
+    static int get_device()
+    {
+        int device = 0;
+        CUDA_SAFE_CALL( cudaGetDevice( &device ) );
+        return device;
+    }
+
+    static void set_device( int device )
+    {
+        CUDA_SAFE_CALL( cudaSetDevice( device ) );
+    }
+
     static void stream_synchronize( stream_t stream )
     {
         CUDA_SAFE_CALL( cudaStreamSynchronize( stream ) );
+    }
+
+    static bool stream_ready( stream_t stream )
+    {
+        const cudaError_t err = cudaStreamQuery( stream );
+        if ( err == cudaSuccess )
+            return true;
+        if ( err == cudaErrorNotReady )
+            return false;
+        CUDA_SAFE_CALL( err );
+        return false;
     }
 
     static void launch_host_func( stream_t stream, host_func_t func, void *data )

@@ -22,6 +22,7 @@
 #include "../detail/direct_transpose_4d.h"
 #include "../detail/mpi_transpose_4d.h"
 #include "../fft_partitioning.h"
+#include "detail/mpi_cuda_test_init.h"
 
 namespace
 {
@@ -742,7 +743,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
 
         const test_options options = parse_options( argc, argv, comm_info.num_procs );
         if ( options.p1 * options.p2 * options.p3 != static_cast<std::size_t>( comm_info.num_procs ) )

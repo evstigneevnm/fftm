@@ -1068,6 +1068,10 @@ int run_for_strategy_kind(
             std::integral_constant<int, FFTM_EGGER_TESTCASE>(), log, options, comm_info
         );
     case strategy_kind::pencil_pencil:
+        if ( options.pencil_layout == fftm::test::detail::fftm_3d_pencil_layout_kind::legacy )
+            return run_case<fftm::strategy_3d_pencil_pencil<Mode, false>>(
+                std::integral_constant<int, FFTM_EGGER_TESTCASE>(), log, options, comm_info
+            );
         return run_case<fftm::strategy_3d_pencil_pencil<Mode>>(
             std::integral_constant<int, FFTM_EGGER_TESTCASE>(), log, options, comm_info
         );

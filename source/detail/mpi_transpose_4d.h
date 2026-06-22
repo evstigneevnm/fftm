@@ -68,7 +68,7 @@ public:
     using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
     using host_buf_t        = scfd::arrays::array_nd<value_type, 1, host_memory_t>;
     using mpi_request_t     = scfd::communication::detail::mpi_request;
-    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
+    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type;
     using idx_t             = scfd::static_vec::vec<int, 4>;
     using range_t           = rect_4d_t<idx_t>;
     using for_each_t        = typename backend_t::template for_each_nd_type<4, int>;
@@ -533,7 +533,7 @@ private:
     {
         mpi_value_type_ = scfd::communication::detail::type_contiguous(
             detail::mpi_int_cast( sizeof( value_type ), "mpi_transpose_4d_same_xy value type extent" ),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+            scfd::communication::detail::mpi_data_type_trait<char>::get()
         );
         scfd::communication::detail::type_commit( mpi_value_type_ );
         mpi_value_type_inited_ = true;
@@ -1489,7 +1489,7 @@ public:
     using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
     using host_buf_t        = scfd::arrays::array_nd<value_type, 1, host_memory_t>;
     using mpi_request_t     = scfd::communication::detail::mpi_request;
-    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
+    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type;
     using idx_t             = scfd::static_vec::vec<int, 4>;
     using range_t           = rect_4d_t<idx_t>;
     using for_each_t        = typename backend_t::template for_each_nd_type<4, int>;
@@ -1954,7 +1954,7 @@ private:
     {
         mpi_value_type_ = scfd::communication::detail::type_contiguous(
             detail::mpi_int_cast( sizeof( value_type ), "mpi_transpose_4d_same_xw value type extent" ),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+            scfd::communication::detail::mpi_data_type_trait<char>::get()
         );
         scfd::communication::detail::type_commit( mpi_value_type_ );
         mpi_value_type_inited_ = true;
@@ -2908,7 +2908,7 @@ public:
     using contiguous_buf_t  = scfd::arrays::array_nd<value_type, 1, memory_t>;
     using host_buf_t        = scfd::arrays::array_nd<value_type, 1, host_memory_t>;
     using mpi_request_t     = scfd::communication::detail::mpi_request;
-    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type<>;
+    using mpi_dtype_t       = scfd::communication::detail::mpi_data_type;
     using idx_t             = scfd::static_vec::vec<int, 4>;
     using range_t           = rect_4d_t<idx_t>;
     using for_each_t        = typename backend_t::template for_each_nd_type<4, int>;
@@ -3373,7 +3373,7 @@ private:
     {
         mpi_value_type_ = scfd::communication::detail::type_contiguous(
             detail::mpi_int_cast( sizeof( value_type ), "mpi_transpose_4d_same_zw value type extent" ),
-            scfd::communication::detail::mpi_data_type<char>::mpi_type()
+            scfd::communication::detail::mpi_data_type_trait<char>::get()
         );
         scfd::communication::detail::type_commit( mpi_value_type_ );
         mpi_value_type_inited_ = true;

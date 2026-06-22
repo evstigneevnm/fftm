@@ -21,6 +21,7 @@
 
 #include "detail/fft_benchmark_common.h"
 #include "detail/fft_benchmark_options.h"
+#include "detail/mpi_cuda_test_init.h"
 #include "detail/test_memory_profile_helpers.h"
 
 namespace
@@ -163,16 +164,29 @@ int run_benchmark_case(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "benchmark=fftm-3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d: "
+            "benchmark=fftm-3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d, "
+            "pencil_layout=%s, pencil_pipeline=%s, persistent_p2p=%d, ready_p2p_send=%d, "
+            "large_count_p2p_transport=%s: "
             "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
-            options.p2, options.nx, options.ny, options.nz, options.warmup, options.times, stats.mean, stats.stddev
+            options.p2, options.nx, options.ny, options.nz, options.warmup, options.times,
+            fftm::test::detail::pencil_layout_name( options.pencil_layout ),
+            fftm::test::detail::pencil_pipeline_name( options.pencil_pipeline ),
+            options.use_persistent_p2p ? 1 : 0, options.use_ready_p2p_send ? 1 : 0,
+            fftm::fftm_3d_large_count_p2p_transport_name( options.large_count_p2p_transport ), stats.mean,
+            stats.stddev
         );
 
         std::ostringstream row;
         row << fftm::test::detail::csv_quote( "fftm-3d" ) << ',' << comm_info.num_procs << ','
             << fftm::test::detail::csv_quote( fftm_t::strategy_name() ) << ','
             << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ) ) << ','
+            << fftm::test::detail::csv_quote( fftm::test::detail::pencil_layout_name( options.pencil_layout ) ) << ','
+            << fftm::test::detail::csv_quote( fftm::test::detail::pencil_pipeline_name( options.pencil_pipeline ) ) << ','
+            << ( options.use_persistent_p2p ? 1 : 0 ) << ',' << ( options.use_ready_p2p_send ? 1 : 0 ) << ','
+            << fftm::test::detail::csv_quote(
+                   fftm::fftm_3d_large_count_p2p_transport_name( options.large_count_p2p_transport ) )
+            << ','
             << options.p1 << ',' << options.p2 << ',' << 1 << ',' << options.nx << ',' << options.ny << ','
             << options.nz << ',' << 0 << ',' << options.times << ',' << options.warmup << ',' << options.epsilon
             << ',' << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
@@ -180,7 +194,7 @@ int run_benchmark_case(
 
         fftm::test::detail::append_csv_row(
             options.directory, "benchmark_fftm_3d.csv",
-            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
+            "benchmark,num_gpus,strategy,mode,pencil_layout,pencil_pipeline,persistent_p2p,ready_p2p_send,large_count_p2p_transport,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
             "max_l2_diff,directory",
             row.str()
         );
@@ -202,7 +216,11 @@ int dispatch_mode(
     case strategy_kind::pencil_slab:
         return run_benchmark_case<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
     case strategy_kind::pencil_pencil:
-        return run_benchmark_case<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
+        if ( options.pencil_layout == fftm::test::detail::fftm_3d_pencil_layout_kind::legacy )
+        {
+            return run_benchmark_case<fftm::strategy_3d_pencil_pencil<Mode, false>>( log, options, comm_info );
+        }
+        return run_benchmark_case<fftm::strategy_3d_pencil_pencil<Mode, true>>( log, options, comm_info );
     }
     return 1;
 }
@@ -236,7 +254,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
         const options_t options = fftm::test::detail::parse_fftm_3d_benchmark_options<T>(
             argc, argv, comm_info.num_procs, "test_benchmark_fftm_3D.bin"
         );

@@ -47,6 +47,9 @@ class ResultRow:
     strategy: str
     mode: str
     p2p_variant: str
+    pencil_layout: str
+    pencil_pipeline: str
+    large_count_p2p_transport: str
     num_gpus: int
     returncode: int
     sizes: Tuple[int, ...]
@@ -303,6 +306,13 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
             strategy = summary.get("strategy") or spec.get("strategy") or "-"
             mode = summary.get("mode") or spec.get("mode") or "-"
             p2p_variant = spec.get("p2p_variant") or "configured"
+            pencil_layout = spec.get("pencil_layout") or summary.get("pencil_layout") or "configured"
+            pencil_pipeline = spec.get("pencil_pipeline") or summary.get("pencil_pipeline") or "configured"
+            large_count_p2p_transport = (
+                spec.get("large_count_p2p_transport")
+                or summary.get("large_count_p2p_transport")
+                or "configured"
+            )
             transport = spec.get("transport") or "unknown"
             suite = spec.get("suite") or "unknown"
             dim = int(spec.get("dim") or len(sizes) or 0)
@@ -335,6 +345,9 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
                     strategy=strategy,
                     mode=mode,
                     p2p_variant=p2p_variant,
+                    pencil_layout=pencil_layout,
+                    pencil_pipeline=pencil_pipeline,
+                    large_count_p2p_transport=large_count_p2p_transport,
                     num_gpus=int(spec.get("num_gpus") or 0),
                     returncode=int(rec.get("returncode") if rec.get("returncode") is not None else -999),
                     sizes=sizes,
@@ -470,6 +483,9 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                 "strategy",
                 "mode",
                 "p2p_variant",
+                "pencil_layout",
+                "pencil_pipeline",
+                "large_count_p2p_transport",
                 "num_gpus",
                 "returncode",
                 "sizes",
@@ -499,6 +515,9 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                     r.strategy,
                     r.mode,
                     r.p2p_variant,
+                    r.pencil_layout,
+                    r.pencil_pipeline,
+                    r.large_count_p2p_transport,
                     r.num_gpus,
                     r.returncode,
                     "x".join(str(v) for v in r.sizes),
@@ -796,6 +815,10 @@ def config_label(row: ResultRow) -> str:
         parts.append(row.mode)
     if row.p2p_variant and row.p2p_variant not in {"configured", "nca-staging"}:
         parts.append(row.p2p_variant)
+    if row.pencil_layout and row.pencil_layout != "configured":
+        parts.append(f"layout={row.pencil_layout}")
+    if row.pencil_pipeline and row.pencil_pipeline != "configured":
+        parts.append(f"pipe={row.pencil_pipeline}")
     return ", ".join(parts) if parts else row.strategy
 
 
@@ -1865,6 +1888,108 @@ def gflops_gpu_scaling_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args:
     return path
 
 
+def fixed_size_metric_gpu_scaling_pdf(
+    rows: List[ResultRow],
+    *,
+    dim: int,
+    side_length: int,
+    metric: str,
+    fig_dir: Path,
+    args: argparse.Namespace,
+) -> Optional[Path]:
+    benchmark = [
+        row
+        for row in rows
+        if row.case_name == "benchmark"
+        and row.dim == dim
+        and row.suite == "fftm"
+        and row.ok
+        and size_n(row) == side_length
+    ]
+    if not benchmark:
+        return None
+    x_values = sorted(set(row.num_gpus for row in benchmark))
+    if len(x_values) < 2:
+        return None
+
+    if metric == "gflops":
+        value_getter = lambda row: row.effective_gflops_s
+        y_label = "GFLOP/s"
+        title_metric = "effective GFLOP/s"
+        path_suffix = "gflops"
+        note = "Effective rate uses 10*N*log2(N) operations for the measured forward+inverse pair."
+    elif metric == "gpoints":
+        value_getter = lambda row: row.throughput_gpoints_s
+        y_label = "Gpoints/s"
+        title_metric = "throughput"
+        path_suffix = "gpoints"
+        note = "Best successful redistribution mode selected per strategy/transport/GPU count."
+    else:
+        raise ValueError(f"unknown fixed-size metric: {metric}")
+
+    colors = [
+        (0.10, 0.32, 0.70),
+        (0.88, 0.35, 0.08),
+        (0.12, 0.55, 0.20),
+        (0.72, 0.20, 0.18),
+        (0.52, 0.24, 0.68),
+        (0.35, 0.35, 0.35),
+    ]
+    series = []
+    color_index = 0
+    for strategy in STRATEGY_ORDER.get(dim, sorted(set(row.strategy for row in benchmark))):
+        for transport in ["cuda_aware", "non_cuda_aware"]:
+            points: List[Tuple[int, float]] = []
+            for gpu_count in x_values:
+                candidates = [
+                    row
+                    for row in benchmark
+                    if row.strategy == strategy and row.transport == transport and row.num_gpus == gpu_count
+                ]
+                if not candidates:
+                    continue
+                best = max(candidates, key=lambda row: value_getter(row) or -1.0)
+                value = value_getter(best)
+                if value is not None:
+                    points.append((gpu_count, value))
+            if points:
+                label = f"{strategy} {('CA' if transport == 'cuda_aware' else 'NCA')}"
+                series.append((label, points, colors[color_index % len(colors)]))
+                color_index += 1
+
+    if not series:
+        return None
+
+    width = 535.0
+    height = 292.0
+    canvas = PdfCanvas(width, height)
+    canvas.text(
+        width / 2.0,
+        height - 18.0,
+        f"{dim}D FFTM {title_metric} at N={side_length}",
+        args.title_font_size,
+        align="center",
+    )
+    canvas.text(width / 2.0, height - 32.0, note, args.legend_font_size, color=(0.25, 0.25, 0.25), align="center")
+    legend_items = [(label, color) for label, _, color in series]
+    draw_legend_wrapped(canvas, legend_items, 58.0, height - 49.0, width - 116.0, args.legend_font_size)
+    draw_line_panel(
+        canvas,
+        (58.0, 56.0, width - 90.0, height - 145.0),
+        f"N={side_length}^{dim}",
+        x_values,
+        series,
+        y_label,
+        "MPI ranks / GPUs",
+        args,
+        log_y=False,
+        y_min_override=0.0,
+    )
+    path = fig_dir / f"fig_fftm_{dim}d_fixed_N{side_length}_{path_suffix}_gpu_scaling.pdf"
+    canvas.save(path)
+    return path
+
+
 def ffts_fftm_relative_pdf(rows: List[ResultRow], fig_dir: Path, args: argparse.Namespace) -> Optional[Path]:
     benchmark = [r for r in rows if r.case_name == "benchmark" and r.ok]
     categories: List[str] = []
@@ -2603,6 +2728,18 @@ def main() -> int:
         fig = gflops_gpu_scaling_pdf(rows, dim, dirs["figures"], args)
         if fig:
             generated.append(fig)
+        if dim == 3:
+            for metric in ["gflops", "gpoints"]:
+                fig = fixed_size_metric_gpu_scaling_pdf(
+                    rows,
+                    dim=3,
+                    side_length=2048,
+                    metric=metric,
+                    fig_dir=dirs["figures"],
+                    args=args,
+                )
+                if fig:
+                    generated.append(fig)
         fig = runtime_absolute_heatmap_pdf(rows, dim, dirs["figures"], args)
         if fig:
             generated.append(fig)

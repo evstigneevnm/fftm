@@ -20,6 +20,12 @@ CONTAINER_DATA_DIR="${FFTM_CONTAINER_DATA_DIR:-/data}"
 CONTAINER_TESTS_ROOT="${FFTM_CONTAINER_TESTS_ROOT:-/opt/fftm/bin}"
 CONTAINER_ENV="${FFTM_CONTAINER_ENV:-}"
 CONTAINER_MOUNTS="${FFTM_CONTAINER_MOUNTS:-}"
+RUN_PREFLIGHT="${FFTM_RUN_PREFLIGHT:-1}"
+PREFLIGHT_TIME="${FFTM_PREFLIGHT_TIME:-00:03:00}"
+STOP_ON_FAILURE="${FFTM_STOP_ON_FAILURE:-1}"
+SKIP_FFTS="${FFTM_SKIP_FFTS:-0}"
+SKIP_FFTM="${FFTM_SKIP_FFTM:-0}"
+DRY_RUN="${FFTM_DRY_RUN:-0}"
 
 BENCHMARK_SIZES_3D="${FFTM_BENCHMARK_SIZES_3D:-auto}"
 BENCHMARK_SIZES_4D="${FFTM_BENCHMARK_SIZES_4D:-auto}"
@@ -40,20 +46,153 @@ AUTO_MAX_SIZE_3D="${FFTM_AUTO_MAX_SIZE_3D:-}"
 AUTO_MAX_SIZE_4D="${FFTM_AUTO_MAX_SIZE_4D:-}"
 MODES="${FFTM_MODES:-alltoallv,p2p-waitall,p2p-waitany}"
 TRANSPORTS="${FFTM_TRANSPORTS:-cuda_aware,non_cuda_aware}"
+STRATEGIES_3D="${FFTM_STRATEGIES_3D:-slab-pencil,pencil-slab,pencil-pencil}"
+STRATEGIES_4D="${FFTM_STRATEGIES_4D:-slab-slab,pencil-pencil}"
 INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-0}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
 USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
 DIRECT_P2P_CUDA_AWARE="${FFTM_DIRECT_P2P_CUDA_AWARE:-1}"
 USE_P2P_SEND_THREAD="${FFTM_USE_P2P_SEND_THREAD:-0}"
 USE_P2P_BYTE_TRANSFER="${FFTM_USE_P2P_BYTE_TRANSFER:-0}"
+USE_PERSISTENT_P2P="${FFTM_USE_PERSISTENT_P2P:-0}"
+USE_READY_P2P_SEND="${FFTM_USE_READY_P2P_SEND:-0}"
+PRINT_PENCIL_SCHEDULE="${FFTM_PRINT_PENCIL_SCHEDULE:-0}"
+USE_DIRECT_FORWARD_BYTE_RECEIVE="${FFTM_USE_DIRECT_FORWARD_BYTE_RECEIVE:-0}"
 P2P_VARIANTS="${FFTM_P2P_VARIANTS:-configured}"
-EXTRA_SIZES_3D="${FFTM_EXTRA_SIZES_3D:-}"
-EXTRA_SIZES_3D_BY_GPU="${FFTM_EXTRA_SIZES_3D_BY_GPU:-1:1050;2:1344;3:1536;4:1680;5:1800;6:1920;7:2025;8:2100}"
+P2P_SCHEDULERS="${FFTM_P2P_SCHEDULERS:-configured}"
+PENCIL_LAYOUTS="${FFTM_PENCIL_LAYOUTS:-configured}"
+PENCIL_PIPELINES="${FFTM_PENCIL_PIPELINES:-configured}"
+LARGE_COUNT_P2P_TRANSPORTS="${FFTM_LARGE_COUNT_P2P_TRANSPORTS:-configured}"
+PENCIL_PENCIL_GRID_ORIENTATIONS="${FFTM_PENCIL_PENCIL_GRID_ORIENTATIONS:-both}"
+EXTRA_SIZES_3D="${FFTM_EXTRA_SIZES_3D-}"
+EXTRA_SIZES_3D_BY_GPU="${FFTM_EXTRA_SIZES_3D_BY_GPU-1:1050;2:1344;3:1536;4:1680;5:1800,2048;6:1920,2048;7:2025,2048;8:2100,2048}"
+FIXED_SCALING_SIZES_3D="${FFTM_FIXED_SCALING_SIZES_3D:-${FFTM_FIXED_SCALING_SIZE_3D:-}}"
+FIXED_SCALING_SIZES_4D="${FFTM_FIXED_SCALING_SIZES_4D:-${FFTM_FIXED_SCALING_SIZE_4D:-}}"
 GPU_NAME="${FFTM_GPU_NAME:-A100}"
 DEVICE_MEMORY_MIB="${FFTM_DEVICE_MEMORY_MIB:-40960}"
 TIMEOUT_SECONDS="${FFTM_TIMEOUT_SECONDS:-7200}"
 
 mkdir -p "${DATA_DIR}"
+DATA_DIR="$(cd "${DATA_DIR}" && pwd -P)"
+
+if [[ "${FFTM_CONTAINER_IMAGE}" == /* && ! -f "${FFTM_CONTAINER_IMAGE}" ]]; then
+    cat >&2 <<EOF
+ERROR: FFTM_CONTAINER_IMAGE does not exist:
+  ${FFTM_CONTAINER_IMAGE}
+
+Build/copy the .sqsh image first, or set FFTM_CONTAINER_IMAGE to the correct
+Pyxis image URI/path before launching the benchmark matrix.
+EOF
+    exit 2
+fi
+
+if [[ ! -d "${DATA_DIR}" ]]; then
+    echo "ERROR: data directory was not created: ${DATA_DIR}" >&2
+    exit 2
+fi
+
+if ! ( : > "${DATA_DIR}/.fftm_write_test" ) 2>/dev/null; then
+    echo "ERROR: data directory is not writable: ${DATA_DIR}" >&2
+    exit 2
+fi
+rm -f "${DATA_DIR}/.fftm_write_test"
+
+if [[ -n "${CONTAINER_MOUNTS}" ]]; then
+    IFS=',' read -r -a preflight_mount_array <<< "${CONTAINER_MOUNTS}"
+    for mount in "${preflight_mount_array[@]}"; do
+        [[ -z "${mount}" ]] && continue
+        src="${mount%%:*}"
+        if [[ "${src}" == /* && ! -e "${src}" ]]; then
+            echo "ERROR: container mount source does not exist: ${src}" >&2
+            exit 2
+        fi
+    done
+fi
+
+container_mounts_arg="${DATA_DIR}:${CONTAINER_DATA_DIR}"
+if [[ -n "${CONTAINER_MOUNTS}" ]]; then
+    container_mounts_arg="${container_mounts_arg},${CONTAINER_MOUNTS}"
+fi
+
+contains_csv()
+{
+    local haystack=",$1,"
+    local needle=",$2,"
+    [[ "${haystack}" == *"${needle}"* ]]
+}
+
+dim_is_active()
+{
+    local benchmark_sizes="$1"
+    local fixed_sizes="$2"
+    local extra_sizes="$3"
+    local extra_sizes_by_gpu="${4:-}"
+
+    case "${benchmark_sizes}" in
+        none|off|skip)
+            [[ -n "${fixed_sizes}${extra_sizes}${extra_sizes_by_gpu}" ]]
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+selected_preflight_bins=()
+if dim_is_active "${BENCHMARK_SIZES_3D}" "${FIXED_SCALING_SIZES_3D}" "${EXTRA_SIZES_3D}" "${EXTRA_SIZES_3D_BY_GPU}"; then
+    if [[ "${SKIP_FFTS}" != "1" && "${SKIP_FFTS}" != "true" && "${SKIP_FFTS}" != "TRUE" ]]; then
+        selected_preflight_bins+=( "test_benchmark_ffts_3D.bin" )
+    fi
+    if [[ "${SKIP_FFTM}" != "1" && "${SKIP_FFTM}" != "true" && "${SKIP_FFTM}" != "TRUE" ]]; then
+        contains_csv "${TRANSPORTS}" "cuda_aware" && selected_preflight_bins+=( "test_benchmark_fftm_3D.bin" )
+        contains_csv "${TRANSPORTS}" "non_cuda_aware" && selected_preflight_bins+=( "test_benchmark_fftm_3D_nca.bin" )
+    fi
+fi
+if dim_is_active "${BENCHMARK_SIZES_4D}" "${FIXED_SCALING_SIZES_4D}" "" ""; then
+    if [[ "${SKIP_FFTS}" != "1" && "${SKIP_FFTS}" != "true" && "${SKIP_FFTS}" != "TRUE" ]]; then
+        selected_preflight_bins+=( "test_benchmark_ffts_4D.bin" )
+    fi
+    if [[ "${SKIP_FFTM}" != "1" && "${SKIP_FFTM}" != "true" && "${SKIP_FFTM}" != "TRUE" ]]; then
+        contains_csv "${TRANSPORTS}" "cuda_aware" && selected_preflight_bins+=( "test_benchmark_fftm_4D.bin" )
+        contains_csv "${TRANSPORTS}" "non_cuda_aware" && selected_preflight_bins+=( "test_benchmark_fftm_4D_nca.bin" )
+    fi
+fi
+
+preflight_test_script="test -d '${CONTAINER_DATA_DIR}' && test -w '${CONTAINER_DATA_DIR}'"
+for bin_name in "${selected_preflight_bins[@]}"; do
+    preflight_test_script="${preflight_test_script} && test -x '${CONTAINER_TESTS_ROOT}/${bin_name}'"
+done
+
+if [[ "${RUN_PREFLIGHT}" != "0" && "${RUN_PREFLIGHT}" != "false" && "${RUN_PREFLIGHT}" != "FALSE" &&
+      "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" && "${DRY_RUN}" != "TRUE" ]]; then
+    preflight_cmd=(
+        srun
+        -N 1
+        -n 1
+        -G 1
+        --gpus-per-node=1
+        --time="${PREFLIGHT_TIME}"
+        --container-image "${FFTM_CONTAINER_IMAGE}"
+        --container-mounts="${container_mounts_arg}"
+        --container-workdir "${CONTAINER_WORKDIR}"
+        --container-entrypoint
+    )
+    if [[ -n "${SRUN_EXTRA_ARGS}" ]]; then
+        read -r -a srun_extra_array <<< "${SRUN_EXTRA_ARGS}"
+        preflight_cmd=( srun "${srun_extra_array[@]}" "${preflight_cmd[@]:1}" )
+    fi
+    if [[ -n "${CONTAINER_ENV}" ]]; then
+        preflight_cmd+=( "--container-env=${CONTAINER_ENV}" )
+    fi
+    preflight_cmd+=(
+        /bin/bash
+        -lc
+        "${preflight_test_script}"
+    )
+
+    echo "Running Pyxis preflight check..."
+    "${preflight_cmd[@]}"
+fi
 
 args=(
     python3 "${REPO_ROOT}/scripts/run_cluster_paper_benchmarks.py"
@@ -84,10 +223,19 @@ args=(
     --auto-min-size-3d "${AUTO_MIN_SIZE_3D}"
     --auto-min-size-4d "${AUTO_MIN_SIZE_4D}"
     --p2p-variants "${P2P_VARIANTS}"
+    --p2p-schedulers "${P2P_SCHEDULERS}"
+    --pencil-layouts "${PENCIL_LAYOUTS}"
+    --pencil-pipelines "${PENCIL_PIPELINES}"
+    --large-count-p2p-transports "${LARGE_COUNT_P2P_TRANSPORTS}"
     --extra-sizes-3d "${EXTRA_SIZES_3D}"
     --extra-sizes-3d-by-gpu "${EXTRA_SIZES_3D_BY_GPU}"
+    --fixed-scaling-sizes-3d "${FIXED_SCALING_SIZES_3D}"
+    --fixed-scaling-sizes-4d "${FIXED_SCALING_SIZES_4D}"
     --modes "${MODES}"
     --transports "${TRANSPORTS}"
+    --strategies-3d "${STRATEGIES_3D}"
+    --strategies-4d "${STRATEGIES_4D}"
+    --pencil-pencil-grid-orientations "${PENCIL_PENCIL_GRID_ORIENTATIONS}"
     --timeout-seconds "${TIMEOUT_SECONDS}"
 )
 
@@ -109,6 +257,26 @@ esac
 case "${USE_P2P_BYTE_TRANSFER}" in
     1|true|TRUE|yes|YES|on|ON) args+=(--use-p2p-byte-transfer) ;;
     *) args+=(--no-p2p-byte-transfer) ;;
+esac
+
+case "${USE_PERSISTENT_P2P}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-persistent-p2p) ;;
+    *) args+=(--no-persistent-p2p) ;;
+esac
+
+case "${USE_READY_P2P_SEND}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-ready-p2p-send) ;;
+    *) args+=(--no-ready-p2p-send) ;;
+esac
+
+case "${PRINT_PENCIL_SCHEDULE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--print-pencil-schedule) ;;
+    *) args+=(--no-print-pencil-schedule) ;;
+esac
+
+case "${USE_DIRECT_FORWARD_BYTE_RECEIVE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-direct-forward-byte-receive) ;;
+    *) args+=(--no-direct-forward-byte-receive) ;;
 esac
 
 if [[ -n "${MAX_GPUS}" ]]; then
@@ -143,6 +311,18 @@ if [[ "${INCLUDE_VERSIONED}" == "1" ]]; then
 fi
 if [[ "${VERSIONED_FULL_MATRIX}" == "1" ]]; then
     args+=(--versioned-full-matrix)
+fi
+if [[ "${STOP_ON_FAILURE}" != "0" && "${STOP_ON_FAILURE}" != "false" && "${STOP_ON_FAILURE}" != "FALSE" ]]; then
+    args+=(--stop-on-failure)
+fi
+if [[ "${SKIP_FFTS}" == "1" || "${SKIP_FFTS}" == "true" || "${SKIP_FFTS}" == "TRUE" ]]; then
+    args+=(--skip-ffts)
+fi
+if [[ "${SKIP_FFTM}" == "1" || "${SKIP_FFTM}" == "true" || "${SKIP_FFTM}" == "TRUE" ]]; then
+    args+=(--skip-fftm)
+fi
+if [[ "${DRY_RUN}" == "1" || "${DRY_RUN}" == "true" || "${DRY_RUN}" == "TRUE" ]]; then
+    args+=(--dry-run)
 fi
 
 "${args[@]}"

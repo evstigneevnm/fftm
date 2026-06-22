@@ -29,9 +29,19 @@ USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
 DIRECT_P2P_CUDA_AWARE="${FFTM_DIRECT_P2P_CUDA_AWARE:-1}"
 USE_P2P_SEND_THREAD="${FFTM_USE_P2P_SEND_THREAD:-0}"
 USE_P2P_BYTE_TRANSFER="${FFTM_USE_P2P_BYTE_TRANSFER:-0}"
+USE_PERSISTENT_P2P="${FFTM_USE_PERSISTENT_P2P:-0}"
+USE_READY_P2P_SEND="${FFTM_USE_READY_P2P_SEND:-0}"
+USE_DIRECT_FORWARD_BYTE_RECEIVE="${FFTM_USE_DIRECT_FORWARD_BYTE_RECEIVE:-0}"
 P2P_VARIANTS="${FFTM_P2P_VARIANTS:-configured}"
+P2P_SCHEDULERS="${FFTM_P2P_SCHEDULERS:-configured}"
+PENCIL_LAYOUTS="${FFTM_PENCIL_LAYOUTS:-configured}"
+PENCIL_PIPELINES="${FFTM_PENCIL_PIPELINES:-configured}"
+LARGE_COUNT_P2P_TRANSPORTS="${FFTM_LARGE_COUNT_P2P_TRANSPORTS:-configured}"
+PENCIL_PENCIL_GRID_ORIENTATIONS="${FFTM_PENCIL_PENCIL_GRID_ORIENTATIONS:-both}"
 EXTRA_SIZES_3D="${FFTM_EXTRA_SIZES_3D:-}"
 EXTRA_SIZES_3D_BY_GPU="${FFTM_EXTRA_SIZES_3D_BY_GPU:-}"
+FIXED_SCALING_SIZES_3D="${FFTM_FIXED_SCALING_SIZES_3D:-${FFTM_FIXED_SCALING_SIZE_3D:-}}"
+FIXED_SCALING_SIZES_4D="${FFTM_FIXED_SCALING_SIZES_4D:-${FFTM_FIXED_SCALING_SIZE_4D:-}}"
 MAX_GPUS="${FFTM_MAX_GPUS:-}"
 DEVICE_MEMORY_MIB="${FFTM_DEVICE_MEMORY_MIB:-40960}"
 AUTO_MEMORY_FRACTION="${FFTM_AUTO_MEMORY_FRACTION:-0.72}"
@@ -96,8 +106,15 @@ args=(
     --modes "${MODES}"
     --transports "${TRANSPORTS}"
     --p2p-variants "${P2P_VARIANTS}"
+    --p2p-schedulers "${P2P_SCHEDULERS}"
+    --pencil-layouts "${PENCIL_LAYOUTS}"
+    --pencil-pipelines "${PENCIL_PIPELINES}"
+    --large-count-p2p-transports "${LARGE_COUNT_P2P_TRANSPORTS}"
+    --pencil-pencil-grid-orientations "${PENCIL_PENCIL_GRID_ORIENTATIONS}"
     --extra-sizes-3d "${EXTRA_SIZES_3D}"
     --extra-sizes-3d-by-gpu "${EXTRA_SIZES_3D_BY_GPU}"
+    --fixed-scaling-sizes-3d "${FIXED_SCALING_SIZES_3D}"
+    --fixed-scaling-sizes-4d "${FIXED_SCALING_SIZES_4D}"
 )
 
 if [[ ${#DEVICE_MEMORY_ARGS[@]} -gt 0 ]]; then
@@ -138,6 +155,21 @@ esac
 case "${USE_P2P_BYTE_TRANSFER}" in
     1|true|TRUE|yes|YES|on|ON) args+=(--use-p2p-byte-transfer) ;;
     *) args+=(--no-p2p-byte-transfer) ;;
+esac
+
+case "${USE_PERSISTENT_P2P}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-persistent-p2p) ;;
+    *) args+=(--no-persistent-p2p) ;;
+esac
+
+case "${USE_READY_P2P_SEND}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-ready-p2p-send) ;;
+    *) args+=(--no-ready-p2p-send) ;;
+esac
+
+case "${USE_DIRECT_FORWARD_BYTE_RECEIVE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-direct-forward-byte-receive) ;;
+    *) args+=(--no-direct-forward-byte-receive) ;;
 esac
 
 if [[ "${INCLUDE_VERSIONED}" == "1" ]]; then

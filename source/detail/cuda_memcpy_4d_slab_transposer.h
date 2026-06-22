@@ -3,14 +3,12 @@
 
 #include <cstddef>
 
-#include "../external_wrap/cufft_wrap.h"
-
 namespace fftm
 {
 namespace detail
 {
 
-template <class ValueType, class RuntimeAPI = ::fftm::wrap::cuda_runtime_api>
+template <class ValueType, class RuntimeAPI>
 class cuda_memcpy_4d_slab_transposer
 {
 public:

@@ -70,7 +70,15 @@ struct fftm_3d_benchmark_options
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
     bool                          use_p2p_send_thread         = false;
-    bool                          use_p2p_byte_transfer       = false;
+	    bool                          use_p2p_byte_transfer       = false;
+	    bool                          use_persistent_p2p          = false;
+	    bool                          use_ready_p2p_send          = false;
+	    bool                          print_pencil_schedule       = false;
+    bool                          use_direct_forward_byte_receive = false;
+    ::fftm::fftm_3d_large_count_p2p_transport large_count_p2p_transport =
+        ::fftm::fftm_3d_large_count_p2p_transport::hindexed;
+	    fftm_3d_pencil_layout_kind    pencil_layout               = fftm_3d_pencil_layout_kind::auto_select;
+    fftm_3d_pencil_pipeline_kind  pencil_pipeline             = fftm_3d_pencil_pipeline_kind::staged;
 };
 
 template <class T>
@@ -116,7 +124,14 @@ inline std::string usage_fftm_3d_benchmark( const std::string &binary_name )
            " [--use-direct-backward-receive|--no-direct-backward-receive]"
            " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]"
            " [--use-p2p-send-thread|--no-p2p-send-thread]"
-           " [--use-p2p-byte-transfer|--no-p2p-byte-transfer] [Nx Ny Nz]";
+	           " [--use-p2p-byte-transfer|--no-p2p-byte-transfer]"
+	           " [--use-persistent-p2p|--no-persistent-p2p]"
+	           " [--use-ready-p2p-send|--no-ready-p2p-send]"
+	           " [--print-pencil-schedule|--no-print-pencil-schedule]"
+           " [--use-direct-forward-byte-receive|--no-direct-forward-byte-receive]"
+           " [--large-count-p2p-transport hindexed|mpi-count|element-count|chunked]"
+	           " [--pencil-layout auto|opt0|opt1|legacy]"
+           " [--pencil-pipeline staged|fused|egger|egger-parity] [Nx Ny Nz]";
 }
 
 inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
@@ -401,6 +416,87 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.use_p2p_byte_transfer = false;
             argi += 1;
         }
+        else if ( arg == "--use-persistent-p2p" )
+        {
+            options.use_persistent_p2p = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-persistent-p2p" )
+        {
+            options.use_persistent_p2p = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-ready-p2p-send" )
+        {
+            options.use_ready_p2p_send = true;
+            argi += 1;
+        }
+	        else if ( arg == "--no-ready-p2p-send" )
+	        {
+	            options.use_ready_p2p_send = false;
+	            argi += 1;
+	        }
+	        else if ( arg == "--print-pencil-schedule" )
+	        {
+	            options.print_pencil_schedule = true;
+	            argi += 1;
+	        }
+	        else if ( arg == "--no-print-pencil-schedule" )
+	        {
+	            options.print_pencil_schedule = false;
+	            argi += 1;
+	        }
+        else if ( arg == "--use-direct-forward-byte-receive" )
+        {
+            options.use_direct_forward_byte_receive = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-direct-forward-byte-receive" )
+        {
+            options.use_direct_forward_byte_receive = false;
+            argi += 1;
+        }
+        else if ( arg == "--large-count-p2p-transport" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --large-count-p2p-transport" );
+            options.large_count_p2p_transport = parse_large_count_p2p_transport( argv[argi + 1] );
+            argi += 2;
+        }
+	        else if ( arg == "--pencil-layout" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --pencil-layout" );
+            const std::string value = argv[argi + 1];
+            if ( value == "auto" )
+                options.pencil_layout = fftm_3d_pencil_layout_kind::auto_select;
+            else if ( value == "opt0" )
+                options.pencil_layout = fftm_3d_pencil_layout_kind::opt0;
+            else if ( value == "opt1" )
+                options.pencil_layout = fftm_3d_pencil_layout_kind::opt1;
+            else if ( value == "legacy" )
+                options.pencil_layout = fftm_3d_pencil_layout_kind::legacy;
+            else
+                throw std::logic_error( "Unknown pencil layout '" + value + "'" );
+            argi += 2;
+        }
+        else if ( arg == "--pencil-pipeline" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --pencil-pipeline" );
+            const std::string value = argv[argi + 1];
+            if ( value == "staged" )
+                options.pencil_pipeline = fftm_3d_pencil_pipeline_kind::staged;
+            else if ( value == "fused" )
+                options.pencil_pipeline = fftm_3d_pencil_pipeline_kind::fused;
+            else if ( value == "egger" )
+                options.pencil_pipeline = fftm_3d_pencil_pipeline_kind::egger;
+            else if ( value == "egger-parity" || value == "egger_parity" )
+                options.pencil_pipeline = fftm_3d_pencil_pipeline_kind::egger_parity;
+            else
+                throw std::logic_error( "Unknown pencil pipeline '" + value + "'" );
+            argi += 2;
+        }
         else
         {
             break;
@@ -433,7 +529,14 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
         base_options.use_direct_backward_receive = options.use_direct_backward_receive;
         base_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
         base_options.use_p2p_send_thread         = options.use_p2p_send_thread;
-        base_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+	        base_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+	        base_options.use_persistent_p2p          = options.use_persistent_p2p;
+	        base_options.use_ready_p2p_send          = options.use_ready_p2p_send;
+	        base_options.print_pencil_schedule       = options.print_pencil_schedule;
+        base_options.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
+        base_options.large_count_p2p_transport  = options.large_count_p2p_transport;
+	        base_options.pencil_layout               = options.pencil_layout;
+        base_options.pencil_pipeline             = options.pencil_pipeline;
         const auto grid       = choose_grid_3d( base_options, options.strategy, num_procs );
         options.p1            = grid.first;
         options.p2            = grid.second;
@@ -610,7 +713,14 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_benchmark
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
     init_options.use_p2p_send_thread         = options.use_p2p_send_thread;
-    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+	    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+	    init_options.use_persistent_p2p          = options.use_persistent_p2p;
+	    init_options.use_ready_p2p_send          = options.use_ready_p2p_send;
+	    init_options.print_pencil_schedule       = options.print_pencil_schedule;
+    init_options.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
+    init_options.large_count_p2p_transport  = options.large_count_p2p_transport;
+	    init_options.pencil_layout_3d            = to_fftm_pencil_layout( options.pencil_layout );
+    init_options.pencil_pipeline_3d          = to_fftm_pencil_pipeline( options.pencil_pipeline );
     return init_options;
 }
 

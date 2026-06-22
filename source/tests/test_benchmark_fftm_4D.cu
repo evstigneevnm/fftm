@@ -22,6 +22,7 @@
 
 #include "detail/fft_benchmark_common.h"
 #include "detail/fft_benchmark_options.h"
+#include "detail/mpi_cuda_test_init.h"
 #include "detail/test_memory_profile_helpers.h"
 
 namespace
@@ -253,7 +254,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
         const options_t options = fftm::test::detail::parse_fftm_4d_benchmark_options<T>(
             argc, argv, comm_info.num_procs, "test_benchmark_fftm_4D.bin"
         );

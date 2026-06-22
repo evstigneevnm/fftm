@@ -18,6 +18,7 @@
 #include <fftm.hpp>
 
 #include "detail/fftm_3d_test_options.h"
+#include "detail/mpi_cuda_test_init.h"
 #include "detail/poisson_3d_fft_common.h"
 #include "detail/poisson_3d_problem.h"
 
@@ -176,6 +177,8 @@ int run_for_strategy_kind(
     case strategy_kind::pencil_slab:
         return run_tutorial_case<fftm::strategy_3d_pencil_slab<Mode>>( log, options, comm_info );
     case strategy_kind::pencil_pencil:
+        if ( options.pencil_layout == fftm::test::detail::fftm_3d_pencil_layout_kind::legacy )
+            return run_tutorial_case<fftm::strategy_3d_pencil_pencil<Mode, false>>( log, options, comm_info );
         return run_tutorial_case<fftm::strategy_3d_pencil_pencil<Mode>>( log, options, comm_info );
     }
     return 1;
@@ -210,7 +213,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
 
         const test_options options = fftm::test::detail::parse_fftm_3d_test_options(
             argc, argv, comm_info.num_procs, "test_3D_poisson_mpi_tutorial.bin", false, true,

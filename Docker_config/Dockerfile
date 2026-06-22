@@ -20,7 +20,8 @@ COPY README.md LICENSE /opt/fftm_src/
 RUN make -C source/tests all \
         BUILD_FOLDER=/opt/fftm/bin \
         CUDA_ARCH="${CUDA_ARCH}" \
-        -j"${BUILD_JOBS}"
+        -j"${BUILD_JOBS}" && \
+    test -x /opt/fftm/bin/test_egger_pencil_comm_pattern_3D.bin
 
 FROM nvcr.io/nvidia/hpc-benchmarks:24.06
 

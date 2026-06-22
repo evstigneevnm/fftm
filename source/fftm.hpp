@@ -24,6 +24,8 @@
 #include "detail/direct_transpose_4d.h"
 #include "detail/memory_profile_utils.h"
 #include "detail/mpi_transpose_3d.h"
+#include "detail/mpi_transpose_3d_pencil_pencil_egger_owned.h"
+#include "detail/mpi_transpose_3d_pencil_pencil_pipeline.h"
 #include "detail/mpi_transpose_4d.h"
 #include "fft_direction.h"
 #include "fft_partitioning.h"
@@ -60,6 +62,22 @@ struct strategy_3d_pencil_pencil
 {
 };
 
+enum class fftm_3d_pencil_layout
+{
+    auto_select,
+    opt0,
+    opt1,
+    legacy
+};
+
+enum class fftm_3d_pencil_pipeline
+{
+    staged,
+    fused,
+    egger,
+    egger_parity
+};
+
 template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
 struct strategy_4d_pencil_pencil_mpi
 {
@@ -78,7 +96,15 @@ struct fftm_init_options
     bool        use_direct_backward_receive      = false;
     bool        direct_p2p_cuda_aware            = true;
     bool        use_p2p_send_thread              = false;
-    bool        use_p2p_byte_transfer            = false;
+	    bool        use_p2p_byte_transfer            = false;
+	    bool        use_persistent_p2p               = false;
+	    bool        use_ready_p2p_send               = false;
+	    bool        print_pencil_schedule            = false;
+    bool        use_direct_forward_byte_receive  = false;
+    fftm_3d_large_count_p2p_transport large_count_p2p_transport =
+        fftm_3d_large_count_p2p_transport::hindexed;
+	    fftm_3d_pencil_layout pencil_layout_3d        = fftm_3d_pencil_layout::auto_select;
+    fftm_3d_pencil_pipeline pencil_pipeline_3d    = fftm_3d_pencil_pipeline::staged;
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;
     bool        print_memory_profile_on_destroy  = true;
@@ -186,10 +212,23 @@ struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_slab_pencil<Mode,
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
 };
 
-template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode, bool UseOptimized>
-struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_slab<Mode, UseOptimized>>
+template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
+struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_slab<Mode, false>>
 {
     using real_array_t = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using stage0_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using stage1_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+    using complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
+    using x_fft_complex_array_t =
+        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
+};
+
+template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
+struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_slab<Mode, true>>
+{
+    using real_array_t = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_210_t>;
     using stage0_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_102_t>;
     using stage1_complex_array_t =
@@ -215,16 +254,17 @@ struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_pencil<Mod
 template <class Real, class Complex, class Memory, mpi_transpose_3d_mode Mode>
 struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_pencil<Mode, true>>
 {
-    using real_array_t = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_102_t>;
+    using real_array_t = scfd::arrays::tensor_array_nd<Real, 3, Memory, scfd::arrays::custom_arranger_210_t>;
     using stage0_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_102_t>;
-    // The local Y FFT needs Y-fast storage. A temporary X-fast view is bound
-    // separately for the second redistribution and final X FFT.
+    // The local Y FFT reads Y-fast storage and writes an X-fast temporary.
+    // This mirrors Egger's pencil path and avoids explicit reorder kernels
+    // before and after the second redistribution.
     using stage1_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
     using complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
     using x_fft_complex_array_t =
-        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
+        scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_012_t>;
 };
 
 template <class Real, class Complex, class Memory, class Strategy4D>
@@ -323,17 +363,21 @@ public:
 
     explicit fftm( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi ), log_( log ), partitioning_( mpi ), same_x_( mpi, log ), same_z_( mpi, log ),
-          same_xy_( mpi, log ), same_xw_( mpi, log ), same_zw_( mpi, log )
+          pencil_pencil_pipeline_( base_fft_, same_x_, same_z_, profiler_ ),
+          pencil_pencil_egger_owned_( base_fft_, mpi, log, profiler_ ), same_xy_( mpi, log ), same_xw_( mpi, log ),
+          same_zw_( mpi, log )
     {
         for_each_3d_.block_size = 128;
         for_each_4d_.block_size = 128;
         same_x_.use_external_work_area();
         same_z_.use_external_work_area();
+        pencil_pencil_egger_owned_.use_external_work_area();
         same_xy_.use_external_work_area();
         same_xw_.use_external_work_area();
         same_zw_.use_external_work_area();
         same_x_.use_external_host_work_area();
         same_z_.use_external_host_work_area();
+        pencil_pencil_egger_owned_.use_external_host_work_area();
         same_xy_.use_external_host_work_area();
         same_xw_.use_external_host_work_area();
         same_zw_.use_external_host_work_area();
@@ -503,9 +547,16 @@ private:
     using stage2_complex4_t = typename traits_4d_t::stage2_complex_array_t;
     using complex_array4_t  = typename traits_4d_t::complex_array_t;
 
-    using partitioning_t   = fft_partitioning<MPIComm>;
-    using same_x_t         = ::fftm::mpi_transpose_3d<complex, Backend, MPIComm, Log, runtime_api_t>;
-    using same_z_t         = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using partitioning_t             = fft_partitioning<MPIComm>;
+    using profiler_t                 = fftm_profiler;
+    using optional_profiler_t        = optional_profiler<profiler_t>;
+    using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
+    using same_x_t                   = ::fftm::mpi_transpose_3d<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using same_z_t                   = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log, runtime_api_t>;
+    using pencil_pencil_pipeline_t =
+        ::fftm::detail::mpi_transpose_3d_pencil_pencil_pipeline<BaseFFT, same_x_t, same_z_t, optional_profiler_t>;
+    using pencil_pencil_egger_owned_t = ::fftm::detail::mpi_transpose_3d_pencil_pencil_egger_owned<
+        BaseFFT, complex, Backend, MPIComm, Log, runtime_api_t, optional_profiler_t>;
     using same_xy_t        = ::fftm::detail::mpi_transpose_4d_same_xy<complex, Backend, MPIComm, Log, runtime_api_t>;
     using same_xw_t        = ::fftm::detail::mpi_transpose_4d_same_xw<complex, Backend, MPIComm, Log, runtime_api_t>;
     using same_zw_t        = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log, runtime_api_t>;
@@ -514,9 +565,6 @@ private:
     using complex_buffer_t = scfd::arrays::array_nd<complex, 1, memory_t>;
     using shared_buffer_t  = scfd::memory::shared_buffer<memory_t>;
     using host_shared_buffer_t       = scfd::memory::shared_buffer<typename memory_t::host_memory_type>;
-    using profiler_t                 = fftm_profiler;
-    using optional_profiler_t        = optional_profiler<profiler_t>;
-    using optional_memory_profiler_t = optional_memory_profiler<memory_profiler_t>;
 
     typename optional_profiler_t::scoped_ticker profile_scope_( const std::string &name )
     {
@@ -548,7 +596,10 @@ private:
     {
         const std::size_t fft_work_size       = base_fft_.activate_work_size();
         const std::size_t transpose_work_size = std::max(
-            std::max( same_x_.get_work_size_bytes(), same_z_.get_work_size_bytes() ),
+            std::max(
+                std::max( same_x_.get_work_size_bytes(), same_z_.get_work_size_bytes() ),
+                pencil_pencil_egger_owned_.get_work_size_bytes()
+            ),
             std::max(
                 same_xy_.get_work_size_bytes(),
                 std::max( same_xw_.get_work_size_bytes(), same_zw_.get_work_size_bytes() )
@@ -559,7 +610,10 @@ private:
         shared_work_buffer_.activate();
 
         const std::size_t transpose_host_work_size = std::max(
-            std::max( same_x_.get_host_work_size_bytes(), same_z_.get_host_work_size_bytes() ),
+            std::max(
+                std::max( same_x_.get_host_work_size_bytes(), same_z_.get_host_work_size_bytes() ),
+                pencil_pencil_egger_owned_.get_host_work_size_bytes()
+            ),
             std::max(
                 same_xy_.get_host_work_size_bytes(),
                 std::max( same_xw_.get_host_work_size_bytes(), same_zw_.get_host_work_size_bytes() )
@@ -576,6 +630,7 @@ private:
         base_fft_.set_external_work_area( work_area );
         same_x_.set_external_work_area( work_area );
         same_z_.set_external_work_area( work_area );
+        pencil_pencil_egger_owned_.set_external_work_area( work_area );
         same_xy_.set_external_work_area( work_area );
         same_xw_.set_external_work_area( work_area );
         same_zw_.set_external_work_area( work_area );
@@ -584,6 +639,7 @@ private:
             void *host_work_area = shared_host_work_ptr_();
             same_x_.set_external_host_work_area( host_work_area );
             same_z_.set_external_host_work_area( host_work_area );
+            pencil_pencil_egger_owned_.set_external_host_work_area( host_work_area );
             same_xy_.set_external_host_work_area( host_work_area );
             same_xw_.set_external_host_work_area( host_work_area );
             same_zw_.set_external_host_work_area( host_work_area );
@@ -592,29 +648,82 @@ private:
         update_memory_profile_for_current_dim_();
     }
 
+    static bool is_egger_owned_pencil_pipeline_( fftm_3d_pencil_pipeline pipeline )
+    {
+        return pipeline == fftm_3d_pencil_pipeline::egger || pipeline == fftm_3d_pencil_pipeline::egger_parity;
+    }
+
+    static bool is_egger_parity_pencil_pipeline_( fftm_3d_pencil_pipeline pipeline )
+    {
+        return pipeline == fftm_3d_pencil_pipeline::egger_parity;
+    }
+
+    static fftm_init_options normalize_init_options_( fftm_init_options options )
+    {
+        if ( is_egger_parity_pencil_pipeline_( options.pencil_pipeline_3d ) )
+        {
+            options.use_direct_backward_receive = false;
+            options.direct_p2p_cuda_aware       = true;
+            options.use_p2p_send_thread         = false;
+            options.use_p2p_byte_transfer       = true;
+            options.use_persistent_p2p          = false;
+            options.use_ready_p2p_send          = false;
+        }
+        return options;
+    }
+
     void configure_profiling_( const fftm_init_options &options )
     {
-        init_options_ = options;
-        if ( !options.profiling_key.empty() )
+        init_options_ = normalize_init_options_( options );
+        if ( !init_options_.profiling_key.empty() )
         {
-            profiler_.enable( options.profiling_key );
+            profiler_.enable( init_options_.profiling_key );
         }
         else
         {
             profiler_.disable();
         }
-        configure_memory_profiling_( options );
+        configure_memory_profiling_( init_options_ );
         same_x_.set_profiler( profiler_.native_ptr() );
         same_z_.set_profiler( profiler_.native_ptr() );
+        pencil_pencil_egger_owned_.set_profiler( profiler_.native_ptr() );
         same_xy_.set_profiler( profiler_.native_ptr() );
         same_xw_.set_profiler( profiler_.native_ptr() );
         same_zw_.set_profiler( profiler_.native_ptr() );
-        same_x_.set_direct_transfer_options( options.use_direct_backward_receive, options.direct_p2p_cuda_aware );
-        same_z_.set_direct_transfer_options( options.use_direct_backward_receive, options.direct_p2p_cuda_aware );
-        same_x_.set_p2p_send_thread_enabled( options.use_p2p_send_thread );
-        same_z_.set_p2p_send_thread_enabled( options.use_p2p_send_thread );
-        same_x_.set_p2p_byte_transfer_enabled( options.use_p2p_byte_transfer );
-        same_z_.set_p2p_byte_transfer_enabled( options.use_p2p_byte_transfer );
+        same_x_.set_direct_transfer_options(
+            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+        );
+        same_z_.set_direct_transfer_options(
+            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+        );
+        pencil_pencil_egger_owned_.set_direct_transfer_options(
+            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+        );
+        same_x_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
+        same_z_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
+        pencil_pencil_egger_owned_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
+        same_x_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
+        same_z_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
+        pencil_pencil_egger_owned_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
+        same_x_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
+        same_z_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
+	        pencil_pencil_egger_owned_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
+	        pencil_pencil_egger_owned_.set_ready_p2p_send_enabled( init_options_.use_ready_p2p_send );
+	        pencil_pencil_egger_owned_.set_schedule_dump_enabled( init_options_.print_pencil_schedule );
+        pencil_pencil_egger_owned_.set_direct_forward_byte_receive_enabled(
+            init_options_.use_direct_forward_byte_receive
+        );
+        pencil_pencil_egger_owned_.set_large_count_p2p_transport( init_options_.large_count_p2p_transport );
+        const bool auto_uses_optimized_pencil_layout =
+            init_options_.pencil_layout_3d == fftm_3d_pencil_layout::auto_select && strategy_3d_optimized_layout;
+        pencil_pencil_egger_owned_.set_pencil_layout_selector(
+            init_options_.pencil_layout_3d == fftm_3d_pencil_layout::opt1 || auto_uses_optimized_pencil_layout ? 2 :
+            init_options_.pencil_layout_3d == fftm_3d_pencil_layout::opt0                                      ? 1 :
+                                                                                                                  0
+        );
+        pencil_pencil_egger_owned_.set_egger_parity_enabled(
+            is_egger_parity_pencil_pipeline_( init_options_.pencil_pipeline_3d )
+        );
     }
 
     void configure_memory_profiling_( const fftm_init_options &options )
@@ -631,6 +740,9 @@ private:
         base_fft_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/base_fft" );
         same_x_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_x" );
         same_z_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_z" );
+        pencil_pencil_egger_owned_.set_memory_profiler(
+            memory_profiler_.native_ptr(), "fftm/transpose_3d_pencil_pencil_egger_owned"
+        );
         same_xy_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xy" );
         same_xw_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xw" );
         same_zw_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_zw" );
@@ -945,6 +1057,30 @@ private:
         );
     }
 
+    void add_plan_z_r2c_z_fast_to_y_fast_(
+        const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int y_size
+    )
+    {
+        // Optimized pencil input uses Z-fast real storage:
+        //   real(x,y,z)   -> z + Nz * (y + Ny_local * x)
+        // The R2C output keeps the existing Y-fast half-spectrum layout:
+        //   half(x,y,kz) -> y + Ny_local * (x + X * kz)
+        // This matches the Egger pencil plan shape and removes the large
+        // strided-Z access pattern from the first local transform.
+        const long long int batch       = x_size * y_size;
+        const long long int output_step = x_size * y_size;
+
+        base_fft_.template add_plan_1D<::fftm::direction::R2C>(
+            forward_name, static_cast<long long int>( nz_ ), 1, 1, static_cast<long long int>( nz_ ), output_step,
+            output_step, 1, batch
+        );
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2R>(
+            inverse_name, static_cast<long long int>( nz_ ), output_step, output_step, 1, 1, 1,
+            static_cast<long long int>( nz_ ), batch
+        );
+    }
+
     void add_plan_yz_r2c_slab_optimized_(
         const std::string &forward_name, const std::string &inverse_name, long long int x_size
     )
@@ -983,6 +1119,27 @@ private:
         );
     }
 
+    void add_plan_y_c2c_y_fast_to_x_fast_(
+        const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int z_size
+    )
+    {
+        // Input stage1 layout is y + Ny * (x + X * z).
+        // Forward output is x + X * (z + Z * y), so the following X FFT
+        // can read unit-stride X lines. The inverse plan performs the
+        // reverse layout conversion while applying inverse Y FFTs.
+        const long long int batch       = x_size * z_size;
+        const long long int input_dist  = static_cast<long long int>( ny_ );
+        const long long int output_step = x_size * z_size;
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
+            forward_name, static_cast<long long int>( ny_ ), 1, 1, input_dist, output_step, output_step, 1, batch
+        );
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
+            inverse_name, static_cast<long long int>( ny_ ), output_step, output_step, 1, 1, 1, input_dist, batch
+        );
+    }
+
     void add_plan_x_c2c_(
         const std::string &forward_name, const std::string &inverse_name, long long int y_size, long long int z_size
     )
@@ -996,6 +1153,26 @@ private:
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
             inverse_name, static_cast<long long int>( nx_ ), 1, stride, 1, 1, stride, 1, batch
+        );
+    }
+
+    void add_plan_x_c2c_x_fast_to_z_fast_(
+        const std::string &forward_name, const std::string &inverse_name, long long int y_size, long long int z_size
+    )
+    {
+        // Forward input is x + Nx * (z + Z * y). The existing public output
+        // layout remains z + Z * (y + Y * x). This keeps compatibility while
+        // making the expensive X FFT unit-stride.
+        const long long int batch       = y_size * z_size;
+        const long long int input_dist  = static_cast<long long int>( nx_ );
+        const long long int output_step = y_size * z_size;
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
+            forward_name, static_cast<long long int>( nx_ ), 1, 1, input_dist, output_step, output_step, 1, batch
+        );
+
+        base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
+            inverse_name, static_cast<long long int>( nx_ ), output_step, output_step, 1, 1, 1, input_dist, batch
         );
     }
 
@@ -1166,15 +1343,71 @@ private:
         FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_3d_pencil_pencil" );
         output_dim_ = transpose2_dim_;
 
+        SCFD_SAFE_CALL(
+            init_strategy_3d_pencil_pencil_layout_( std::integral_constant<bool, strategy_3d_optimized_layout>() )
+        );
+    }
+
+    void init_strategy_3d_pencil_pencil_layout_( std::false_type )
+    {
         SCFD_SAFE_CALL( init_shared_stage0_xfft_3d_(
             input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_, output_dim_.size_x[0],
-            output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_], input_dim_.size_x[myid_i_],
-            transpose1_dim_.size_z[myid_j_], ny_
+            output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_]
         ) );
         SCFD_SAFE_CALL( init_owned_stage1_3d_( input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_ ) );
 
         SCFD_SAFE_CALL( same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ ) );
         SCFD_SAFE_CALL( same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ ) );
+        if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+        {
+            SCFD_SAFE_CALL( pencil_pencil_egger_owned_.init(
+                transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
+                init_options_.use_persistent_p2p
+            ) );
+        }
+        else if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
+        {
+            SCFD_SAFE_CALL( pencil_pencil_pipeline_.init( transpose_mode_3d, init_options_.use_persistent_p2p ) );
+        }
+    }
+
+    void init_strategy_3d_pencil_pencil_layout_( std::true_type )
+    {
+        if ( !init_options_.use_optimized || init_options_.pencil_layout_3d == fftm_3d_pencil_layout::legacy )
+        {
+            throw std::logic_error(
+                "fftm 3D pencil-pencil optimized layout was selected at compile time; use "
+                "strategy_3d_pencil_pencil<Mode, false> for the legacy runtime path."
+            );
+        }
+
+        SCFD_SAFE_CALL( init_shared_stage0_xfft_3d_(
+            input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_, output_dim_.size_x[0],
+            output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_]
+        ) );
+        SCFD_SAFE_CALL( init_owned_stage1_xfast_3d_(
+            input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_
+        ) );
+
+        const std::size_t output_capacity =
+            output_dim_.size_x[0] * output_dim_.size_z[myid_j_] * output_dim_.size_y[myid_i_];
+        SCFD_SAFE_CALL( init_stage1_3d_(
+            input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_, output_capacity
+        ) );
+
+        SCFD_SAFE_CALL( same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ ) );
+        SCFD_SAFE_CALL( same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ ) );
+        if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+        {
+            SCFD_SAFE_CALL( pencil_pencil_egger_owned_.init(
+                transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
+                init_options_.use_persistent_p2p
+            ) );
+        }
+        else if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
+        {
+            SCFD_SAFE_CALL( pencil_pencil_pipeline_.init( transpose_mode_3d, init_options_.use_persistent_p2p ) );
+        }
     }
 
     void
@@ -1265,7 +1498,7 @@ private:
             return;
         }
 
-        SCFD_SAFE_CALL( add_plan_z_r2c_legacy_y_fast_( "forward_z", "inverse_z", nx_, input_dim_.size_y[myid_j_] ) );
+        SCFD_SAFE_CALL( add_plan_z_r2c_z_fast_to_y_fast_( "forward_z", "inverse_z", nx_, input_dim_.size_y[myid_j_] ) );
         SCFD_SAFE_CALL(
             add_plan_xy_c2c_pencil_slab_( "forward_xy", "inverse_xy", output_dim_.size_z[myid_j_] )
         );
@@ -1294,7 +1527,7 @@ private:
 
     void add_plans_3d_pencil_pencil_layout_( std::true_type )
     {
-        if ( !init_options_.use_optimized )
+        if ( !init_options_.use_optimized || init_options_.pencil_layout_3d == fftm_3d_pencil_layout::legacy )
         {
             throw std::logic_error(
                 "fftm 3D pencil-pencil optimized layout was selected at compile time; use "
@@ -1302,7 +1535,28 @@ private:
             );
         }
 
-        SCFD_SAFE_CALL( add_plans_3d_pencil_pencil_layout_( std::false_type() ) );
+        if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) &&
+             partitioning_.get_process_grid().p2 == 1 )
+        {
+            SCFD_SAFE_CALL( add_plan_yz_r2c_slab_optimized_(
+                "forward_yz_pencil_pencil_p2_degenerate", "inverse_yz_pencil_pencil_p2_degenerate",
+                static_cast<long long int>( input_dim_.size_x[myid_i_] )
+            ) );
+            SCFD_SAFE_CALL( add_plan_x_c2c_(
+                "forward_x", "inverse_x", output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_]
+            ) );
+            return;
+        }
+
+        SCFD_SAFE_CALL( add_plan_z_r2c_z_fast_to_y_fast_(
+            "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_]
+        ) );
+        SCFD_SAFE_CALL( add_plan_y_c2c_y_fast_to_x_fast_(
+            "forward_y", "inverse_y", input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_]
+        ) );
+        SCFD_SAFE_CALL( add_plan_x_c2c_x_fast_to_z_fast_(
+            "forward_x", "inverse_x", output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_]
+        ) );
     }
 
     void add_4d_plans_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil> )
@@ -1446,7 +1700,7 @@ private:
         }
 
         SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ ) );
-        SCFD_SAFE_CALL( same_x_.transpose_xyz_to_xzy( stage0_3d_, out, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xyz_to_xzy_optimized_layout( stage0_3d_, out, transpose_mode_3d ) );
         SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_xy", out, out ) );
     }
 
@@ -1482,7 +1736,7 @@ private:
         }
 
         SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_xy", in, in ) );
-        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz( in, stage0_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz_optimized_layout( in, stage0_3d_, transpose_mode_3d ) );
         SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
     }
 
@@ -1514,7 +1768,7 @@ private:
 
     void forward_3d_pencil_pencil_layout_( std::true_type, const real_array3_t &in, complex_array3_t &out )
     {
-        if ( !init_options_.use_optimized )
+        if ( !init_options_.use_optimized || init_options_.pencil_layout_3d == fftm_3d_pencil_layout::legacy )
         {
             throw std::logic_error(
                 "fftm 3D pencil-pencil optimized layout was selected at compile time; use "
@@ -1522,14 +1776,71 @@ private:
             );
         }
 
+        if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
+        {
+            SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
+            if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+            {
+                if ( partitioning_.get_process_grid().p2 == 1 )
+                {
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_egger_p2_degenerate" );
+                    stage0_complex3_t stage0_slab_view(
+                        stage0_3d_.raw_ptr(), input_dim_.size_x[myid_i_], nz_half_, ny_
+                    );
+                    SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>(
+                        "forward_yz_pencil_pencil_p2_degenerate", in, stage0_slab_view
+                    ) );
+                    SCFD_SAFE_CALL(
+                        same_z_.transpose_x_to_y_optimized_layout( stage0_slab_view, out, transpose_mode_3d )
+                    );
+                    SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_x", out, out ) );
+                    return;
+                }
+                if ( partitioning_.get_process_grid().p1 == 1 )
+                {
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_egger_p1_degenerate" );
+                    SCFD_SAFE_CALL(
+                        base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ )
+                    );
+                    SCFD_SAFE_CALL(
+                        same_x_.transpose_xyz_to_xzy_optimized_layout( stage0_3d_, stage1_3d_, transpose_mode_3d )
+                    );
+                    SCFD_SAFE_CALL( base_fft_.template exec<stage1_complex3_t, x_fft_complex3_t>(
+                        "forward_y", stage1_3d_, stage1_xfast_3d_
+                    ) );
+                    SCFD_SAFE_CALL( copy_stage1_xfast_to_xfft_3d_() );
+                    SCFD_SAFE_CALL(
+                        base_fft_.template exec<x_fft_complex3_t, complex_array3_t>( "forward_x", x_fft_stage_3d_, out )
+                    );
+                    return;
+                }
+                SCFD_SAFE_CALL( pencil_pencil_egger_owned_.template forward<
+                    real_array3_t, stage0_complex3_t, stage1_complex3_t, x_fft_complex3_t, x_fft_complex3_t,
+                    complex_array3_t>(
+                    in, stage0_3d_, stage1_3d_, stage1_xfast_3d_, x_fft_stage_3d_, out, transpose_mode_3d
+                ) );
+            }
+            else
+            {
+                SCFD_SAFE_CALL( pencil_pencil_pipeline_.template forward<
+                    real_array3_t, stage0_complex3_t, stage1_complex3_t, x_fft_complex3_t, x_fft_complex3_t,
+                    complex_array3_t>(
+                    in, stage0_3d_, stage1_3d_, stage1_xfast_3d_, x_fft_stage_3d_, out, transpose_mode_3d
+                ) );
+            }
+            return;
+        }
+
+        SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
         SCFD_SAFE_CALL( base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ ) );
-        SCFD_SAFE_CALL( same_x_.transpose_xyz_to_xzy( stage0_3d_, stage1_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xyz_to_xzy_optimized_layout( stage0_3d_, stage1_3d_, transpose_mode_3d ) );
         SCFD_SAFE_CALL(
-            base_fft_.template exec<stage1_complex3_t, stage1_complex3_t>( "forward_y", stage1_3d_, stage1_3d_ )
+            base_fft_.template exec<stage1_complex3_t, x_fft_complex3_t>( "forward_y", stage1_3d_, stage1_xfast_3d_ )
         );
-        SCFD_SAFE_CALL( reorder_stage1_to_xfast_( stage1_3d_, stage1_xfast_3d_ ) );
-        SCFD_SAFE_CALL( same_z_.transpose_x_to_y_optimized_layout( stage1_xfast_3d_, out, transpose_mode_3d ) );
-        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "forward_x", out, out ) );
+        SCFD_SAFE_CALL(
+            same_z_.transpose_x_to_y_xfast_layout( stage1_xfast_3d_, x_fft_stage_3d_, transpose_mode_3d )
+        );
+        SCFD_SAFE_CALL( base_fft_.template exec<x_fft_complex3_t, complex_array3_t>( "forward_x", x_fft_stage_3d_, out ) );
     }
 
     void backward_3d_(
@@ -1554,13 +1865,13 @@ private:
         SCFD_SAFE_CALL(
             base_fft_.template exec<stage1_complex3_t, stage1_complex3_t>( "inverse_y", stage1_3d_, stage1_3d_ )
         );
-        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz( stage1_3d_, stage0_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz_optimized_layout( stage1_3d_, stage0_3d_, transpose_mode_3d ) );
         SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
     }
 
     void backward_3d_pencil_pencil_layout_( std::true_type, complex_array3_t &in, real_array3_t &out )
     {
-        if ( !init_options_.use_optimized )
+        if ( !init_options_.use_optimized || init_options_.pencil_layout_3d == fftm_3d_pencil_layout::legacy )
         {
             throw std::logic_error(
                 "fftm 3D pencil-pencil optimized layout was selected at compile time; use "
@@ -1568,13 +1879,110 @@ private:
             );
         }
 
-        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_x", in, in ) );
-        SCFD_SAFE_CALL( same_z_.transpose_y_to_x_optimized_layout( in, stage1_xfast_3d_, transpose_mode_3d ) );
-        SCFD_SAFE_CALL( reorder_stage1_from_xfast_( stage1_xfast_3d_, stage1_3d_ ) );
+        if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
+        {
+            SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
+            if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+            {
+                if ( partitioning_.get_process_grid().p2 == 1 )
+                {
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_egger_p2_degenerate" );
+                    stage0_complex3_t stage0_slab_view(
+                        stage0_3d_.raw_ptr(), input_dim_.size_x[myid_i_], nz_half_, ny_
+                    );
+                    SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_x", in, in ) );
+                    /*
+                     * The egger pipeline's datatype-direct variant is meant for
+                     * the owned non-degenerate pencil schedule.  For degenerate
+                     * shortcut routes, CUDA-aware strided receive datatypes in
+                     * the generic transpose can stall on some MPI stacks; keep
+                     * these shortcut paths on the packed value transfer.
+                     */
+                    same_z_.set_direct_transfer_options( false, init_options_.direct_p2p_cuda_aware );
+                    try
+                    {
+                        SCFD_SAFE_CALL(
+                            same_z_.transpose_y_to_x_optimized_layout( in, stage0_slab_view, transpose_mode_3d )
+                        );
+                    }
+                    catch ( ... )
+                    {
+                        same_z_.set_direct_transfer_options(
+                            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                        );
+                        throw;
+                    }
+                    same_z_.set_direct_transfer_options(
+                        init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                    );
+                    SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>(
+                        "inverse_yz_pencil_pencil_p2_degenerate", stage0_slab_view, out
+                    ) );
+                    return;
+                }
+                if ( partitioning_.get_process_grid().p1 == 1 )
+                {
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_egger_p1_degenerate" );
+                    SCFD_SAFE_CALL(
+                        base_fft_.template exec<complex_array3_t, x_fft_complex3_t>( "inverse_x", in, x_fft_stage_3d_ )
+                    );
+                    SCFD_SAFE_CALL( copy_xfft_to_stage1_xfast_3d_() );
+                    SCFD_SAFE_CALL( base_fft_.template exec<x_fft_complex3_t, stage1_complex3_t>(
+                        "inverse_y", stage1_xfast_3d_, stage1_3d_
+                    ) );
+                    /*
+                     * See the p2-degenerate note above: avoid direct datatype
+                     * receives in the generic same-X shortcut and reserve that
+                     * variant for the owned pencil pipeline.
+                     */
+                    same_x_.set_direct_transfer_options( false, init_options_.direct_p2p_cuda_aware );
+                    try
+                    {
+                        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz_optimized_layout(
+                            stage1_3d_, stage0_3d_, transpose_mode_3d
+                        ) );
+                    }
+                    catch ( ... )
+                    {
+                        same_x_.set_direct_transfer_options(
+                            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                        );
+                        throw;
+                    }
+                    same_x_.set_direct_transfer_options(
+                        init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                    );
+                    SCFD_SAFE_CALL(
+                        base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out )
+                    );
+                    return;
+                }
+                SCFD_SAFE_CALL( pencil_pencil_egger_owned_.template backward<
+                    complex_array3_t, x_fft_complex3_t, x_fft_complex3_t, stage1_complex3_t, stage0_complex3_t,
+                    real_array3_t>(
+                    in, x_fft_stage_3d_, stage1_xfast_3d_, stage1_3d_, stage0_3d_, out, transpose_mode_3d
+                ) );
+            }
+            else
+            {
+                SCFD_SAFE_CALL( pencil_pencil_pipeline_.template backward<
+                    complex_array3_t, x_fft_complex3_t, x_fft_complex3_t, stage1_complex3_t, stage0_complex3_t,
+                    real_array3_t>(
+                    in, x_fft_stage_3d_, stage1_xfast_3d_, stage1_3d_, stage0_3d_, out, transpose_mode_3d
+                ) );
+            }
+            return;
+        }
+
+        SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, x_fft_complex3_t>( "inverse_x", in, x_fft_stage_3d_ ) );
         SCFD_SAFE_CALL(
-            base_fft_.template exec<stage1_complex3_t, stage1_complex3_t>( "inverse_y", stage1_3d_, stage1_3d_ )
+            same_z_.transpose_y_to_x_xfast_layout( x_fft_stage_3d_, stage1_xfast_3d_, transpose_mode_3d )
         );
-        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz( stage1_3d_, stage0_3d_, transpose_mode_3d ) );
+        SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
+        SCFD_SAFE_CALL(
+            base_fft_.template exec<x_fft_complex3_t, stage1_complex3_t>( "inverse_y", stage1_xfast_3d_, stage1_3d_ )
+        );
+        SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz_optimized_layout( stage1_3d_, stage0_3d_, transpose_mode_3d ) );
         SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out ) );
     }
 
@@ -1673,20 +2081,6 @@ private:
         SCFD_SAFE_CALL( for_each_3d_.wait() );
     }
 
-    template <class ArrayIn, class ArrayOut>
-    void reorder_stage1_to_xfast_( const ArrayIn &in, ArrayOut &out )
-    {
-        FFTM_PROFILE_SCOPED_TIC( "fftm::reorder_stage1_to_xfast" );
-        SCFD_SAFE_CALL( reorder_x_stage_( in, out ) );
-    }
-
-    template <class ArrayIn, class ArrayOut>
-    void reorder_stage1_from_xfast_( const ArrayIn &in, ArrayOut &out )
-    {
-        FFTM_PROFILE_SCOPED_TIC( "fftm::reorder_stage1_from_xfast" );
-        SCFD_SAFE_CALL( reorder_x_stage_( in, out ) );
-    }
-
     template <int DstAxis0, int DstAxis1, int DstAxis2, int DstAxis3, class ArrayIn, class ArrayOut>
     void transpose_local_4d_( const ArrayIn &in, ArrayOut &out )
     {
@@ -1738,11 +2132,94 @@ private:
         update_memory_profile_3d_();
     }
 
+    void init_shared_stage0_stage1_xfast_3d_(
+        std::size_t stage0_d0, std::size_t stage0_d1, std::size_t stage0_d2, std::size_t stage1_xfast_d0,
+        std::size_t stage1_xfast_d1, std::size_t stage1_xfast_d2
+    )
+    {
+        const std::size_t stage0_size       = stage0_d0 * stage0_d1 * stage0_d2;
+        const std::size_t stage1_xfast_size = stage1_xfast_d0 * stage1_xfast_d1 * stage1_xfast_d2;
+
+        SCFD_SAFE_CALL( scratch_stage0_xfft_3d_.init( std::max( stage0_size, stage1_xfast_size ) ) );
+        SCFD_SAFE_CALL(
+            stage0_3d_.init_by_raw_data( scratch_stage0_xfft_3d_.raw_ptr(), stage0_d0, stage0_d1, stage0_d2 )
+        );
+        SCFD_SAFE_CALL( stage1_xfast_3d_.init_by_raw_data(
+            scratch_stage0_xfft_3d_.raw_ptr(), stage1_xfast_d0, stage1_xfast_d1, stage1_xfast_d2
+        ) );
+        update_memory_profile_3d_();
+    }
+
     void init_owned_stage1_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
     {
         SCFD_SAFE_CALL( scratch_stage1_3d_.init( d0 * d1 * d2 ) );
         SCFD_SAFE_CALL( stage1_3d_.init_by_raw_data( scratch_stage1_3d_.raw_ptr(), d0, d1, d2 ) );
         update_memory_profile_3d_();
+    }
+
+    void init_owned_stage1_xfast_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
+    {
+        SCFD_SAFE_CALL( scratch_stage1_xfast_3d_.init( d0 * d1 * d2 ) );
+        SCFD_SAFE_CALL( stage1_xfast_3d_.init_by_raw_data( scratch_stage1_xfast_3d_.raw_ptr(), d0, d1, d2 ) );
+        update_memory_profile_3d_();
+    }
+
+    void init_stage1_3d_( std::size_t d0, std::size_t d1, std::size_t d2, std::size_t io_capacity_elems )
+    {
+        stage1_3d_d0_          = d0;
+        stage1_3d_d1_          = d1;
+        stage1_3d_d2_          = d2;
+        stage1_3d_size_        = d0 * d1 * d2;
+        stage1_3d_uses_io_buffer_ = ( io_capacity_elems >= stage1_3d_size_ );
+
+        if ( !stage1_3d_uses_io_buffer_ )
+        {
+            SCFD_SAFE_CALL( init_owned_stage1_3d_( d0, d1, d2 ) );
+            return;
+        }
+        update_memory_profile_3d_();
+    }
+
+    template <class Array>
+    void bind_stage1_3d_to_io_buffer_( Array &array, const char *what )
+    {
+        if ( !stage1_3d_uses_io_buffer_ )
+        {
+            return;
+        }
+
+        if ( static_cast<std::size_t>( array.size() ) < stage1_3d_size_ )
+        {
+            throw std::logic_error(
+                std::string( "fftm 3D pencil-pencil " ) + what + " is too small for stage1 workspace alias"
+            );
+        }
+
+        stage1_3d_ = stage1_complex3_t( array.raw_ptr(), stage1_3d_d0_, stage1_3d_d1_, stage1_3d_d2_ );
+    }
+
+    void copy_stage1_xfast_to_xfft_3d_()
+    {
+        if ( stage1_xfast_3d_.size() != x_fft_stage_3d_.size() )
+            throw std::logic_error( "fftm 3D pencil-pencil degenerate X-stage copy size mismatch" );
+
+        runtime_api_t::memcpy(
+            x_fft_stage_3d_.raw_ptr(), stage1_xfast_3d_.raw_ptr(),
+            static_cast<std::size_t>( x_fft_stage_3d_.size() ) * sizeof( complex ),
+            runtime_api_t::device_to_device_kind()
+        );
+    }
+
+    void copy_xfft_to_stage1_xfast_3d_()
+    {
+        if ( stage1_xfast_3d_.size() != x_fft_stage_3d_.size() )
+            throw std::logic_error( "fftm 3D pencil-pencil degenerate inverse X-stage copy size mismatch" );
+
+        runtime_api_t::memcpy(
+            stage1_xfast_3d_.raw_ptr(), x_fft_stage_3d_.raw_ptr(),
+            static_cast<std::size_t>( x_fft_stage_3d_.size() ) * sizeof( complex ),
+            runtime_api_t::device_to_device_kind()
+        );
     }
 
     void init_shared_stage0_stage2_4d_(
@@ -1810,6 +2287,10 @@ private:
             "fftm/scratch_stage1_3d",
             bytes_of_elems_( static_cast<std::size_t>( scratch_stage1_3d_.size() ), sizeof( complex ) )
         );
+        profiler->set_bytes(
+            "fftm/scratch_stage1_xfast_3d",
+            bytes_of_elems_( static_cast<std::size_t>( scratch_stage1_xfast_3d_.size() ), sizeof( complex ) )
+        );
         profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
         profiler->set_bytes( "fftm/stage0_4d", 0 );
         profiler->set_bytes( "fftm/stage1_4d", 0 );
@@ -1836,6 +2317,7 @@ private:
         );
         profiler->set_bytes( "fftm/scratch_stage0_xfft_3d", 0 );
         profiler->set_bytes( "fftm/scratch_stage1_3d", 0 );
+        profiler->set_bytes( "fftm/scratch_stage1_xfast_3d", 0 );
         profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
         profiler->set_bytes( "fftm/stage0_4d", 0 );
         profiler->set_bytes( "fftm/stage1_4d", 0 );
@@ -1865,6 +2347,8 @@ private:
     std::size_t                shared_host_work_size_ = 0;
     same_x_t                   same_x_;
     same_z_t                   same_z_;
+    pencil_pencil_pipeline_t   pencil_pencil_pipeline_;
+    pencil_pencil_egger_owned_t pencil_pencil_egger_owned_;
     same_xy_t                  same_xy_;
     same_xw_t                  same_xw_;
     same_zw_t                  same_zw_;
@@ -1891,12 +2375,18 @@ private:
 
     complex_buffer_t  scratch_stage0_xfft_3d_;
     complex_buffer_t  scratch_stage1_3d_;
+    complex_buffer_t  scratch_stage1_xfast_3d_;
     complex_buffer_t  scratch_stage0_stage2_4d_;
     complex_buffer_t  scratch_stage1_4d_;
     stage0_complex3_t stage0_3d_;
     stage1_complex3_t stage1_3d_;
     x_fft_complex3_t  x_fft_stage_3d_;
     x_fft_complex3_t  stage1_xfast_3d_;
+    std::size_t       stage1_3d_d0_             = 0;
+    std::size_t       stage1_3d_d1_             = 0;
+    std::size_t       stage1_3d_d2_             = 0;
+    std::size_t       stage1_3d_size_           = 0;
+    bool              stage1_3d_uses_io_buffer_ = false;
     for_each_3d_t     for_each_3d_;
 
     stage0_complex4_t stage0_4d_;

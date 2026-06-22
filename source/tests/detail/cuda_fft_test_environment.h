@@ -10,6 +10,8 @@
 
 #include <external_wrap/cufft_wrap_many.h>
 
+#include "mpi_cuda_test_init.h"
+
 namespace fftm
 {
 namespace test
@@ -36,7 +38,7 @@ struct cuda_fft_test_environment
 
     static void init_device( log_mpi_t &log, const mpi_comm_t &comm_info )
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        init_cuda_mpi_for_tests( log, comm_info );
     }
 };
 

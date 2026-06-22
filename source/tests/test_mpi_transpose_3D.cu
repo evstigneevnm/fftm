@@ -21,6 +21,7 @@
 #include "../detail/array_arrangers.h"
 #include "../detail/mpi_transpose_3d.h"
 #include "../fft_partitioning.h"
+#include "detail/mpi_cuda_test_init.h"
 
 namespace
 {
@@ -312,7 +313,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
 
         const test_options options = parse_options( argc, argv, comm_info.num_procs );
 

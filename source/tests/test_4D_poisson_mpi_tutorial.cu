@@ -17,6 +17,7 @@
 #include <fftm.hpp>
 
 #include "detail/fftm_4d_test_options.h"
+#include "detail/mpi_cuda_test_init.h"
 #include "detail/poisson_4d_fft_common.h"
 #include "detail/poisson_4d_problem.h"
 
@@ -222,7 +223,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info );
+        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
 
         const test_options options = fftm::test::detail::parse_fftm_4d_test_options(
             argc, argv, "test_4D_poisson_mpi_tutorial.bin", false, false, true

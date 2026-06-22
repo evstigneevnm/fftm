@@ -18,6 +18,10 @@ FFTM_STRATEGIES_3D = ("slab-pencil", "pencil-slab", "pencil-pencil")
 FFTM_STRATEGIES_4D = ("pencil-pencil", "slab-slab")
 FFTM_MODES = ("p2p-waitall", "p2p-waitany", "alltoallv")
 FFTM_P2P_VARIANTS = ("value-packed", "datatype-direct", "byte-packed", "byte-direct")
+FFTM_P2P_SCHEDULERS = ("main", "send-thread", "persistent", "send-thread-persistent")
+FFTM_PENCIL_LAYOUTS = ("auto", "opt0", "opt1", "legacy")
+FFTM_PENCIL_PIPELINES = ("staged", "fused", "egger", "egger-parity")
+FFTM_LARGE_COUNT_P2P_TRANSPORTS = ("hindexed", "mpi-count", "element-count", "chunked")
 FFTS_STRATEGIES_4D = ("pencil-direct", "pencil-memcpy", "slab-direct", "slab-memcpy")
 
 SUMMARY_KEY_RE = re.compile(r"([A-Za-z0-9_]+)=((?:\([^)]*\))|[^,]+)")
@@ -131,6 +135,81 @@ def parse_p2p_variants(value: str) -> List[Optional[str]]:
     return selected or [None]
 
 
+def parse_p2p_schedulers(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_P2P_SCHEDULERS)
+    selected = [item.strip() for item in value.split(",") if item.strip()]
+    unknown = [item for item in selected if item not in FFTM_P2P_SCHEDULERS]
+    if unknown:
+        raise ValueError(
+            f"unknown --p2p-schedulers value(s): {', '.join(unknown)}; "
+            f"allowed: configured, all, {', '.join(FFTM_P2P_SCHEDULERS)}"
+        )
+    return selected or [None]
+
+
+def parse_pencil_layouts(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_PENCIL_LAYOUTS)
+    selected = [item.strip() for item in value.split(",") if item.strip()]
+    unknown = [item for item in selected if item not in FFTM_PENCIL_LAYOUTS]
+    if unknown:
+        raise ValueError(
+            f"unknown --pencil-layouts value(s): {', '.join(unknown)}; "
+            f"allowed: configured, all, {', '.join(FFTM_PENCIL_LAYOUTS)}"
+        )
+    return selected or [None]
+
+
+def parse_pencil_pipelines(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_PENCIL_PIPELINES)
+    selected = [item.strip() for item in value.split(",") if item.strip()]
+    unknown = [item for item in selected if item not in FFTM_PENCIL_PIPELINES]
+    if unknown:
+        raise ValueError(
+            f"unknown --pencil-pipelines value(s): {', '.join(unknown)}; "
+            f"allowed: configured, all, {', '.join(FFTM_PENCIL_PIPELINES)}"
+        )
+    return selected or [None]
+
+
+def parse_large_count_p2p_transports(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_LARGE_COUNT_P2P_TRANSPORTS)
+    aliases = {
+        "complex-count": "element-count",
+        "complex_count": "element-count",
+        "element_count": "element-count",
+        "mpi_count": "mpi-count",
+    }
+    selected = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        selected.append(aliases.get(item, item.replace("_", "-")))
+    unknown = [item for item in selected if item not in FFTM_LARGE_COUNT_P2P_TRANSPORTS]
+    if unknown:
+        raise ValueError(
+            f"unknown --large-count-p2p-transports value(s): {', '.join(unknown)}; "
+            f"allowed: configured, all, {', '.join(FFTM_LARGE_COUNT_P2P_TRANSPORTS)}"
+        )
+    return selected or [None]
+
+
 def p2p_variant_flags(
     variant: Optional[str],
     default_direct_backward_receive: bool,
@@ -153,11 +232,66 @@ def p2p_variant_flags(
 def p2p_variants_for_spec(
     dim: int, transport: str, strategy: str, mode: str, selected: Sequence[Optional[str]]
 ) -> List[Optional[str]]:
-    if dim == 3 and transport == "cuda_aware" and strategy == "slab-pencil" and mode.startswith("p2p-"):
+    if dim == 3 and transport == "cuda_aware" and mode.startswith("p2p-"):
         return list(selected)
-    if dim == 3 and transport == "non_cuda_aware" and strategy == "slab-pencil" and mode.startswith("p2p-"):
+    if dim == 3 and transport == "non_cuda_aware" and mode.startswith("p2p-"):
         return ["nca-staging"] if selected != [None] else [None]
     return [None]
+
+
+def p2p_schedulers_for_spec(
+    dim: int, transport: str, mode: str, selected: Sequence[Optional[str]]
+) -> List[Optional[str]]:
+    if dim == 3 and transport == "cuda_aware" and mode.startswith("p2p-"):
+        return list(selected)
+    return [None]
+
+
+def pencil_layouts_for_spec(dim: int, strategy: str, selected: Sequence[Optional[str]]) -> List[Optional[str]]:
+    if dim == 3 and strategy == "pencil-pencil":
+        return list(selected)
+    return [None]
+
+
+def pencil_pipelines_for_spec(dim: int, strategy: str, selected: Sequence[Optional[str]]) -> List[Optional[str]]:
+    if dim == 3 and strategy == "pencil-pencil":
+        return list(selected)
+    return [None]
+
+
+def large_count_p2p_transports_for_spec(
+    dim: int,
+    transport: str,
+    strategy: str,
+    mode: str,
+    pencil_pipeline: Optional[str],
+    selected: Sequence[Optional[str]],
+) -> List[Optional[str]]:
+    if (
+        dim == 3
+        and transport == "cuda_aware"
+        and strategy == "pencil-pencil"
+        and mode.startswith("p2p-")
+        and (pencil_pipeline is None or pencil_pipeline in ("egger", "egger-parity"))
+    ):
+        return list(selected)
+    return [None]
+
+
+def p2p_scheduler_flags(
+    scheduler: Optional[str], default_send_thread: bool, default_persistent_p2p: bool
+) -> Tuple[bool, bool]:
+    if scheduler is None:
+        return default_send_thread, default_persistent_p2p
+    if scheduler == "main":
+        return False, False
+    if scheduler == "send-thread":
+        return True, False
+    if scheduler == "persistent":
+        return False, True
+    if scheduler == "send-thread-persistent":
+        return True, True
+    raise ValueError(f"unknown p2p scheduler: {scheduler}")
 
 
 def parse_summary_line(line: str) -> Optional[Dict[str, Any]]:
@@ -437,9 +571,66 @@ class RunSpec:
     supports_directory: bool
     memory_family: str
     p2p_variant: Optional[str] = None
+    p2p_scheduler: Optional[str] = None
+    pencil_layout: Optional[str] = None
+    pencil_pipeline: Optional[str] = None
+    large_count_p2p_transport: Optional[str] = None
+    grid: Optional[Tuple[int, ...]] = None
 
     def size_arity(self) -> int:
         return 3 if self.dim == 3 else 4
+
+
+def choose_pencil_grid_3d(num_gpus: int) -> Tuple[int, int]:
+    p1 = 1
+    d = 1
+    while d * d <= num_gpus:
+        if num_gpus % d == 0:
+            p1 = d
+        d += 1
+    return p1, num_gpus // p1
+
+
+def grid_orientations_for_spec(
+    dim: int, strategy: Optional[str], num_gpus: int, orientation_mode: str = "both"
+) -> List[Optional[Tuple[int, ...]]]:
+    if dim != 3 or strategy != "pencil-pencil" or num_gpus < 2:
+        return [None]
+
+    default_grid = choose_pencil_grid_3d(num_gpus)
+    reversed_grid = (default_grid[1], default_grid[0])
+
+    if orientation_mode == "default":
+        return [default_grid]
+    if orientation_mode == "reversed":
+        return [reversed_grid]
+
+    grids: List[Tuple[int, ...]] = [default_grid]
+    if reversed_grid != default_grid:
+        grids.append(reversed_grid)
+    return grids
+
+
+def grid_slug(grid: Optional[Tuple[int, ...]]) -> str:
+    if not grid:
+        return "gridauto"
+    return "grid" + "x".join(str(v) for v in grid)
+
+
+def parse_pencil_grid_orientations(value: str) -> str:
+    value = (value or "both").strip().lower()
+    aliases = {
+        "auto": "both",
+        "all": "both",
+        "both": "both",
+        "default": "default",
+        "primary": "default",
+        "reversed": "reversed",
+        "reverse": "reversed",
+    }
+    if value not in aliases:
+        raise ValueError("--pencil-pencil-grid-orientations must be one of: both, default, reversed")
+    return aliases[value]
 
 
 @dataclass(frozen=True)
@@ -548,6 +739,11 @@ def add_fftm_specs(
     max_gpus: int,
     include_nca: bool,
     p2p_variants: Sequence[Optional[str]],
+    p2p_schedulers: Sequence[Optional[str]],
+    pencil_layouts: Sequence[Optional[str]],
+    pencil_pipelines: Sequence[Optional[str]],
+    large_count_p2p_transports: Sequence[Optional[str]],
+    pencil_grid_orientations: str = "both",
 ) -> None:
     transports: List[Tuple[str, str]] = [("cuda_aware", ".bin")]
     if include_nca:
@@ -562,23 +758,37 @@ def add_fftm_specs(
                 for strategy in FFTM_STRATEGIES_3D:
                     for mode in FFTM_MODES:
                         for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
-                            specs.append(
-                                RunSpec(
-                                    suite="fftm",
-                                    dim=3,
-                                    case_name="benchmark",
-                                    binary_name=benchmark_3d,
-                                    binary_path=str(binaries[benchmark_3d]),
-                                    num_gpus=num_gpus,
-                                    transport=transport_name,
-                                    strategy=strategy,
-                                    mode=mode,
-                                    uses_mpi=True,
-                                    supports_directory=True,
-                                    memory_family=f"fftm:3d:small:{num_gpus}:{strategy}",
-                                    p2p_variant=variant,
-                                )
-                            )
+                            for scheduler in p2p_schedulers_for_spec(3, transport_name, mode, p2p_schedulers):
+                                for pencil_layout in pencil_layouts_for_spec(3, strategy, pencil_layouts):
+                                    for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, pencil_pipelines):
+                                        for large_count_transport in large_count_p2p_transports_for_spec(
+                                            3, transport_name, strategy, mode, pencil_pipeline, large_count_p2p_transports
+                                        ):
+                                            for grid in grid_orientations_for_spec(
+                                                3, strategy, num_gpus, pencil_grid_orientations
+                                            ):
+                                                specs.append(
+                                                    RunSpec(
+                                                        suite="fftm",
+                                                        dim=3,
+                                                        case_name="benchmark",
+                                                        binary_name=benchmark_3d,
+                                                        binary_path=str(binaries[benchmark_3d]),
+                                                        num_gpus=num_gpus,
+                                                        transport=transport_name,
+                                                        strategy=strategy,
+                                                        mode=mode,
+                                                        uses_mpi=True,
+                                                        supports_directory=True,
+                                                        memory_family=f"fftm:3d:small:{num_gpus}:{strategy}",
+                                                        p2p_variant=variant,
+                                                        p2p_scheduler=scheduler,
+                                                        pencil_layout=pencil_layout,
+                                                        pencil_pipeline=pencil_pipeline,
+                                                        large_count_p2p_transport=large_count_transport,
+                                                        grid=grid,
+                                                    )
+                                                )
 
             if benchmark_4d in binaries:
                 for strategy in FFTM_STRATEGIES_4D:
@@ -607,23 +817,42 @@ def add_fftm_specs(
                     for strategy in FFTM_STRATEGIES_3D:
                         for mode in FFTM_MODES:
                             for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
-                                specs.append(
-                                    RunSpec(
-                                        suite="fftm",
-                                        dim=3,
-                                        case_name=f"v{testcase}",
-                                        binary_name=name_3d,
-                                        binary_path=str(binaries[name_3d]),
-                                        num_gpus=num_gpus,
-                                        transport=transport_name,
-                                        strategy=strategy,
-                                        mode=mode,
-                                        uses_mpi=True,
-                                        supports_directory=False,
-                                        memory_family=f"fftm:3d:{family_kind}:{num_gpus}:{strategy}",
-                                        p2p_variant=variant,
-                                    )
-                                )
+                                for scheduler in p2p_schedulers_for_spec(3, transport_name, mode, p2p_schedulers):
+                                    for pencil_layout in pencil_layouts_for_spec(3, strategy, pencil_layouts):
+                                        for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, pencil_pipelines):
+                                            for large_count_transport in large_count_p2p_transports_for_spec(
+                                                3,
+                                                transport_name,
+                                                strategy,
+                                                mode,
+                                                pencil_pipeline,
+                                                large_count_p2p_transports,
+                                            ):
+                                                for grid in grid_orientations_for_spec(
+                                                    3, strategy, num_gpus, pencil_grid_orientations
+                                                ):
+                                                    specs.append(
+                                                        RunSpec(
+                                                            suite="fftm",
+                                                            dim=3,
+                                                            case_name=f"v{testcase}",
+                                                            binary_name=name_3d,
+                                                            binary_path=str(binaries[name_3d]),
+                                                            num_gpus=num_gpus,
+                                                            transport=transport_name,
+                                                            strategy=strategy,
+                                                            mode=mode,
+                                                            uses_mpi=True,
+                                                            supports_directory=False,
+                                                            memory_family=f"fftm:3d:{family_kind}:{num_gpus}:{strategy}",
+                                                            p2p_variant=variant,
+                                                            p2p_scheduler=scheduler,
+                                                            pencil_layout=pencil_layout,
+                                                            pencil_pipeline=pencil_pipeline,
+                                                            large_count_p2p_transport=large_count_transport,
+                                                            grid=grid,
+                                                        )
+                                                    )
 
                 name_4d = f"test_fftm_v{testcase}_4D{suffix}"
                 if name_4d in binaries:
@@ -649,11 +878,30 @@ def add_fftm_specs(
 
 
 def build_measurement_specs(
-    binaries: Dict[str, Path], max_gpus: int, include_nca: bool, p2p_variants: Sequence[Optional[str]]
+    binaries: Dict[str, Path],
+    max_gpus: int,
+    include_nca: bool,
+    p2p_variants: Sequence[Optional[str]],
+    p2p_schedulers: Sequence[Optional[str]],
+    pencil_layouts: Sequence[Optional[str]],
+    pencil_pipelines: Sequence[Optional[str]],
+    large_count_p2p_transports: Sequence[Optional[str]],
+    pencil_grid_orientations: str = "both",
 ) -> List[RunSpec]:
     specs: List[RunSpec] = []
     add_ffts_specs(specs, binaries)
-    add_fftm_specs(specs, binaries, max_gpus=max_gpus, include_nca=include_nca, p2p_variants=p2p_variants)
+    add_fftm_specs(
+        specs,
+        binaries,
+        max_gpus=max_gpus,
+        include_nca=include_nca,
+        p2p_variants=p2p_variants,
+        p2p_schedulers=p2p_schedulers,
+        pencil_layouts=pencil_layouts,
+        pencil_pipelines=pencil_pipelines,
+        large_count_p2p_transports=large_count_p2p_transports,
+        pencil_grid_orientations=pencil_grid_orientations,
+    )
     return specs
 
 
@@ -684,6 +932,12 @@ def build_probe_families(specs: Sequence[RunSpec], probe_mode: str) -> List[Prob
                 uses_mpi=spec.uses_mpi,
                 supports_directory=spec.supports_directory,
                 memory_family=spec.memory_family,
+                p2p_variant=spec.p2p_variant,
+                p2p_scheduler=spec.p2p_scheduler,
+                pencil_layout=spec.pencil_layout,
+                pencil_pipeline=spec.pencil_pipeline,
+                large_count_p2p_transport=spec.large_count_p2p_transport,
+                grid=spec.grid,
             )
         else:
             representative = spec
@@ -725,13 +979,27 @@ class LocalPaperBenchmarkRunner:
         self.max_gpus = min(self.args.max_gpus or len(self.effective_gpus), len(self.effective_gpus))
         self.binaries = discover_binaries(self.tests_root)
         self.p2p_variants = parse_p2p_variants(self.args.p2p_variants)
+        self.p2p_schedulers = parse_p2p_schedulers(self.args.p2p_schedulers)
+        self.pencil_layouts = parse_pencil_layouts(self.args.pencil_layouts)
+        self.pencil_pipelines = parse_pencil_pipelines(self.args.pencil_pipelines)
+        self.large_count_p2p_transports = parse_large_count_p2p_transports(
+            self.args.large_count_p2p_transports
+        )
+        self.pencil_grid_orientations = parse_pencil_grid_orientations(self.args.pencil_pencil_grid_orientations)
         self.extra_sizes_3d = parse_int_list(self.args.extra_sizes_3d)
         self.extra_sizes_3d_by_gpu = parse_gpu_size_map(self.args.extra_sizes_3d_by_gpu)
+        self.fixed_scaling_sizes_3d = parse_int_list(self.args.fixed_scaling_sizes_3d)
+        self.fixed_scaling_sizes_4d = parse_int_list(self.args.fixed_scaling_sizes_4d)
         self.specs = build_measurement_specs(
             self.binaries,
             max_gpus=self.max_gpus,
             include_nca=not self.args.skip_nca,
             p2p_variants=self.p2p_variants,
+            p2p_schedulers=self.p2p_schedulers,
+            pencil_layouts=self.pencil_layouts,
+            pencil_pipelines=self.pencil_pipelines,
+            large_count_p2p_transports=self.large_count_p2p_transports,
+            pencil_grid_orientations=self.pencil_grid_orientations,
         )
         if not self.specs:
             raise RuntimeError(f"No runnable benchmark/test binaries were found under {self.tests_root}")
@@ -825,6 +1093,8 @@ class LocalPaperBenchmarkRunner:
             command.extend(["--strategy", spec.strategy])
         if spec.mode is not None:
             command.extend(["--mode", spec.mode])
+        if spec.grid is not None:
+            command.extend(["--grid", *(str(v) for v in spec.grid)])
         if spec.supports_directory:
             command.extend(["--directory", str(self.cpp_csv_dir)])
         if spec.suite == "fftm" and spec.case_name != "benchmark":
@@ -849,14 +1119,43 @@ class LocalPaperBenchmarkRunner:
                 else "--no-direct-p2p-cuda-aware"
             )
             if spec.dim == 3:
+                use_p2p_send_thread, use_persistent_p2p = p2p_scheduler_flags(
+                    spec.p2p_scheduler,
+                    self.args.use_p2p_send_thread,
+                    self.args.use_persistent_p2p,
+                )
                 command.append(
-                    "--use-p2p-send-thread" if self.args.use_p2p_send_thread else "--no-p2p-send-thread"
+                    "--use-p2p-send-thread" if use_p2p_send_thread else "--no-p2p-send-thread"
                 )
                 command.append(
                     "--use-p2p-byte-transfer"
                     if use_p2p_byte_transfer
                     else "--no-p2p-byte-transfer"
                 )
+                command.append(
+                    "--use-persistent-p2p" if use_persistent_p2p else "--no-persistent-p2p"
+                )
+                command.append(
+                    "--use-ready-p2p-send"
+                    if self.args.use_ready_p2p_send
+                    else "--no-ready-p2p-send"
+                )
+                command.append(
+                    "--print-pencil-schedule"
+                    if self.args.print_pencil_schedule
+                    else "--no-print-pencil-schedule"
+                )
+                command.append(
+                    "--use-direct-forward-byte-receive"
+                    if self.args.use_direct_forward_byte_receive
+                    else "--no-direct-forward-byte-receive"
+                )
+                if spec.pencil_layout is not None:
+                    command.extend(["--pencil-layout", spec.pencil_layout])
+                if spec.pencil_pipeline is not None:
+                    command.extend(["--pencil-pipeline", spec.pencil_pipeline])
+                if spec.large_count_p2p_transport is not None:
+                    command.extend(["--large-count-p2p-transport", spec.large_count_p2p_transport])
         command.extend(["--times", str(times)])
         if warmup > 0:
             command.extend(["--warmup", str(warmup)])
@@ -875,7 +1174,10 @@ class LocalPaperBenchmarkRunner:
         slug = slugify(
             f"{self.run_index:05d}_{phase}_{spec.suite}_{spec.case_name}_{spec.dim}d_"
             f"g{spec.num_gpus}_{spec.transport}_{spec.strategy or 'default'}_{spec.mode or 'none'}_"
-            f"{spec.p2p_variant or 'configured'}_{'x'.join(str(s) for s in sizes)}"
+            f"{spec.p2p_variant or 'configured'}_{spec.p2p_scheduler or 'sched-configured'}_"
+            f"{spec.pencil_layout or 'layout-configured'}_{spec.pencil_pipeline or 'pipe-configured'}_"
+            f"{spec.large_count_p2p_transport or 'large-configured'}_"
+            f"{grid_slug(spec.grid)}_{'x'.join(str(s) for s in sizes)}"
         )
         raw_path = self.raw_dir / f"{slug}.log"
         started_at = now_iso()
@@ -1058,6 +1360,11 @@ class LocalPaperBenchmarkRunner:
             if spec.dim == 3 and spec.case_name == "benchmark":
                 side_lengths.extend(self.extra_sizes_3d)
                 side_lengths.extend(self.extra_sizes_3d_by_gpu.get(spec.num_gpus, []))
+            if spec.suite == "fftm" and spec.case_name == "benchmark":
+                if spec.dim == 3:
+                    side_lengths.extend(self.fixed_scaling_sizes_3d)
+                elif spec.dim == 4:
+                    side_lengths.extend(self.fixed_scaling_sizes_4d)
             for side_length in sorted(set(side_lengths)):
                 record = self.execute_run(
                     spec, self.size_tuple(spec.dim, int(side_length)), self.args.measure_times, PHASE_MEASURE
@@ -1206,11 +1513,100 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Disable MPI_BYTE chunked peer transfers.",
     )
     parser.add_argument(
+        "--use-direct-forward-byte-receive",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: receive Egger-parity opt1 forward byte messages directly into strided "
+            "stage storage. Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-direct-forward-byte-receive",
+        action="store_false",
+        dest="use_direct_forward_byte_receive",
+        help="Disable experimental direct strided forward byte receives.",
+    )
+    parser.add_argument(
         "--p2p-variants",
         default="configured",
         help=(
-            "3D slab-pencil CUDA-aware p2p variant matrix: configured, all, or comma-separated subset of "
+            "3D CUDA-aware p2p variant matrix: configured, all, or comma-separated subset of "
             "value-packed,datatype-direct,byte-packed,byte-direct. Default: configured"
+        ),
+    )
+    parser.add_argument(
+        "--p2p-schedulers",
+        default="configured",
+        help=(
+            "3D CUDA-aware p2p scheduler matrix: configured, all, or comma-separated subset of "
+            "main,send-thread,persistent,send-thread-persistent. Default: configured"
+        ),
+    )
+    parser.add_argument(
+        "--use-persistent-p2p",
+        action="store_true",
+        default=False,
+        help="Use persistent MPI send requests for supported optimized FFTM 3D p2p paths. Default: disabled",
+    )
+    parser.add_argument(
+        "--no-persistent-p2p",
+        action="store_false",
+        dest="use_persistent_p2p",
+        help="Disable persistent MPI send requests.",
+    )
+    parser.add_argument(
+        "--use-ready-p2p-send",
+        action="store_true",
+        default=False,
+        help="Use experimental ready-polled P2P send posting in the owned Egger 3D pencil path. Default: disabled",
+    )
+    parser.add_argument(
+        "--no-ready-p2p-send",
+        action="store_false",
+        dest="use_ready_p2p_send",
+        help="Disable experimental ready-polled P2P send posting.",
+    )
+    parser.add_argument(
+        "--print-pencil-schedule",
+        action="store_true",
+        default=False,
+        help="Print owned Egger pencil-pipeline peer schedules during initialization. Default: disabled",
+    )
+    parser.add_argument(
+        "--no-print-pencil-schedule",
+        action="store_false",
+        dest="print_pencil_schedule",
+        help="Disable owned Egger pencil-pipeline schedule dumps.",
+    )
+    parser.add_argument(
+        "--pencil-layouts",
+        default="configured",
+        help="3D pencil-pencil layout matrix: configured, all, or comma-separated subset of auto,opt0,opt1,legacy.",
+    )
+    parser.add_argument(
+        "--pencil-pipelines",
+        default="configured",
+        help=(
+            "3D pencil-pencil pipeline matrix: configured, all, or comma-separated subset of "
+            "staged,fused,egger,egger-parity."
+        ),
+    )
+    parser.add_argument(
+        "--large-count-p2p-transports",
+        default="configured",
+        help=(
+            "Large-count transport matrix for 3D CUDA-aware pencil-pencil P2P runs: "
+            "configured, all, or comma-separated subset of "
+            f"{','.join(FFTM_LARGE_COUNT_P2P_TRANSPORTS)}."
+        ),
+    )
+    parser.add_argument(
+        "--pencil-pencil-grid-orientations",
+        default="both",
+        help=(
+            "Pencil-pencil 3D process-grid orientations to run: both, default, or reversed. "
+            "Default: both, so e.g. 8 GPUs runs both 2x4 and 4x2."
         ),
     )
     parser.add_argument(
@@ -1224,6 +1620,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Per-GPU-count 3D benchmark side lengths appended to fitted/global sizes, "
             "e.g. '1:1050;2:1344;3:1536' or '1:540,729;2:686,900'."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-scaling-sizes-3d",
+        default="",
+        help=(
+            "Comma-separated 3D side lengths appended to every FFTM benchmark GPU count. "
+            "Use this for fixed-problem strong-scaling/acceleration runs."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-scaling-sizes-4d",
+        default="",
+        help=(
+            "Comma-separated 4D side lengths appended to every FFTM benchmark GPU count. "
+            "Use this for fixed-problem strong-scaling/acceleration runs."
         ),
     )
     parser.add_argument(
