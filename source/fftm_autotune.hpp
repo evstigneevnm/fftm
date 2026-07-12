@@ -541,8 +541,9 @@ inline config_map make_default_3d_config( int num_procs, const global_sizes &siz
     }
     else if ( num_procs == 7 )
     {
-        config["FFTM_AUTOTUNE_GRID_3D"] = "1x7";
-        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
+        config["FFTM_AUTOTUNE_GRID_3D"] = "7x1";
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt0";
+        set_native_opt0_hot_y_options( config );
     }
     else if ( num_procs == 6 )
     {

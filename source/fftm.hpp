@@ -1004,8 +1004,8 @@ private:
         if ( init_options_.pencil_layout_3d == fftm_3d_pencil_layout::auto_select && strategy_3d_optimized_layout )
         {
             const processor_grid pg = partitioning_.get_process_grid();
-            return pg.p1 > pg.p2 && pg.p2 > 1 ? ::fftm::detail::pencil_pencil_plan_layout::opt0
-                                               : ::fftm::detail::pencil_pencil_plan_layout::opt1;
+            return pg.p1 > pg.p2 ? ::fftm::detail::pencil_pencil_plan_layout::opt0
+                                  : ::fftm::detail::pencil_pencil_plan_layout::opt1;
         }
         return ::fftm::detail::pencil_pencil_plan_layout::opt0;
     }
@@ -1439,7 +1439,7 @@ private:
             return false;
         }
         const processor_grid pg = partitioning_.get_process_grid();
-        return pg.p1 > 1 && pg.p2 > 1;
+        return pg.p1 > 1;
     }
 
     bool native_opt0_reference_y_buffer_topology_enabled_() const
@@ -2281,7 +2281,7 @@ private:
         }
 
         if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) &&
-             partitioning_.get_process_grid().p2 == 1 )
+             partitioning_.get_process_grid().p2 == 1 && !native_opt0_default_z_layout_enabled_() )
         {
             SCFD_SAFE_CALL( add_plan_yz_r2c_slab_optimized_(
                 "forward_yz_pencil_pencil_p2_degenerate", "inverse_yz_pencil_pencil_p2_degenerate",
@@ -2557,7 +2557,7 @@ private:
         {
             if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
             {
-                if ( partitioning_.get_process_grid().p2 == 1 )
+                if ( partitioning_.get_process_grid().p2 == 1 && !native_opt0_default_z_layout_enabled_() )
                 {
                     SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
                     FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_reference_p2_degenerate" );
@@ -2692,7 +2692,7 @@ private:
         {
             if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
             {
-                if ( partitioning_.get_process_grid().p2 == 1 )
+                if ( partitioning_.get_process_grid().p2 == 1 && !native_opt0_default_z_layout_enabled_() )
                 {
                     SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
                     FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_reference_p2_degenerate" );
