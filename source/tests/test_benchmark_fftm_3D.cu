@@ -1253,6 +1253,7 @@ int run_benchmark_case(
 {
     using fftm_t =
         fftm::fftm<base_fft_t, scfd::communication::mpi_comm_info, backend_t, Strategy, scfd::utils::log_mpi>;
+    using strategy_traits = fftm::detail::fftm_3d_strategy_traits<Strategy>;
     using real_array_t  = typename fftm_t::template real_array_t<3>;
     using hat_array_t   = typename fftm_t::template complex_array_t<3>;
     using error_array_t = scfd::arrays::array_nd<T, 1, memory_t>;
@@ -1271,18 +1272,17 @@ int run_benchmark_case(
         );
     }
 
-    fftm_t distributed_fft( comm_info, log );
-    distributed_fft.template init<3>( grid, sizes, fftm::test::detail::make_fftm_init_options( options ) );
-
-    const auto  in_sizes   = distributed_fft.get_local_input_sizes();
-    const auto  out_sizes  = distributed_fft.get_local_output_sizes();
-    const auto &input_part = distributed_fft.input_partition();
-
     fftm::fft_partitioning<scfd::communication::mpi_comm_info> partitioning( comm_info );
     partitioning.init( grid, sizes );
 
     int myid_i = 0, myid_j = 0, myid_k = 0;
     std::tie( myid_i, myid_j, myid_k ) = partitioning.get_my_grid();
+    (void)myid_k;
+
+    fftm::partition input_dim;
+    fftm::partition transpose1_dim;
+    fftm::partition output_dim;
+    std::tie( input_dim, transpose1_dim, output_dim ) = partitioning.get_partitioning_3D();
 
     real_array_t work;
     hat_array_t  hat;
@@ -1300,13 +1300,54 @@ int run_benchmark_case(
         const std::size_t xy = checked_mul( std::get<0>( dims ), std::get<1>( dims ), what );
         return checked_mul( xy, std::get<2>( dims ), what );
     };
+    const auto preinit_in_sizes =
+        std::make_tuple( input_dim.size_x[myid_i], input_dim.size_y[myid_j], input_dim.size_z[0] );
+    const bool optimized_pencil_public_output =
+        strategy_traits::family == fftm::transform_strategy_3d::pencil_pencil && strategy_traits::optimized_layout;
+    const auto preinit_out_sizes = optimized_pencil_public_output
+                                       ? std::make_tuple(
+                                             output_dim.size_x[0], output_dim.size_y[myid_i], output_dim.size_z[myid_j]
+                                         )
+                                       : std::make_tuple(
+                                             output_dim.size_x[0], output_dim.size_z[myid_j], output_dim.size_y[myid_i]
+                                         );
+    const std::size_t reserve_bytes = static_cast<std::size_t>( 512 ) * static_cast<std::size_t>( 1024 ) *
+                                      static_cast<std::size_t>( 1024 );
+    const std::size_t preinit_real_elems =
+        tuple_elems( preinit_in_sizes, "benchmark real tensor element count" );
+    const std::size_t preinit_complex_elems =
+        tuple_elems( preinit_out_sizes, "benchmark complex tensor element count" );
+    const std::size_t preinit_real_bytes =
+        checked_mul( preinit_real_elems, sizeof( typename fftm_t::real ), "benchmark real tensor bytes" );
+    const std::size_t preinit_complex_bytes =
+        checked_mul( preinit_complex_elems, sizeof( typename fftm_t::complex ), "benchmark complex tensor bytes" );
+    std::size_t public_tensor_reserve_bytes =
+        checked_mul( 1, preinit_real_bytes, "benchmark public tensor memory reserve" );
+    if ( preinit_complex_bytes > std::numeric_limits<std::size_t>::max() - public_tensor_reserve_bytes )
+        throw std::overflow_error( "benchmark public tensor memory reserve overflows size_t" );
+    public_tensor_reserve_bytes += preinit_complex_bytes;
+    if ( reserve_bytes > std::numeric_limits<std::size_t>::max() - public_tensor_reserve_bytes )
+        throw std::overflow_error( "benchmark public tensor memory reserve overflows size_t" );
+    public_tensor_reserve_bytes += reserve_bytes;
+
+    auto init_options = fftm::test::detail::make_fftm_init_options( options );
+    if ( init_options.native_opt0_memory_feasibility_reserve_bytes < public_tensor_reserve_bytes )
+    {
+        init_options.native_opt0_memory_feasibility_reserve_bytes = public_tensor_reserve_bytes;
+    }
+
+    fftm_t distributed_fft( comm_info, log );
+    distributed_fft.template init<3>( grid, sizes, init_options );
+
+    const auto  in_sizes   = distributed_fft.get_local_input_sizes();
+    const auto  out_sizes  = distributed_fft.get_local_output_sizes();
+    const auto &input_part = distributed_fft.input_partition();
+
     const std::size_t real_elems    = tuple_elems( in_sizes, "benchmark real tensor element count" );
     const std::size_t complex_elems = tuple_elems( out_sizes, "benchmark complex tensor element count" );
     const std::size_t real_bytes    = checked_mul( real_elems, sizeof( typename fftm_t::real ), "benchmark real tensor bytes" );
     const std::size_t complex_bytes =
         checked_mul( complex_elems, sizeof( typename fftm_t::complex ), "benchmark complex tensor bytes" );
-    const std::size_t reserve_bytes = static_cast<std::size_t>( 512 ) * static_cast<std::size_t>( 1024 ) *
-                                      static_cast<std::size_t>( 1024 );
     std::size_t required_bytes = checked_mul( 1, real_bytes, "benchmark tensor memory preflight" );
     if ( complex_bytes > std::numeric_limits<std::size_t>::max() - required_bytes )
         throw std::overflow_error( "benchmark tensor memory preflight overflows size_t" );

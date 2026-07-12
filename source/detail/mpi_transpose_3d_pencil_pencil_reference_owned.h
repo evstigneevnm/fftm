@@ -4380,8 +4380,6 @@ public:
 	               << " native_backward_first_execution=" << ( native_backward_first_execution_active_() ? 1 : 0 )
 	                   << " native_opt0_reference_y_buffer_topology="
 	                   << ( native_opt0_reference_y_buffer_topology_enabled_() ? 1 : 0 )
-	                   << " native_opt0_reference_y_buffer_topology="
-	                   << ( native_opt0_reference_y_buffer_topology_enabled_() ? 1 : 0 )
                    << " native_opt0_compact_y_workarea="
                    << ( use_native_opt0_compact_y_workarea_ ? 1 : 0 )
 	                   << " native_opt0_reference_device_slots="
@@ -4390,15 +4388,6 @@ public:
                                     ? "temp=0,recv=1/ywork,send=2,bwdtemp=3"
                                     : "temp=0,recv=1,send=2,ywork=3,bwdtemp=after_ywork" )
 	                            : "standard" )
-	                   << " native_opt0_reference_device_slots="
-	                   << ( native_opt0_reference_y_buffer_topology_enabled_()
-	                            ? ( use_native_opt0_compact_y_workarea_
-	                                    ? "temp=0,recv=1/ywork,send=2,bwdtemp=3"
-	                                    : "temp=0,recv=1,send=2,ywork=3,bwdtemp=after_ywork" )
-	                            : "standard" )
-                   << " native_opt0_reference_buffer_cycle="
-                   << ( native_opt0_reference_y_buffer_topology_enabled_() ? "forward_scratch-temp-io-temp-io_backward_io-temp-io-temp-scratch"
-                                                                       : "standard" )
                    << " native_opt0_reference_buffer_cycle="
                    << ( native_opt0_reference_y_buffer_topology_enabled_() ? "forward_scratch-temp-io-temp-io_backward_io-temp-io-temp-scratch"
                                                                        : "standard" )

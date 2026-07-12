@@ -719,21 +719,44 @@ private:
 #endif
     }
 
-    std::size_t native_opt0_y_reference_workspace_total_bytes_() const
+    std::size_t native_opt0_reference_workspace_slot_offset_( bool compact_y_workarea ) const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( native_opt0_reference_y_buffer_topology_enabled_() && compact_y_workarea )
+            return 1;
+        return 3;
+#else
+        (void)compact_y_workarea;
+        return 1;
+#endif
+    }
+
+    std::size_t native_opt0_y_reference_workspace_total_bytes_( bool compact_y_workarea ) const
     {
         if ( !native_opt0_default_z_layout_enabled_() )
             return 0;
-        const std::size_t reference_work_offset =
-            pencil_pencil_reference_owned_.native_opt0_y_reference_work_base_offset_bytes();
-        const std::size_t total = reference_work_offset + native_opt0_reference_fft_work_span_();
+        const std::size_t domain_bytes = native_opt0_reference_domain_bytes_();
+        const std::size_t slot_offset = native_opt0_reference_workspace_slot_offset_( compact_y_workarea );
+        if ( domain_bytes != 0 && slot_offset > std::numeric_limits<std::size_t>::max() / domain_bytes )
+            throw std::overflow_error( "native opt0 Y reference workarea offset overflows size_t" );
+        const std::size_t reference_work_offset = slot_offset * domain_bytes;
+        const std::size_t fft_work_span = native_opt0_reference_fft_work_span_();
+        if ( reference_work_offset > std::numeric_limits<std::size_t>::max() - fft_work_span )
+            throw std::overflow_error( "native opt0 Y reference workspace total overflows size_t" );
+        const std::size_t total = reference_work_offset + fft_work_span;
         return align_up_( total, 256 );
     }
 
-    std::size_t native_opt0_reference_backward_y_output_offset_bytes_() const
+    std::size_t native_opt0_y_reference_workspace_total_bytes_() const
     {
-        const std::size_t work_total = native_opt0_y_reference_workspace_total_bytes_();
+        return native_opt0_y_reference_workspace_total_bytes_( native_opt0_compact_y_workarea_enabled_() );
+    }
+
+    std::size_t native_opt0_reference_backward_y_output_offset_bytes_( bool compact_y_workarea ) const
+    {
+        const std::size_t work_total = native_opt0_y_reference_workspace_total_bytes_( compact_y_workarea );
 #ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        if ( native_opt0_compact_y_workarea_enabled_() )
+        if ( compact_y_workarea )
         {
             const std::size_t domain_bytes = native_opt0_reference_domain_bytes_();
             if ( domain_bytes > std::numeric_limits<std::size_t>::max() / 3 )
@@ -744,18 +767,29 @@ private:
         return work_total;
     }
 
-    std::size_t native_opt0_y_parallel_work_size_() const
+    std::size_t native_opt0_reference_backward_y_output_offset_bytes_() const
     {
-        std::size_t total = native_opt0_y_reference_workspace_total_bytes_();
+        return native_opt0_reference_backward_y_output_offset_bytes_( native_opt0_compact_y_workarea_enabled_() );
+    }
+
+    std::size_t native_opt0_y_parallel_work_size_( bool compact_y_workarea ) const
+    {
+        std::size_t total = native_opt0_y_reference_workspace_total_bytes_( compact_y_workarea );
         if ( native_opt0_reference_y_buffer_topology_enabled_() )
         {
-            const std::size_t backward_output_offset = native_opt0_reference_backward_y_output_offset_bytes_();
+            const std::size_t backward_output_offset =
+                native_opt0_reference_backward_y_output_offset_bytes_( compact_y_workarea );
             const std::size_t domain_bytes = native_opt0_reference_domain_bytes_();
             if ( backward_output_offset > std::numeric_limits<std::size_t>::max() - domain_bytes )
                 throw std::overflow_error( "native opt0 compact Y workspace size overflows size_t" );
             total = std::max( total, backward_output_offset + domain_bytes );
         }
         return align_up_( total, 256 );
+    }
+
+    std::size_t native_opt0_y_parallel_work_size_() const
+    {
+        return native_opt0_y_parallel_work_size_( native_opt0_compact_y_workarea_enabled_() );
     }
 
     std::size_t native_opt0_y_plan_work_stride_() const
@@ -908,6 +942,14 @@ private:
             return;
         }
 
+        const std::size_t domain_bytes = native_opt0_reference_domain_bytes_();
+        const std::size_t reference_work_bytes = native_opt0_y_reference_workspace_total_bytes_();
+        const std::size_t compact_workspace_bytes = native_opt0_y_parallel_work_size_( true );
+        const std::size_t compact_required_bytes =
+            compact_workspace_bytes > std::numeric_limits<std::size_t>::max() - reserve_bytes
+                ? std::numeric_limits<std::size_t>::max()
+                : compact_workspace_bytes + reserve_bytes;
+
         std::ostringstream ss;
         ss << "FFTM native opt0 memory feasibility guard failed before allocating shared workspace: free="
            << bytes_to_mib_( static_cast<memory_profile_bytes_t>( mem_info.free_bytes ) )
@@ -917,8 +959,25 @@ private:
            << bytes_to_mib_( static_cast<memory_profile_bytes_t>( allocation_bytes ) )
            << " MiB, reserve="
            << bytes_to_mib_( static_cast<memory_profile_bytes_t>( reserve_bytes ) )
-           << " MiB. Use pencil layout opt1 for this GPU count/size, or explicitly try compact native opt0 "
-              "only when it fits the target device memory.";
+           << " MiB, domain_slot="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( domain_bytes ) )
+           << " MiB, y_reference_workspace="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( reference_work_bytes ) )
+           << " MiB, compact_shared_workspace="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( compact_workspace_bytes ) )
+           << " MiB, compact_required="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( compact_required_bytes ) )
+           << " MiB. ";
+        if ( !native_opt0_compact_y_workarea_enabled_() && mem_info.free_bytes >= compact_required_bytes )
+        {
+            ss << "Explicit compact native opt0 should fit this device memory, but it is slower on known 6-GPU "
+                  "2048^3 measurements; prefer opt1 unless opt0 was explicitly requested.";
+        }
+        else
+        {
+            ss << "Use pencil layout opt1 for this GPU count/size, or explicitly try compact native opt0 only when "
+                  "it fits the target device memory.";
+        }
         throw std::runtime_error( ss.str() );
     }
 

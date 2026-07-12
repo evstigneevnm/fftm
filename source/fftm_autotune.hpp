@@ -2,6 +2,7 @@
 #define __FFTM_AUTOTUNE_HPP__
 
 #include <cstdlib>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -19,6 +20,31 @@ namespace autotune
 {
 
 using config_map = std::map<std::string, std::string>;
+
+enum class cache_mismatch_policy
+{
+    error,
+    overwrite
+};
+
+struct autotune_options
+{
+    std::string           cache_file;
+    bool                  create_if_missing = true;
+    cache_mismatch_policy mismatch_policy   = cache_mismatch_policy::error;
+    bool                  validate_hardware = true;
+};
+
+struct selected_3d_config
+{
+    config_map        config;
+    processor_grid    grid;
+    fftm_init_options init_options;
+    std::string       strategy_3d;
+    std::string       mode;
+    std::string       backend_3d;
+    std::string       source;
+};
 
 inline std::string trim( const std::string &value )
 {
@@ -61,6 +87,35 @@ inline const char *getenv_or_null( const char *name )
 {
     const char *value = std::getenv( name );
     return value != nullptr && *value != '\0' ? value : nullptr;
+}
+
+inline bool file_exists( const std::string &path )
+{
+    std::ifstream input( path.c_str() );
+    return static_cast<bool>( input );
+}
+
+inline std::string sizes_to_string( const global_sizes &sizes )
+{
+    return std::to_string( sizes.Nx ) + "x" + std::to_string( sizes.Ny ) + "x" + std::to_string( sizes.Nz );
+}
+
+inline void save_key_value_file( const std::string &path, const config_map &config )
+{
+    const std::string tmp_path = path + ".tmp";
+    {
+        std::ofstream output( tmp_path.c_str() );
+        if ( !output )
+            throw std::logic_error( "FFTM autotune config cannot be written: " + tmp_path );
+        output << "# FFTM C++ autotune cache\n";
+        for ( const auto &entry : config )
+            output << entry.first << "=" << entry.second << "\n";
+    }
+    if ( std::rename( tmp_path.c_str(), path.c_str() ) != 0 )
+    {
+        std::remove( tmp_path.c_str() );
+        throw std::logic_error( "FFTM autotune config cannot be moved into place: " + path );
+    }
 }
 
 inline config_map load_key_value_file( const std::string &path )
@@ -364,6 +419,298 @@ inline void validate_match( const config_map &config, int num_procs, const globa
             );
         }
     }
+}
+
+template <class RuntimeApi>
+inline std::string hardware_signature( int num_procs )
+{
+    const auto mem_info = RuntimeApi::get_device_memory_info();
+    std::ostringstream out;
+    out << "mpi=" << num_procs << ";device_total=";
+    if ( mem_info.total_bytes_known )
+        out << mem_info.total_bytes;
+    else
+        out << "unknown";
+    return out.str();
+}
+
+template <class RuntimeApi>
+inline void validate_hardware_match( const config_map &config, int num_procs )
+{
+    const std::string expected = value_or_empty( config, "FFTM_AUTOTUNE_HARDWARE_SIGNATURE" );
+    if ( expected.empty() )
+        return;
+    const std::string actual = hardware_signature<RuntimeApi>( num_procs );
+    if ( expected != actual )
+    {
+        throw std::logic_error(
+            "FFTM autotune config hardware signature '" + expected + "' does not match current hardware '" + actual +
+            "'"
+        );
+    }
+}
+
+inline void set_common_native_pencil_options( config_map &config )
+{
+    config["FFTM_AUTOTUNE_BACKEND_3D"]     = "native";
+    config["FFTM_AUTOTUNE_MODE"]           = "p2p-waitany";
+    config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] = "reference-parity";
+    config["FFTM_LARGE_COUNT_P2P_TRANSPORTS"] = "hindexed";
+    config["FFTM_DIRECT_P2P_CUDA_AWARE"] = "1";
+    config["FFTM_USE_DIRECT_BACKWARD_RECEIVE"] = "0";
+    config["FFTM_USE_DIRECT_FORWARD_BYTE_RECEIVE"] = "0";
+    config["FFTM_USE_P2P_SEND_THREAD"] = "0";
+    config["FFTM_USE_P2P_BYTE_TRANSFER"] = "1";
+    config["FFTM_USE_PERSISTENT_P2P"] = "0";
+    config["FFTM_USE_READY_P2P_SEND"] = "0";
+    config["FFTM_USE_STABLE_FORWARD_BYTE_SEND_BUFFER"] = "0";
+    config["FFTM_USE_READY_STABLE_FORWARD_BYTE_SEND_BUFFER"] = "0";
+    config["FFTM_USE_CONTIGUOUS_FORWARD_BYTE_SEND"] = "0";
+    config["FFTM_USE_PHYSICAL_FORWARD_PEER_EXCHANGE"] = "0";
+    config["FFTM_USE_FFT_EXEC_NO_SYNC"] = "0";
+    config["FFTM_USE_NATIVE_BACKWARD_SECOND_PEER_LOOP"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_COMPACT_Y_WORKAREA"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_TIGHT_Y_PLAN_SEQUENCE"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_SHARED_Y_PLAN_HANDLES"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_Y_GROUP_DEVICE_SYNC"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_ARRAY_EXECUTOR"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_LIFECYCLE"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_BUNDLE"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_Y_PLAN_BUNDLE_STREAM_FIRST"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_REFERENCE_STREAMS"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_MEMORY_FEASIBILITY_GUARD"] = "1";
+    config["FFTM_ALLOW_NATIVE_OPT0_DIAGNOSTIC_VARIANTS"] = "0";
+    config["FFTM_AUTOTUNE_DIAGNOSTIC_ONLY"] = "0";
+}
+
+inline void set_native_opt0_hot_y_options( config_map &config )
+{
+    config["FFTM_USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT"] = "1";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY"] = "1";
+    config["FFTM_USE_NATIVE_OPT0_COMPACT_Y_WORKAREA"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_TIGHT_Y_PLAN_SEQUENCE"] = "1";
+    config["FFTM_USE_NATIVE_OPT0_SHARED_Y_PLAN_HANDLES"] = "1";
+    config["FFTM_USE_NATIVE_OPT0_Y_GROUP_DEVICE_SYNC"] = "1";
+    config["FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC"] = "1";
+    config["FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_ARRAY_EXECUTOR"] = "1";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_LIFECYCLE"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_BUNDLE"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_Y_PLAN_BUNDLE_STREAM_FIRST"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_REFERENCE_STREAMS"] = "0";
+    config["FFTM_USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT"] = "0";
+}
+
+template <class RuntimeApi>
+inline config_map make_default_3d_config( int num_procs, const global_sizes &sizes )
+{
+    config_map config;
+    config["FFTM_AUTOTUNE_SCHEMA"] = "1";
+    config["FFTM_AUTOTUNE_LIBRARY"] = "fftm";
+    config["FFTM_AUTOTUNE_DIM"] = "3";
+    config["FFTM_AUTOTUNE_NUM_GPUS"] = std::to_string( num_procs );
+    config["FFTM_AUTOTUNE_SIZE_3D"] = sizes_to_string( sizes );
+    config["FFTM_AUTOTUNE_HARDWARE_SIGNATURE"] = hardware_signature<RuntimeApi>( num_procs );
+    config["FFTM_AUTOTUNE_SOURCE"] =
+        "cpp-policy-cache-v1"; // Measured C++ candidate timing will extend this schema later.
+
+    if ( num_procs <= 1 )
+    {
+        config["FFTM_AUTOTUNE_STRATEGY_3D"] = "slab-pencil";
+        config["FFTM_AUTOTUNE_BACKEND_3D"] = "native";
+        config["FFTM_AUTOTUNE_MODE"] = "p2p-waitany";
+        config["FFTM_AUTOTUNE_GRID_3D"] = "1x1";
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "auto";
+        config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] = "staged";
+        return config;
+    }
+
+    set_common_native_pencil_options( config );
+    config["FFTM_AUTOTUNE_STRATEGY_3D"] = "pencil-pencil";
+
+    if ( num_procs == 8 )
+    {
+        config["FFTM_AUTOTUNE_GRID_3D"] = "4x2";
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt0";
+        set_native_opt0_hot_y_options( config );
+    }
+    else if ( num_procs == 7 )
+    {
+        config["FFTM_AUTOTUNE_GRID_3D"] = "1x7";
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
+    }
+    else if ( num_procs == 6 )
+    {
+        config["FFTM_AUTOTUNE_GRID_3D"] = "2x3";
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
+    }
+    else if ( num_procs == 5 )
+    {
+        config["FFTM_AUTOTUNE_GRID_3D"] = "5x1";
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
+    }
+    else
+    {
+        const auto grid = default_pencil_grid_3d( num_procs );
+        config["FFTM_AUTOTUNE_GRID_3D"] = std::to_string( grid.first ) + "x" + std::to_string( grid.second );
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
+    }
+    return config;
+}
+
+inline bool apply_config_3d(
+    const config_map &config, int num_procs, const global_sizes &sizes, processor_grid &grid,
+    fftm_init_options &options
+);
+
+template <class RuntimeApi>
+inline selected_3d_config load_or_create_3d_config(
+    int num_procs, const global_sizes &sizes, const autotune_options &autotune
+)
+{
+    if ( autotune.cache_file.empty() )
+        throw std::logic_error( "fftm::autotune_options::cache_file must not be empty" );
+
+    config_map config;
+    std::string source;
+    if ( file_exists( autotune.cache_file ) )
+    {
+        config = load_key_value_file( autotune.cache_file );
+        try
+        {
+            validate_match( config, num_procs, sizes );
+            if ( autotune.validate_hardware )
+                validate_hardware_match<RuntimeApi>( config, num_procs );
+        }
+        catch ( const std::exception & )
+        {
+            if ( autotune.mismatch_policy != cache_mismatch_policy::overwrite )
+                throw;
+            config = make_default_3d_config<RuntimeApi>( num_procs, sizes );
+            save_key_value_file( autotune.cache_file, config );
+            source = "created";
+        }
+        if ( source.empty() )
+            source = "cache";
+    }
+    else
+    {
+        if ( !autotune.create_if_missing )
+            throw std::logic_error( "FFTM autotune cache file does not exist: " + autotune.cache_file );
+        config = make_default_3d_config<RuntimeApi>( num_procs, sizes );
+        save_key_value_file( autotune.cache_file, config );
+        source = "created";
+    }
+
+    processor_grid    grid;
+    fftm_init_options options;
+    if ( !apply_config_3d( config, num_procs, sizes, grid, options ) )
+        throw std::logic_error( "FFTM autotune config did not select a usable 3D plan" );
+
+    selected_3d_config selected;
+    selected.config       = config;
+    selected.grid         = grid;
+    selected.init_options = options;
+    selected.strategy_3d  = value_or_empty( config, "FFTM_AUTOTUNE_STRATEGY_3D" );
+    selected.mode         = value_or_empty( config, "FFTM_AUTOTUNE_MODE" );
+    selected.backend_3d   = value_or_empty( config, "FFTM_AUTOTUNE_BACKEND_3D" );
+    selected.source       = source;
+    return selected;
+}
+
+template <class RuntimeApi, class MPIComm>
+inline selected_3d_config load_or_create_3d_config(
+    const MPIComm &comm, const global_sizes &sizes, const autotune_options &autotune
+)
+{
+    if ( autotune.cache_file.empty() )
+        throw std::logic_error( "fftm::autotune_options::cache_file must not be empty" );
+
+    int cache_state        = 0; // 0: existing cache, 1: created/replaced by rank 0, 2: missing and creation disabled.
+    int root_prepare_error = 0;
+    if ( comm.myid == 0 )
+    {
+        try
+        {
+            const bool exists_on_root = file_exists( autotune.cache_file );
+            if ( exists_on_root )
+            {
+                bool cache_valid = true;
+                try
+                {
+                    const config_map config = load_key_value_file( autotune.cache_file );
+                    validate_match( config, comm.num_procs, sizes );
+                    if ( autotune.validate_hardware )
+                        validate_hardware_match<RuntimeApi>( config, comm.num_procs );
+                }
+                catch ( const std::exception & )
+                {
+                    cache_valid = false;
+                }
+                if ( !cache_valid && autotune.mismatch_policy == cache_mismatch_policy::overwrite )
+                {
+                    save_key_value_file(
+                        autotune.cache_file, make_default_3d_config<RuntimeApi>( comm.num_procs, sizes )
+                    );
+                    cache_state = 1;
+                }
+            }
+            else if ( autotune.create_if_missing )
+            {
+                save_key_value_file( autotune.cache_file, make_default_3d_config<RuntimeApi>( comm.num_procs, sizes ) );
+                cache_state = 1;
+            }
+            else
+            {
+                cache_state = 2;
+            }
+        }
+        catch ( const std::exception & )
+        {
+            root_prepare_error = 1;
+        }
+    }
+
+    comm.bcast( &root_prepare_error, 1, 0 );
+    comm.bcast( &cache_state, 1, 0 );
+    comm.barrier();
+    if ( root_prepare_error )
+        throw std::logic_error( "Rank 0 failed to prepare FFTM autotune cache: " + autotune.cache_file );
+    if ( cache_state == 2 )
+        throw std::logic_error( "FFTM autotune cache file does not exist: " + autotune.cache_file );
+
+    config_map config = load_key_value_file( autotune.cache_file );
+    validate_match( config, comm.num_procs, sizes );
+    if ( autotune.validate_hardware )
+        validate_hardware_match<RuntimeApi>( config, comm.num_procs );
+
+    processor_grid    grid;
+    fftm_init_options options;
+    if ( !apply_config_3d( config, comm.num_procs, sizes, grid, options ) )
+        throw std::logic_error( "FFTM autotune config did not select a usable 3D plan" );
+
+    selected_3d_config selected;
+    selected.config       = config;
+    selected.grid         = grid;
+    selected.init_options = options;
+    selected.strategy_3d  = value_or_empty( config, "FFTM_AUTOTUNE_STRATEGY_3D" );
+    selected.mode         = value_or_empty( config, "FFTM_AUTOTUNE_MODE" );
+    selected.backend_3d   = value_or_empty( config, "FFTM_AUTOTUNE_BACKEND_3D" );
+    selected.source       = cache_state == 0 ? "cache" : "created";
+    return selected;
+}
+
+template <class FFTMPlan>
+inline void init_autotuned_3d_plan(
+    FFTMPlan &plan, const selected_3d_config &selected, const global_sizes &sizes
+)
+{
+    plan.template init<3>( selected.grid, sizes, selected.init_options );
 }
 
 inline bool apply_config_3d(
