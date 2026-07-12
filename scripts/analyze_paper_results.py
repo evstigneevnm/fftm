@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from run_local_paper_benchmarks import parse_summary_line as parse_benchmark_summary_line
+
 
 TRANSPORT_LABELS = {
     "single_gpu": "single GPU",
@@ -49,7 +51,19 @@ class ResultRow:
     p2p_variant: str
     pencil_layout: str
     pencil_pipeline: str
+    fftm_3d_backend: str
+    native_opt0_y_executor_variant: str
+    native_opt0_y_no_sync_exec: str
+    grid: str
     large_count_p2p_transport: str
+    fft_exec_no_sync: str
+    stable_forward_byte_send_buffer: str
+    ready_stable_forward_byte_send_buffer: str
+    contiguous_forward_byte_send: str
+    physical_forward_peer_exchange: str
+    contiguous_forward_send_mode: str
+    contiguous_forward_send_chunk_mib: str
+    contiguous_forward_send_registration_warmups: str
     num_gpus: int
     returncode: int
     sizes: Tuple[int, ...]
@@ -180,6 +194,31 @@ def max_numeric(summary: dict, names: Sequence[str]) -> Optional[float]:
     return max(abs(v) for v in values)
 
 
+def grid_label(value) -> str:
+    if value is None:
+        return "configured"
+    if isinstance(value, (list, tuple)):
+        return "x".join(str(v) for v in value)
+    text = str(value).strip()
+    if text.startswith("(") and text.endswith(")"):
+        parts = [part.strip() for part in text[1:-1].split(",") if part.strip()]
+        if parts:
+            return "x".join(parts)
+    return text or "configured"
+
+
+def result_grid_label(strategy: object, spec_grid: object, summary_grid: object, num_gpus: int) -> str:
+    if spec_grid:
+        return grid_label(spec_grid)
+    label = grid_label(summary_grid)
+    if label.startswith("("):
+        if str(strategy) == "slab-pencil":
+            return f"{num_gpus}x1"
+        if str(strategy) == "pencil-slab":
+            return f"1x{num_gpus}"
+    return label
+
+
 PROFILE_RE = re.compile(
     r"^\[\s*(?P<name>.+):\s*(?P<ms>[0-9.eE+-]+)\s*ms\]\s*\(\s*(?P<pct>[0-9.eE+-]+)%\s*\)"
 )
@@ -196,11 +235,17 @@ def resolve_raw_log(data_dir: Path, raw_log: str) -> Optional[Path]:
     if not raw_log:
         return None
     path = Path(raw_log)
-    if path.exists():
-        return path
+    try:
+        if path.exists():
+            return path
+    except OSError:
+        pass
     candidate = data_dir / "raw" / path.name
-    if candidate.exists():
-        return candidate
+    try:
+        if candidate.exists():
+            return candidate
+    except OSError:
+        return None
     return None
 
 
@@ -280,6 +325,174 @@ def parse_raw_profiler_sections(raw_path: Optional[Path]) -> Tuple[List[dict], L
     return summary, breakdown, memory_profile, memory_categories
 
 
+def parse_raw_summary(raw_path: Optional[Path]) -> Dict[str, object]:
+    if raw_path is None or not raw_path.exists():
+        return {}
+    result: Dict[str, object] = {}
+    with raw_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            parsed = parse_benchmark_summary_line(line)
+            if parsed:
+                result = parsed
+    return result
+
+
+def csv_truthy(row: dict, *keys: str) -> bool:
+    return any(str(row.get(key, "")).strip().lower() in {"1", "true", "yes", "on"} for key in keys)
+
+
+def native_opt0_y_executor_variant_from_cpp_row(row: dict) -> str:
+    backend = row.get("fftm_3d_backend") or "native"
+    if backend != "native":
+        return "configured"
+
+    no_sync = csv_truthy(row, "native_opt0_y_no_sync_exec")
+    device = csv_truthy(row, "native_opt0_y_group_device_sync")
+    sync_part = ("nosync-" if no_sync else "") + ("device" if device else "stream")
+
+    if csv_truthy(row, "native_opt0_reference_local_plan_context", "native_opt0_egger_local_plan_context"):
+        return f"context-bundle-{sync_part}"
+    if csv_truthy(row, "native_opt0_raw_y_plan_bundle"):
+        if csv_truthy(
+            row, "native_opt0_raw_y_plan_bundle_reference_streams", "native_opt0_raw_y_plan_bundle_egger_streams"
+        ):
+            return f"raw-bundle-reference-streams-{sync_part}"
+        if csv_truthy(row, "native_opt0_y_plan_bundle_stream_first"):
+            return f"raw-bundle-streamfirst-{sync_part}"
+        return f"raw-bundle-{sync_part}"
+    if csv_truthy(row, "native_opt0_reference_y_plan_bundle"):
+        return f"ref-bundle-{sync_part}"
+    if csv_truthy(row, "native_opt0_raw_y_plan_array_executor"):
+        if csv_truthy(row, "native_opt0_shared_y_plan_handles"):
+            return f"shared-opaque-{sync_part}"
+        return f"opaque-{sync_part}"
+    if csv_truthy(row, "native_opt0_tight_y_plan_sequence"):
+        return f"tight-{sync_part}"
+    return f"virtual-{sync_part}"
+
+
+def summary_has_native_opt0_y_flags(summary: dict) -> bool:
+    return any(str(key).startswith("native_opt0_") for key in summary.keys())
+
+
+def native_opt0_y_variant_relevant(backend: object, strategy: object, layout: object, pipeline: object) -> bool:
+    return (
+        str(backend) == "native"
+        and str(strategy) == "pencil-pencil"
+        and str(layout) == "opt0"
+        and str(pipeline) in {"reference", "reference-parity", "egger", "egger-parity"}
+    )
+
+
+def native_opt0_y_executor_variant_from_summary(summary: dict, backend: object) -> str:
+    row = dict(summary)
+    row["fftm_3d_backend"] = str(backend)
+    return native_opt0_y_executor_variant_from_cpp_row(row)
+
+
+def cpp_csv_repairs(data_dir: Path) -> Dict[Tuple[object, ...], dict]:
+    repairs: Dict[Tuple[object, ...], dict] = {}
+
+    fftm_csv = data_dir / "cpp_csv" / "benchmark_fftm_3d.csv"
+    if not fftm_csv.exists():
+        fftm_csv = data_dir / "benchmark_fftm_3d.csv"
+    if fftm_csv.exists():
+        with fftm_csv.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("benchmark") != "fftm-3d":
+                    continue
+                sizes = (
+                    int(row.get("nx") or 0),
+                    int(row.get("ny") or 0),
+                    int(row.get("nz") or 0),
+                )
+                strategy = row.get("strategy") or "-"
+                mode = row.get("mode") or "-"
+                layout = row.get("pencil_layout") or "configured"
+                pipeline = row.get("pencil_pipeline") or "configured"
+                backend = row.get("fftm_3d_backend") or "native"
+                variant = (
+                    native_opt0_y_executor_variant_from_cpp_row(row)
+                    if native_opt0_y_variant_relevant(backend, strategy, layout, pipeline)
+                    else "configured"
+                )
+                key = (
+                    backend,
+                    int(row.get("num_gpus") or 0),
+                    sizes,
+                    strategy,
+                    mode,
+                    layout,
+                    pipeline,
+                    grid_label([row.get("p1") or 0, row.get("p2") or 0]),
+                    variant,
+                )
+                repairs[key] = row
+
+    fftm3d_csv = data_dir / "cpp_csv" / "benchmark_fftm3d_3d.csv"
+    if not fftm3d_csv.exists():
+        fftm3d_csv = data_dir / "benchmark_fftm3d_3d.csv"
+    if fftm3d_csv.exists():
+        with fftm3d_csv.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("egger_variant") != "scfd-fft-facade":
+                    continue
+                sizes = (
+                    int(row.get("nx") or 0),
+                    int(row.get("ny") or 0),
+                    int(row.get("nz") or 0),
+                )
+                key = (
+                    "fftm3d-scfd-fft-facade",
+                    int(row.get("num_gpus") or 0),
+                    sizes,
+                    "pencil-pencil",
+                    "p2p-waitany",
+                    row.get("opt") or "configured",
+                    "reference-parity",
+                    grid_label([row.get("p1") or 0, row.get("p2") or 0]),
+                    "configured",
+                )
+                repairs[key] = row
+    return repairs
+
+
+def repair_rows_from_cpp_csv(data_dir: Path, rows: List[ResultRow]) -> None:
+    repairs = cpp_csv_repairs(data_dir)
+    if not repairs:
+        return
+    for row in rows:
+        key = (
+            row.fftm_3d_backend,
+            row.num_gpus,
+            row.sizes,
+            row.strategy,
+            row.mode,
+            row.pencil_layout,
+            row.pencil_pipeline,
+            row.grid,
+            row.native_opt0_y_executor_variant,
+        )
+        repair = repairs.get(key)
+        if not repair:
+            continue
+        csv_avg_wall_ms = as_float(repair.get("avg_wall_ms"))
+        csv_stddev_wall_ms = as_float(repair.get("stddev_wall_ms"))
+        csv_max_l2 = max_numeric(repair, ["max_l2_diff", "rel_l2_diff"])
+        if csv_avg_wall_ms is not None:
+            row.avg_wall_ms = csv_avg_wall_ms
+        if csv_stddev_wall_ms is not None:
+            row.stddev_wall_ms = csv_stddev_wall_ms
+        if csv_max_l2 is not None:
+            row.max_l2 = csv_max_l2
+        if "native_opt0_y_no_sync_exec" in repair:
+            row.native_opt0_y_no_sync_exec = str(repair.get("native_opt0_y_no_sync_exec"))
+        if row.contiguous_forward_send_registration_warmups.endswith(":"):
+            row.contiguous_forward_send_registration_warmups = repair.get(
+                "contiguous_forward_send_registration_warmups", row.contiguous_forward_send_registration_warmups
+            )
+
+
 def entries_from_parsed(parsed: dict, key: str) -> Dict[str, dict]:
     block = parsed.get(key) or {}
     entries = block.get("entries") or {}
@@ -308,18 +521,156 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
             p2p_variant = spec.get("p2p_variant") or "configured"
             pencil_layout = spec.get("pencil_layout") or summary.get("pencil_layout") or "configured"
             pencil_pipeline = spec.get("pencil_pipeline") or summary.get("pencil_pipeline") or "configured"
+            fftm_3d_backend = spec.get("fftm_3d_backend") or summary.get("backend") or "native"
+            native_opt0_y_executor_variant = (
+                spec.get("native_opt0_y_executor_variant")
+                or summary.get("native_opt0_y_executor_variant")
+                or "configured"
+            )
+            native_opt0_y_no_sync_exec = str(
+                summary.get("native_opt0_y_no_sync_exec")
+                if summary.get("native_opt0_y_no_sync_exec") is not None
+                else "configured"
+            )
+            if (
+                native_opt0_y_executor_variant == "configured"
+                and native_opt0_y_variant_relevant(
+                    fftm_3d_backend, strategy, pencil_layout, pencil_pipeline
+                )
+                and summary_has_native_opt0_y_flags(summary)
+            ):
+                native_opt0_y_executor_variant = native_opt0_y_executor_variant_from_summary(
+                    summary, fftm_3d_backend
+                )
             large_count_p2p_transport = (
                 spec.get("large_count_p2p_transport")
                 or summary.get("large_count_p2p_transport")
                 or "configured"
             )
+            fft_exec_no_sync = str(
+                summary.get("fft_exec_no_sync")
+                if summary.get("fft_exec_no_sync") is not None
+                else "configured"
+            )
+            stable_forward_byte_send_buffer = str(
+                summary.get("stable_forward_byte_send_buffer")
+                if summary.get("stable_forward_byte_send_buffer") is not None
+                else "configured"
+            )
+            ready_stable_forward_byte_send_buffer = str(
+                summary.get("ready_stable_forward_byte_send_buffer")
+                if summary.get("ready_stable_forward_byte_send_buffer") is not None
+                else "configured"
+            )
+            contiguous_forward_byte_send = str(
+                summary.get("contiguous_forward_byte_send")
+                if summary.get("contiguous_forward_byte_send") is not None
+                else "configured"
+            )
+            physical_forward_peer_exchange = str(
+                summary.get("physical_forward_peer_exchange")
+                if summary.get("physical_forward_peer_exchange") is not None
+                else "configured"
+            )
+            contiguous_forward_send_mode = str(
+                summary.get("contiguous_forward_send_mode")
+                if summary.get("contiguous_forward_send_mode") is not None
+                else "configured"
+            )
+            contiguous_forward_send_chunk_mib = str(
+                summary.get("contiguous_forward_send_chunk_mib")
+                if summary.get("contiguous_forward_send_chunk_mib") is not None
+                else "configured"
+            )
+            contiguous_forward_send_registration_warmups = str(
+                summary.get("contiguous_forward_send_registration_warmups")
+                if summary.get("contiguous_forward_send_registration_warmups") is not None
+                else "configured"
+            )
             transport = spec.get("transport") or "unknown"
             suite = spec.get("suite") or "unknown"
             dim = int(spec.get("dim") or len(sizes) or 0)
+            num_gpus = int(spec.get("num_gpus") or 0)
+            grid = result_grid_label(strategy, spec.get("grid"), summary.get("grid"), num_gpus)
             raw_log = str(rec.get("raw_log") or "")
-            raw_summary, raw_breakdown, raw_memory_profile, raw_memory_categories = parse_raw_profiler_sections(
-                resolve_raw_log(data_dir, raw_log)
-            )
+            raw_log_path = resolve_raw_log(data_dir, raw_log)
+            repaired_summary = parse_raw_summary(raw_log_path)
+            if repaired_summary:
+                summary = dict(summary)
+                summary.update(repaired_summary)
+                sizes = extract_sizes(spec, summary, rec)
+                strategy = summary.get("strategy") or spec.get("strategy") or "-"
+                mode = summary.get("mode") or spec.get("mode") or "-"
+                pencil_layout = spec.get("pencil_layout") or summary.get("pencil_layout") or "configured"
+                pencil_pipeline = spec.get("pencil_pipeline") or summary.get("pencil_pipeline") or "configured"
+                fftm_3d_backend = spec.get("fftm_3d_backend") or summary.get("backend") or "native"
+                native_opt0_y_executor_variant = (
+                    spec.get("native_opt0_y_executor_variant")
+                    or summary.get("native_opt0_y_executor_variant")
+                    or native_opt0_y_executor_variant
+                )
+                native_opt0_y_no_sync_exec = str(
+                    summary.get("native_opt0_y_no_sync_exec")
+                    if summary.get("native_opt0_y_no_sync_exec") is not None
+                    else native_opt0_y_no_sync_exec
+                )
+                if (
+                    native_opt0_y_executor_variant == "configured"
+                    and native_opt0_y_variant_relevant(
+                        fftm_3d_backend, strategy, pencil_layout, pencil_pipeline
+                    )
+                    and summary_has_native_opt0_y_flags(summary)
+                ):
+                    native_opt0_y_executor_variant = native_opt0_y_executor_variant_from_summary(
+                        summary, fftm_3d_backend
+                    )
+                grid = result_grid_label(strategy, spec.get("grid"), summary.get("grid"), num_gpus)
+                large_count_p2p_transport = (
+                    spec.get("large_count_p2p_transport")
+                    or summary.get("large_count_p2p_transport")
+                    or "configured"
+                )
+                fft_exec_no_sync = str(
+                    summary.get("fft_exec_no_sync")
+                    if summary.get("fft_exec_no_sync") is not None
+                    else fft_exec_no_sync
+                )
+                stable_forward_byte_send_buffer = str(
+                    summary.get("stable_forward_byte_send_buffer")
+                    if summary.get("stable_forward_byte_send_buffer") is not None
+                    else "configured"
+                )
+                ready_stable_forward_byte_send_buffer = str(
+                    summary.get("ready_stable_forward_byte_send_buffer")
+                    if summary.get("ready_stable_forward_byte_send_buffer") is not None
+                    else "configured"
+                )
+                contiguous_forward_byte_send = str(
+                    summary.get("contiguous_forward_byte_send")
+                    if summary.get("contiguous_forward_byte_send") is not None
+                    else "configured"
+                )
+                physical_forward_peer_exchange = str(
+                    summary.get("physical_forward_peer_exchange")
+                    if summary.get("physical_forward_peer_exchange") is not None
+                    else "configured"
+                )
+                contiguous_forward_send_mode = str(
+                    summary.get("contiguous_forward_send_mode")
+                    if summary.get("contiguous_forward_send_mode") is not None
+                    else "configured"
+                )
+                contiguous_forward_send_chunk_mib = str(
+                    summary.get("contiguous_forward_send_chunk_mib")
+                    if summary.get("contiguous_forward_send_chunk_mib") is not None
+                    else "configured"
+                )
+                contiguous_forward_send_registration_warmups = str(
+                    summary.get("contiguous_forward_send_registration_warmups")
+                    if summary.get("contiguous_forward_send_registration_warmups") is not None
+                    else "configured"
+                )
+            raw_summary, raw_breakdown, raw_memory_profile, raw_memory_categories = parse_raw_profiler_sections(raw_log_path)
             profile_summary_entries = list(parsed.get("profile_summary") or []) or raw_summary
             profile_breakdown_entries = list(parsed.get("profile_breakdown") or []) or raw_breakdown
             memory_profile_entries = entries_from_parsed(parsed, "memory_profile") or raw_memory_profile
@@ -347,8 +698,20 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
                     p2p_variant=p2p_variant,
                     pencil_layout=pencil_layout,
                     pencil_pipeline=pencil_pipeline,
+                    fftm_3d_backend=str(fftm_3d_backend),
+                    native_opt0_y_executor_variant=str(native_opt0_y_executor_variant),
+                    native_opt0_y_no_sync_exec=native_opt0_y_no_sync_exec,
+                    grid=grid,
                     large_count_p2p_transport=large_count_p2p_transport,
-                    num_gpus=int(spec.get("num_gpus") or 0),
+                    fft_exec_no_sync=fft_exec_no_sync,
+                    stable_forward_byte_send_buffer=stable_forward_byte_send_buffer,
+                    ready_stable_forward_byte_send_buffer=ready_stable_forward_byte_send_buffer,
+                    contiguous_forward_byte_send=contiguous_forward_byte_send,
+                    physical_forward_peer_exchange=physical_forward_peer_exchange,
+                    contiguous_forward_send_mode=contiguous_forward_send_mode,
+                    contiguous_forward_send_chunk_mib=contiguous_forward_send_chunk_mib,
+                    contiguous_forward_send_registration_warmups=contiguous_forward_send_registration_warmups,
+                    num_gpus=num_gpus,
                     returncode=int(rec.get("returncode") if rec.get("returncode") is not None else -999),
                     sizes=sizes,
                     warmup=int(summary.get("warmup") if summary.get("warmup") is not None else rec.get("warmup") or 0),
@@ -485,7 +848,19 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                 "p2p_variant",
                 "pencil_layout",
                 "pencil_pipeline",
+                "fftm_3d_backend",
+                "native_opt0_y_executor_variant",
+                "native_opt0_y_no_sync_exec",
+                "grid",
                 "large_count_p2p_transport",
+                "fft_exec_no_sync",
+                "stable_forward_byte_send_buffer",
+                "ready_stable_forward_byte_send_buffer",
+                "contiguous_forward_byte_send",
+                "physical_forward_peer_exchange",
+                "contiguous_forward_send_mode",
+                "contiguous_forward_send_chunk_mib",
+                "contiguous_forward_send_registration_warmups",
                 "num_gpus",
                 "returncode",
                 "sizes",
@@ -517,7 +892,19 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                     r.p2p_variant,
                     r.pencil_layout,
                     r.pencil_pipeline,
+                    r.fftm_3d_backend,
+                    r.native_opt0_y_executor_variant,
+                    r.native_opt0_y_no_sync_exec,
+                    r.grid,
                     r.large_count_p2p_transport,
+                    r.fft_exec_no_sync,
+                    r.stable_forward_byte_send_buffer,
+                    r.ready_stable_forward_byte_send_buffer,
+                    r.contiguous_forward_byte_send,
+                    r.physical_forward_peer_exchange,
+                    r.contiguous_forward_send_mode,
+                    r.contiguous_forward_send_chunk_mib,
+                    r.contiguous_forward_send_registration_warmups,
                     r.num_gpus,
                     r.returncode,
                     "x".join(str(v) for v in r.sizes),
@@ -819,6 +1206,10 @@ def config_label(row: ResultRow) -> str:
         parts.append(f"layout={row.pencil_layout}")
     if row.pencil_pipeline and row.pencil_pipeline != "configured":
         parts.append(f"pipe={row.pencil_pipeline}")
+    if row.native_opt0_y_executor_variant and row.native_opt0_y_executor_variant != "configured":
+        parts.append(f"yexec={row.native_opt0_y_executor_variant}")
+    if row.fft_exec_no_sync and row.fft_exec_no_sync not in {"configured", "0"}:
+        parts.append("fft-nosync")
     return ", ".join(parts) if parts else row.strategy
 
 
@@ -2091,7 +2482,7 @@ def relative_series(
     absolute: Sequence[Tuple[str, List[Tuple[int, float]], Tuple[float, float, float]]],
     dim: int,
 ) -> List[Tuple[str, List[Tuple[int, float]], Tuple[float, float, float]]]:
-    # Match Egger's convention: normalize to the fastest distributed FFTM
+    # Match the reference convention: normalize to the fastest distributed FFTM
     # variant for a given size; single-GPU FFTS is shown relative to that
     # distributed baseline when the same size is available.
     distributed_by_n: Dict[int, List[float]] = defaultdict(list)
@@ -2204,7 +2595,7 @@ def draw_line_panel(
             canvas.rect(x - 1.6, y - 1.6, 3.2, 3.2, fill=color, stroke=(0.1, 0.1, 0.1), stroke_width=0.15)
 
 
-def egger_style_runtime_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argparse.Namespace) -> Optional[Path]:
+def reference_style_runtime_pdf(rows: List[ResultRow], dim: int, fig_dir: Path, args: argparse.Namespace) -> Optional[Path]:
     absolute = benchmark_sweep_series(rows, dim)
     if len(absolute) < 2:
         return None
@@ -2694,6 +3085,8 @@ def main() -> int:
 
     rows = parse_rows(data_dir, phases=("measure",))
     sweep_rows = parse_rows(data_dir, phases=("probe", "measure"))
+    repair_rows_from_cpp_csv(data_dir, rows)
+    repair_rows_from_cpp_csv(data_dir, sweep_rows)
     hardware = read_json(data_dir / "hardware.json", {})
     summary = read_json(data_dir / "summary.json", {})
 
@@ -2707,7 +3100,7 @@ def main() -> int:
     generated.append(temporal_profile_table(rows, dirs["tables"], args.table_font_size))
     generated.append(memory_profile_table(rows, dirs["tables"], args.table_font_size))
     for dim in [3, 4]:
-        fig = egger_style_runtime_pdf(sweep_rows, dim, dirs["figures"], args)
+        fig = reference_style_runtime_pdf(sweep_rows, dim, dirs["figures"], args)
         if fig:
             generated.append(fig)
         fig = temporal_breakdown_vs_size_pdf(sweep_rows, dim, dirs["figures"], args)

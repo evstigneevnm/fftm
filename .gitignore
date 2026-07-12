@@ -4,3 +4,48 @@
 *.ptx
 *.cubin
 *.fatbin
+
+# Build trees and local generated binaries
+build/
+build_*/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+Testing/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.bin
+
+# Benchmark and analysis outputs
+resutls/
+results/
+data/
+data_*/
+*_analysis/
+*.log
+*.compile.log
+
+# Container images and large packaged artifacts
+*.sqsh
+*.sif
+*.img
+*.tar
+*.tar.gz
+*.tgz
+*.tar.xz
+*.zip
+
+# Python/editor/local agent state
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.vscode/
+.codex/

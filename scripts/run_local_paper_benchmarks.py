@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -20,11 +21,85 @@ FFTM_MODES = ("p2p-waitall", "p2p-waitany", "alltoallv")
 FFTM_P2P_VARIANTS = ("value-packed", "datatype-direct", "byte-packed", "byte-direct")
 FFTM_P2P_SCHEDULERS = ("main", "send-thread", "persistent", "send-thread-persistent")
 FFTM_PENCIL_LAYOUTS = ("auto", "opt0", "opt1", "legacy")
-FFTM_PENCIL_PIPELINES = ("staged", "fused", "egger", "egger-parity")
+FFTM_PENCIL_PIPELINES = ("staged", "fused", "reference", "reference-parity")
+FFTM_PENCIL_PIPELINE_ALIASES = {
+    "native-compatible": "reference",
+    "reference-compatible": "reference",
+    "compatible": "reference",
+    "egger": "reference",
+    "native-parity": "reference-parity",
+    "reference_parity": "reference-parity",
+    "compatible-parity": "reference-parity",
+    "native_parity": "reference-parity",
+    "compatible_parity": "reference-parity",
+    "egger-parity": "reference-parity",
+    "egger_parity": "reference-parity",
+}
 FFTM_LARGE_COUNT_P2P_TRANSPORTS = ("hindexed", "mpi-count", "element-count", "chunked")
+FFTM_CONTIGUOUS_FORWARD_SEND_MODES = ("single", "chunked")
+FFTM_NATIVE_BACKWARD_SECOND_PEER_LOOP_MODES = ("off", "on")
+FFTM_3D_BACKENDS = ("native", "fftm3d-scfd-fft-facade")
+FFTM_NATIVE_OPT0_Y_CROSS_FACTORY_MODES = (
+    "ref-only",
+    "native-current-only",
+    "native-current-nosync-only",
+    "native-exact-only",
+    "native-owned-only",
+    "native-direct-only",
+    "native-direct-nosync-only",
+    "native-minimal-only",
+    "native-minimal-nosync-only",
+    "ref-then-native-current",
+    "native-current-then-ref",
+    "ref-then-native-current-nosync",
+    "native-current-nosync-then-ref",
+    "ref-then-native-exact",
+    "native-exact-then-ref",
+    "ref-then-native-owned",
+    "native-owned-then-ref",
+    "ref-then-native-direct",
+    "native-direct-then-ref",
+    "ref-then-native-direct-nosync",
+    "native-direct-nosync-then-ref",
+    "ref-then-native-minimal",
+    "native-minimal-then-ref",
+    "ref-then-native-minimal-nosync",
+    "native-minimal-nosync-then-ref",
+)
+FFTM_NATIVE_OPT0_Y_EXECUTOR_VARIANTS = (
+    "virtual-stream",
+    "virtual-device",
+    "tight-stream",
+    "tight-device",
+    "opaque-stream",
+    "opaque-device",
+    "shared-opaque-stream",
+    "shared-opaque-device",
+    "shared-opaque-nosync-stream",
+    "shared-opaque-nosync-device",
+    "ref-life-stream",
+    "ref-life-device",
+    "ref-bundle-stream",
+    "ref-bundle-device",
+    "raw-bundle-stream",
+    "raw-bundle-device",
+    "raw-bundle-streamfirst-stream",
+    "raw-bundle-streamfirst-device",
+    "raw-bundle-reference-streams-stream",
+    "raw-bundle-reference-streams-device",
+    "raw-bundle-reference-streams-nosync-stream",
+    "raw-bundle-reference-streams-nosync-device",
+    "raw-bundle-reference-streamfirst-stream",
+    "raw-bundle-reference-streamfirst-device",
+    "context-bundle-stream",
+    "context-bundle-device",
+    "context-bundle-nosync-stream",
+    "context-bundle-nosync-device",
+)
 FFTS_STRATEGIES_4D = ("pencil-direct", "pencil-memcpy", "slab-direct", "slab-memcpy")
 
 SUMMARY_KEY_RE = re.compile(r"([A-Za-z0-9_]+)=((?:\([^)]*\))|[^,]+)")
+SUMMARY_TOKEN_RE = re.compile(r"(?<!\S)([A-Za-z0-9_]+)=([^\s,]+)")
 PROFILE_LINE_RE = re.compile(r"^\[\s*(?P<name>.+?):\s+(?P<ms>[0-9.]+)\s+ms\]\s+\((?P<pct>[0-9.]+)%\)$")
 MEMORY_LINE_RE = re.compile(
     r"^\s{2,}(?P<name>[^:]+): current\(sum/max/avg\)="
@@ -53,6 +128,15 @@ def now_iso() -> str:
 
 def slugify(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
+
+
+def short_log_slug(value: str, max_len: int = 96) -> str:
+    slug = slugify(value)
+    if len(slug) <= max_len:
+        return slug
+    digest = hashlib.sha1(slug.encode("utf-8")).hexdigest()[:12]
+    head_len = max(1, max_len - len(digest) - 1)
+    return f"{slug[:head_len].rstrip('-')}_{digest}"
 
 
 def split_top_level_csv(payload: str) -> List[str]:
@@ -173,12 +257,19 @@ def parse_pencil_pipelines(value: str) -> List[Optional[str]]:
         return [None]
     if value == "all":
         return list(FFTM_PENCIL_PIPELINES)
-    selected = [item.strip() for item in value.split(",") if item.strip()]
+    selected = []
+    for item in value.split(","):
+        key = item.strip()
+        if not key:
+            continue
+        selected.append(FFTM_PENCIL_PIPELINE_ALIASES.get(key, key))
     unknown = [item for item in selected if item not in FFTM_PENCIL_PIPELINES]
     if unknown:
+        allowed_aliases = sorted(FFTM_PENCIL_PIPELINE_ALIASES)
         raise ValueError(
             f"unknown --pencil-pipelines value(s): {', '.join(unknown)}; "
-            f"allowed: configured, all, {', '.join(FFTM_PENCIL_PIPELINES)}"
+            f"allowed: configured, all, {', '.join(FFTM_PENCIL_PIPELINES)}, "
+            f"{', '.join(allowed_aliases)}"
         )
     return selected or [None]
 
@@ -208,6 +299,578 @@ def parse_large_count_p2p_transports(value: str) -> List[Optional[str]]:
             f"allowed: configured, all, {', '.join(FFTM_LARGE_COUNT_P2P_TRANSPORTS)}"
         )
     return selected or [None]
+
+
+def parse_contiguous_forward_send_modes(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_CONTIGUOUS_FORWARD_SEND_MODES)
+    selected = []
+    for item in value.split(","):
+        item = item.strip().replace("_", "-")
+        if item:
+            selected.append(item)
+    unknown = [item for item in selected if item not in FFTM_CONTIGUOUS_FORWARD_SEND_MODES]
+    if unknown:
+        raise ValueError(
+            f"unknown --contiguous-forward-send-modes value(s): {', '.join(unknown)}; "
+            f"allowed: configured, all, {', '.join(FFTM_CONTIGUOUS_FORWARD_SEND_MODES)}"
+        )
+    return selected or [None]
+
+
+def parse_native_backward_second_peer_loop_modes(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value in ("all", "both"):
+        return [False, True]
+    aliases = {
+        "0": False,
+        "false": False,
+        "no": False,
+        "off": False,
+        "disabled": False,
+        "1": True,
+        "true": True,
+        "yes": True,
+        "on": True,
+        "enabled": True,
+    }
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key not in aliases:
+            unknown.append(item.strip())
+            continue
+        selected.append(aliases[key])
+    if unknown:
+        raise ValueError(
+            "unknown --native-backward-second-peer-loop-modes value(s): "
+            + ", ".join(unknown)
+            + "; allowed: configured, both, off,on"
+        )
+    return selected or [None]
+
+
+def parse_fftm_3d_backends(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_3D_BACKENDS)
+    aliases = {
+        "fftm": "native",
+        "default": "native",
+        "scfd-fft-facade": "fftm3d-scfd-fft-facade",
+        "fftm3d_scfd_fft_facade": "fftm3d-scfd-fft-facade",
+    }
+    selected = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        selected.append(aliases.get(item, item))
+    unknown = [item for item in selected if item not in FFTM_3D_BACKENDS]
+    if unknown:
+        raise ValueError(
+            f"unknown --fftm-3d-backends value(s): {', '.join(unknown)}; "
+            f"allowed: configured, all, {', '.join(FFTM_3D_BACKENDS)}"
+        )
+    return selected or [None]
+
+
+NATIVE_OPT0_Y_EXECUTOR_VARIANT_ALIASES = {
+    "configured": None,
+    "default": None,
+    "current": "shared-opaque-nosync-device",
+    "best": "shared-opaque-nosync-device",
+    "production": "shared-opaque-nosync-device",
+    "validated": "shared-opaque-nosync-device",
+    "seq-virtual-stream": "virtual-stream",
+    "sequence-virtual-stream": "virtual-stream",
+    "virtual-per-stream": "virtual-stream",
+    "seq-virtual-device": "virtual-device",
+    "sequence-virtual-device": "virtual-device",
+    "seq-tight-stream": "tight-stream",
+    "sequence-tight-stream": "tight-stream",
+    "tight-per-stream": "tight-stream",
+    "seq-tight-device": "tight-device",
+    "sequence-tight-device": "tight-device",
+    "seq-opaque-stream": "opaque-stream",
+    "sequence-opaque-stream": "opaque-stream",
+    "opaque-per-stream": "opaque-stream",
+    "seq-opaque-device": "opaque-device",
+    "sequence-opaque-device": "opaque-device",
+    "shared-stream": "shared-opaque-stream",
+    "shared-opaque-per-stream": "shared-opaque-stream",
+    "shared-device": "shared-opaque-device",
+    "shared-opaque": "shared-opaque-device",
+    "sync": "shared-opaque-device",
+    "no-sync": "shared-opaque-nosync-device",
+    "nosync": "shared-opaque-nosync-device",
+    "shared-nosync-stream": "shared-opaque-nosync-stream",
+    "shared-nosync-device": "shared-opaque-nosync-device",
+    "ref-lifecycle-stream": "ref-life-stream",
+    "reference-lifecycle-stream": "ref-life-stream",
+    "ref-lifecycle-device": "ref-life-device",
+    "reference-lifecycle-device": "ref-life-device",
+    "reference-bundle-stream": "ref-bundle-stream",
+    "reference-bundle-device": "ref-bundle-device",
+    "raw-reference-bundle-stream": "raw-bundle-stream",
+    "raw-reference-bundle-device": "raw-bundle-device",
+    "raw-streamfirst-stream": "raw-bundle-streamfirst-stream",
+    "raw-streamfirst-device": "raw-bundle-streamfirst-device",
+    "raw-reference-streams-stream": "raw-bundle-reference-streams-stream",
+    "raw-reference-streams-device": "raw-bundle-reference-streams-device",
+    "raw-reference-streams-nosync-stream": "raw-bundle-reference-streams-nosync-stream",
+    "raw-reference-streams-nosync-device": "raw-bundle-reference-streams-nosync-device",
+    "raw-reference-streamfirst-stream": "raw-bundle-reference-streamfirst-stream",
+    "raw-reference-streamfirst-device": "raw-bundle-reference-streamfirst-device",
+    "raw-egger-streamfirst-stream": "raw-bundle-reference-streamfirst-stream",
+    "raw-egger-streamfirst-device": "raw-bundle-reference-streamfirst-device",
+    "context-stream": "context-bundle-stream",
+    "context-device": "context-bundle-device",
+    "context-nosync-stream": "context-bundle-nosync-stream",
+    "context-nosync-device": "context-bundle-nosync-device",
+    "reference-context-stream": "context-bundle-stream",
+    "reference-context-device": "context-bundle-device",
+    "local-context-stream": "context-bundle-stream",
+    "local-context-device": "context-bundle-device",
+}
+
+
+NATIVE_OPT0_Y_EXECUTOR_VARIANT_FLAGS: Dict[str, Dict[str, bool]] = {
+    "virtual-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "virtual-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "tight-stream": {
+        "tight": True,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "tight-device": {
+        "tight": True,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "opaque-stream": {
+        "tight": True,
+        "shared": False,
+        "device_sync": False,
+        "opaque": True,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "opaque-device": {
+        "tight": True,
+        "shared": False,
+        "device_sync": True,
+        "opaque": True,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "shared-opaque-stream": {
+        "tight": True,
+        "shared": True,
+        "device_sync": False,
+        "opaque": True,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "shared-opaque-device": {
+        "tight": True,
+        "shared": True,
+        "device_sync": True,
+        "opaque": True,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "shared-opaque-nosync-stream": {
+        "tight": True,
+        "shared": True,
+        "device_sync": False,
+        "no_sync_exec": True,
+        "opaque": True,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "shared-opaque-nosync-device": {
+        "tight": True,
+        "shared": True,
+        "device_sync": True,
+        "no_sync_exec": True,
+        "opaque": True,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "ref-life-stream": {
+        "tight": True,
+        "shared": True,
+        "device_sync": False,
+        "opaque": True,
+        "reference_lifecycle": True,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "ref-life-device": {
+        "tight": True,
+        "shared": True,
+        "device_sync": True,
+        "opaque": True,
+        "reference_lifecycle": True,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "ref-bundle-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": True,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "ref-bundle-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": True,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "raw-bundle-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "raw-bundle-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": False,
+        "reference_streams": False,
+    },
+    "raw-bundle-streamfirst-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": True,
+        "reference_streams": False,
+    },
+    "raw-bundle-streamfirst-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": True,
+        "reference_streams": False,
+    },
+    "raw-bundle-reference-streams-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": False,
+        "reference_streams": True,
+    },
+    "raw-bundle-reference-streams-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": False,
+        "reference_streams": True,
+    },
+    "raw-bundle-reference-streams-nosync-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "no_sync_exec": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": False,
+        "reference_streams": True,
+    },
+    "raw-bundle-reference-streams-nosync-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "no_sync_exec": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": False,
+        "reference_streams": True,
+    },
+    "raw-bundle-reference-streamfirst-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": True,
+        "reference_streams": True,
+    },
+    "raw-bundle-reference-streamfirst-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": True,
+        "stream_first": True,
+        "reference_streams": True,
+    },
+    "context-bundle-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+        "local_context": True,
+    },
+    "context-bundle-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+        "local_context": True,
+    },
+    "context-bundle-nosync-stream": {
+        "tight": False,
+        "shared": False,
+        "device_sync": False,
+        "no_sync_exec": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+        "local_context": True,
+    },
+    "context-bundle-nosync-device": {
+        "tight": False,
+        "shared": False,
+        "device_sync": True,
+        "no_sync_exec": True,
+        "opaque": False,
+        "reference_lifecycle": False,
+        "reference_bundle": False,
+        "raw_bundle": False,
+        "stream_first": False,
+        "reference_streams": False,
+        "local_context": True,
+    },
+}
+
+for _native_opt0_y_variant_flags in NATIVE_OPT0_Y_EXECUTOR_VARIANT_FLAGS.values():
+    _native_opt0_y_variant_flags.setdefault("local_context", False)
+    _native_opt0_y_variant_flags.setdefault("no_sync_exec", False)
+
+
+def parse_native_opt0_y_executor_variants(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "all":
+        return list(FFTM_NATIVE_OPT0_Y_EXECUTOR_VARIANTS)
+    selected: List[Optional[str]] = []
+    unknown: List[str] = []
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        mapped = NATIVE_OPT0_Y_EXECUTOR_VARIANT_ALIASES.get(key, key)
+        if mapped is None:
+            selected.append(None)
+        elif mapped in FFTM_NATIVE_OPT0_Y_EXECUTOR_VARIANTS:
+            selected.append(mapped)
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "all", *FFTM_NATIVE_OPT0_Y_EXECUTOR_VARIANTS]
+        raise ValueError(
+            "unknown --native-opt0-y-executor-variants value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def native_opt0_y_executor_variants_for_spec(
+    dim: int,
+    transport: str,
+    strategy: str,
+    mode: str,
+    pencil_layout: Optional[str],
+    pencil_pipeline: Optional[str],
+    fftm_3d_backend: Optional[str],
+    selected: Sequence[Optional[str]],
+) -> List[Optional[str]]:
+    if (
+        dim == 3
+        and transport == "cuda_aware"
+        and strategy == "pencil-pencil"
+        and mode.startswith("p2p-")
+        and pencil_layout == "opt0"
+        and pencil_pipeline in ("reference", "reference-parity")
+        and fftm_3d_backend in (None, "native")
+    ):
+        return list(selected)
+    return [None]
+
+
+def native_opt0_y_executor_variant_flags(
+    variant: Optional[str],
+    *,
+    default_tight: bool,
+    default_shared: bool,
+    default_device_sync: bool,
+    default_opaque: bool,
+    default_reference_lifecycle: bool,
+    default_reference_bundle: bool,
+    default_raw_bundle: bool,
+    default_stream_first: bool,
+    default_reference_streams: bool,
+    default_local_context: bool,
+    default_no_sync_exec: bool,
+) -> Dict[str, bool]:
+    if variant is None:
+        return {
+            "tight": default_tight,
+            "shared": default_shared,
+            "device_sync": default_device_sync,
+            "opaque": default_opaque,
+            "reference_lifecycle": default_reference_lifecycle,
+            "reference_bundle": default_reference_bundle,
+            "raw_bundle": default_raw_bundle,
+            "stream_first": default_stream_first,
+            "reference_streams": default_reference_streams,
+            "local_context": default_local_context,
+            "no_sync_exec": default_no_sync_exec,
+        }
+    result = dict(NATIVE_OPT0_Y_EXECUTOR_VARIANT_FLAGS[variant])
+    result.setdefault("local_context", False)
+    result.setdefault("no_sync_exec", False)
+    return result
+
+
+NATIVE_OPT0_DIAGNOSTIC_Y_EXECUTOR_FLAG_KEYS = (
+    "reference_lifecycle",
+    "reference_bundle",
+    "raw_bundle",
+    "stream_first",
+    "reference_streams",
+    "local_context",
+)
+
+
+def native_opt0_y_executor_flags_are_diagnostic(flags: Dict[str, bool]) -> bool:
+    return any(bool(flags.get(key, False)) for key in NATIVE_OPT0_DIAGNOSTIC_Y_EXECUTOR_FLAG_KEYS)
 
 
 def p2p_variant_flags(
@@ -253,8 +916,12 @@ def pencil_layouts_for_spec(dim: int, strategy: str, selected: Sequence[Optional
     return [None]
 
 
-def pencil_pipelines_for_spec(dim: int, strategy: str, selected: Sequence[Optional[str]]) -> List[Optional[str]]:
+def pencil_pipelines_for_spec(
+    dim: int, strategy: str, mode: Optional[str], selected: Sequence[Optional[str]]
+) -> List[Optional[str]]:
     if dim == 3 and strategy == "pencil-pencil":
+        if mode is not None and not mode.startswith("p2p-"):
+            return [None]
         return list(selected)
     return [None]
 
@@ -272,10 +939,80 @@ def large_count_p2p_transports_for_spec(
         and transport == "cuda_aware"
         and strategy == "pencil-pencil"
         and mode.startswith("p2p-")
-        and (pencil_pipeline is None or pencil_pipeline in ("egger", "egger-parity"))
+        and (pencil_pipeline is None or pencil_pipeline in ("reference", "reference-parity"))
     ):
         return list(selected)
     return [None]
+
+
+def contiguous_forward_send_modes_for_spec(
+    dim: int,
+    transport: str,
+    strategy: str,
+    mode: str,
+    use_contiguous_forward_byte_send: bool,
+    selected: Sequence[Optional[str]],
+) -> List[Optional[str]]:
+    if (
+        use_contiguous_forward_byte_send
+        and dim == 3
+        and transport == "cuda_aware"
+        and strategy == "pencil-pencil"
+        and mode.startswith("p2p-")
+    ):
+        return list(selected)
+    return [None]
+
+
+def native_backward_second_peer_loop_modes_for_spec(
+    dim: int,
+    transport: str,
+    strategy: str,
+    mode: str,
+    pencil_pipeline: Optional[str],
+    fftm_3d_backend: Optional[str],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if (
+        dim == 3
+        and transport == "cuda_aware"
+        and strategy == "pencil-pencil"
+        and mode.startswith("p2p-")
+        and pencil_pipeline in ("reference", "reference-parity")
+        and fftm_3d_backend in (None, "native")
+    ):
+        return list(selected)
+    return [None]
+
+
+def fftm_3d_backends_for_spec(
+    dim: int,
+    transport: str,
+    strategy: str,
+    mode: str,
+    case_name: str,
+    grid: Optional[Tuple[int, ...]],
+    selected: Sequence[Optional[str]],
+) -> List[Optional[str]]:
+    if dim != 3 or case_name != "benchmark":
+        return [None]
+    if selected == [None]:
+        return [None]
+    result: List[Optional[str]] = []
+    for backend in selected:
+        if backend in (None, "native"):
+            result.append(backend)
+        elif (
+            transport == "cuda_aware"
+            and strategy == "pencil-pencil"
+            and mode.startswith("p2p-")
+            and grid is not None
+            and len(grid) == 2
+            and grid[0] > 1
+            and grid[1] > 1
+        ):
+            result.append(backend)
+    return result or [None]
 
 
 def p2p_scheduler_flags(
@@ -309,16 +1046,26 @@ def parse_summary_line(line: str) -> Optional[Dict[str, Any]]:
     if not (payload.startswith("benchmark=") or payload.startswith("test=")):
         return None
 
-    if ": " not in payload:
-        return None
-
-    left, right = payload.split(": ", 1)
     data: Dict[str, Any] = {}
-    for part in split_top_level_csv(left) + split_top_level_csv(right):
-        if "=" not in part:
-            continue
-        key, raw_value = part.split("=", 1)
-        data[key.strip()] = parse_scalar(raw_value)
+    timing_separator = ": avg_wall_ms="
+    if timing_separator in payload:
+        left, right_tail = payload.rsplit(timing_separator, 1)
+        right = "avg_wall_ms=" + right_tail
+        for part in split_top_level_csv(left) + split_top_level_csv(right):
+            if "=" not in part:
+                continue
+            key, raw_value = part.split("=", 1)
+            data[key.strip()] = parse_scalar(raw_value)
+    elif ": " in payload:
+        left, right = payload.split(": ", 1)
+        for part in split_top_level_csv(left) + split_top_level_csv(right):
+            if "=" not in part:
+                continue
+            key, raw_value = part.split("=", 1)
+            data[key.strip()] = parse_scalar(raw_value)
+    else:
+        for match in SUMMARY_TOKEN_RE.finditer(payload):
+            data[match.group(1)] = parse_scalar(match.group(2))
     return data or None
 
 
@@ -575,6 +1322,11 @@ class RunSpec:
     pencil_layout: Optional[str] = None
     pencil_pipeline: Optional[str] = None
     large_count_p2p_transport: Optional[str] = None
+    contiguous_forward_send_mode: Optional[str] = None
+    native_backward_second_peer_loop: Optional[bool] = None
+    fftm_3d_backend: Optional[str] = None
+    native_opt0_y_executor_variant: Optional[str] = None
+    native_opt0_y_cross_factory_mode: Optional[str] = None
     grid: Optional[Tuple[int, ...]] = None
 
     def size_arity(self) -> int:
@@ -592,13 +1344,27 @@ def choose_pencil_grid_3d(num_gpus: int) -> Tuple[int, int]:
 
 
 def grid_orientations_for_spec(
-    dim: int, strategy: Optional[str], num_gpus: int, orientation_mode: str = "both"
+    dim: int,
+    strategy: Optional[str],
+    num_gpus: int,
+    orientation_mode: str = "both",
+    pencil_layout: Optional[str] = None,
 ) -> List[Optional[Tuple[int, ...]]]:
     if dim != 3 or strategy != "pencil-pencil" or num_gpus < 2:
         return [None]
 
+    if orientation_mode in ("configured", "autotune"):
+        return [None]
+
     default_grid = choose_pencil_grid_3d(num_gpus)
     reversed_grid = (default_grid[1], default_grid[0])
+
+    if orientation_mode == "production":
+        if num_gpus == 8:
+            if pencil_layout == "opt1":
+                return [default_grid]
+            return [reversed_grid]
+        return [default_grid]
 
     if orientation_mode == "default":
         return [default_grid]
@@ -620,16 +1386,26 @@ def grid_slug(grid: Optional[Tuple[int, ...]]) -> str:
 def parse_pencil_grid_orientations(value: str) -> str:
     value = (value or "both").strip().lower()
     aliases = {
+        "configured": "configured",
+        "config": "configured",
+        "autotune": "configured",
+        "tuned": "configured",
         "auto": "both",
         "all": "both",
         "both": "both",
+        "production": "production",
+        "prod": "production",
+        "known-best": "production",
+        "best-known": "production",
         "default": "default",
         "primary": "default",
         "reversed": "reversed",
         "reverse": "reversed",
     }
     if value not in aliases:
-        raise ValueError("--pencil-pencil-grid-orientations must be one of: both, default, reversed")
+        raise ValueError(
+            "--pencil-pencil-grid-orientations must be one of: configured, both, production, default, reversed"
+        )
     return aliases[value]
 
 
@@ -743,6 +1519,10 @@ def add_fftm_specs(
     pencil_layouts: Sequence[Optional[str]],
     pencil_pipelines: Sequence[Optional[str]],
     large_count_p2p_transports: Sequence[Optional[str]],
+    contiguous_forward_send_modes: Sequence[Optional[str]],
+    native_backward_second_peer_loop_modes: Sequence[Optional[bool]],
+    fftm_3d_backends: Sequence[Optional[str]],
+    use_contiguous_forward_byte_send: bool,
     pencil_grid_orientations: str = "both",
 ) -> None:
     transports: List[Tuple[str, str]] = [("cuda_aware", ".bin")]
@@ -760,35 +1540,68 @@ def add_fftm_specs(
                         for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
                             for scheduler in p2p_schedulers_for_spec(3, transport_name, mode, p2p_schedulers):
                                 for pencil_layout in pencil_layouts_for_spec(3, strategy, pencil_layouts):
-                                    for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, pencil_pipelines):
+                                    for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, mode, pencil_pipelines):
                                         for large_count_transport in large_count_p2p_transports_for_spec(
                                             3, transport_name, strategy, mode, pencil_pipeline, large_count_p2p_transports
                                         ):
-                                            for grid in grid_orientations_for_spec(
-                                                3, strategy, num_gpus, pencil_grid_orientations
+                                            for contiguous_forward_send_mode in contiguous_forward_send_modes_for_spec(
+                                                3,
+                                                transport_name,
+                                                strategy,
+                                                mode,
+                                                use_contiguous_forward_byte_send,
+                                                contiguous_forward_send_modes,
                                             ):
-                                                specs.append(
-                                                    RunSpec(
-                                                        suite="fftm",
-                                                        dim=3,
-                                                        case_name="benchmark",
-                                                        binary_name=benchmark_3d,
-                                                        binary_path=str(binaries[benchmark_3d]),
-                                                        num_gpus=num_gpus,
-                                                        transport=transport_name,
-                                                        strategy=strategy,
-                                                        mode=mode,
-                                                        uses_mpi=True,
-                                                        supports_directory=True,
-                                                        memory_family=f"fftm:3d:small:{num_gpus}:{strategy}",
-                                                        p2p_variant=variant,
-                                                        p2p_scheduler=scheduler,
-                                                        pencil_layout=pencil_layout,
-                                                        pencil_pipeline=pencil_pipeline,
-                                                        large_count_p2p_transport=large_count_transport,
-                                                        grid=grid,
-                                                    )
-                                                )
+                                                for grid in grid_orientations_for_spec(
+                                                    3,
+                                                    strategy,
+                                                    num_gpus,
+                                                    pencil_grid_orientations,
+                                                    pencil_layout,
+                                                ):
+                                                    for fftm_3d_backend in fftm_3d_backends_for_spec(
+                                                        3,
+                                                        transport_name,
+                                                        strategy,
+                                                        mode,
+                                                        "benchmark",
+                                                        grid,
+                                                        fftm_3d_backends,
+                                                    ):
+                                                        for native_backward_second_peer_loop in native_backward_second_peer_loop_modes_for_spec(
+                                                            3,
+                                                            transport_name,
+                                                            strategy,
+                                                            mode,
+                                                            pencil_pipeline,
+                                                            fftm_3d_backend,
+                                                            native_backward_second_peer_loop_modes,
+                                                        ):
+                                                            specs.append(
+                                                                RunSpec(
+                                                                    suite="fftm",
+                                                                    dim=3,
+                                                                    case_name="benchmark",
+                                                                    binary_name=benchmark_3d,
+                                                                    binary_path=str(binaries[benchmark_3d]),
+                                                                    num_gpus=num_gpus,
+                                                                    transport=transport_name,
+                                                                    strategy=strategy,
+                                                                    mode=mode,
+                                                                    uses_mpi=True,
+                                                                    supports_directory=True,
+                                                                    memory_family=f"fftm:3d:small:{num_gpus}:{strategy}:{fftm_3d_backend or 'configured'}",
+                                                                    p2p_variant=variant,
+                                                                    p2p_scheduler=scheduler,
+                                                                    pencil_layout=pencil_layout,
+                                                                    pencil_pipeline=pencil_pipeline,
+                                                                    large_count_p2p_transport=large_count_transport,
+                                                                    contiguous_forward_send_mode=contiguous_forward_send_mode,
+                                                                    native_backward_second_peer_loop=native_backward_second_peer_loop,
+                                                                    fftm_3d_backend=fftm_3d_backend,
+                                                                    grid=grid,
+                                                                )
+                                                            )
 
             if benchmark_4d in binaries:
                 for strategy in FFTM_STRATEGIES_4D:
@@ -819,7 +1632,7 @@ def add_fftm_specs(
                             for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
                                 for scheduler in p2p_schedulers_for_spec(3, transport_name, mode, p2p_schedulers):
                                     for pencil_layout in pencil_layouts_for_spec(3, strategy, pencil_layouts):
-                                        for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, pencil_pipelines):
+                                        for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, mode, pencil_pipelines):
                                             for large_count_transport in large_count_p2p_transports_for_spec(
                                                 3,
                                                 transport_name,
@@ -829,7 +1642,11 @@ def add_fftm_specs(
                                                 large_count_p2p_transports,
                                             ):
                                                 for grid in grid_orientations_for_spec(
-                                                    3, strategy, num_gpus, pencil_grid_orientations
+                                                    3,
+                                                    strategy,
+                                                    num_gpus,
+                                                    pencil_grid_orientations,
+                                                    pencil_layout,
                                                 ):
                                                     specs.append(
                                                         RunSpec(
@@ -886,6 +1703,10 @@ def build_measurement_specs(
     pencil_layouts: Sequence[Optional[str]],
     pencil_pipelines: Sequence[Optional[str]],
     large_count_p2p_transports: Sequence[Optional[str]],
+    contiguous_forward_send_modes: Sequence[Optional[str]],
+    native_backward_second_peer_loop_modes: Sequence[Optional[bool]],
+    fftm_3d_backends: Sequence[Optional[str]],
+    use_contiguous_forward_byte_send: bool,
     pencil_grid_orientations: str = "both",
 ) -> List[RunSpec]:
     specs: List[RunSpec] = []
@@ -900,6 +1721,10 @@ def build_measurement_specs(
         pencil_layouts=pencil_layouts,
         pencil_pipelines=pencil_pipelines,
         large_count_p2p_transports=large_count_p2p_transports,
+        contiguous_forward_send_modes=contiguous_forward_send_modes,
+        native_backward_second_peer_loop_modes=native_backward_second_peer_loop_modes,
+        fftm_3d_backends=fftm_3d_backends,
+        use_contiguous_forward_byte_send=use_contiguous_forward_byte_send,
         pencil_grid_orientations=pencil_grid_orientations,
     )
     return specs
@@ -937,6 +1762,9 @@ def build_probe_families(specs: Sequence[RunSpec], probe_mode: str) -> List[Prob
                 pencil_layout=spec.pencil_layout,
                 pencil_pipeline=spec.pencil_pipeline,
                 large_count_p2p_transport=spec.large_count_p2p_transport,
+                contiguous_forward_send_mode=spec.contiguous_forward_send_mode,
+                native_backward_second_peer_loop=spec.native_backward_second_peer_loop,
+                fftm_3d_backend=spec.fftm_3d_backend,
                 grid=spec.grid,
             )
         else:
@@ -985,6 +1813,13 @@ class LocalPaperBenchmarkRunner:
         self.large_count_p2p_transports = parse_large_count_p2p_transports(
             self.args.large_count_p2p_transports
         )
+        self.contiguous_forward_send_modes = parse_contiguous_forward_send_modes(
+            self.args.contiguous_forward_send_modes
+        )
+        self.native_backward_second_peer_loop_modes = parse_native_backward_second_peer_loop_modes(
+            self.args.native_backward_second_peer_loop_modes
+        )
+        self.fftm_3d_backends = parse_fftm_3d_backends(self.args.fftm_3d_backends)
         self.pencil_grid_orientations = parse_pencil_grid_orientations(self.args.pencil_pencil_grid_orientations)
         self.extra_sizes_3d = parse_int_list(self.args.extra_sizes_3d)
         self.extra_sizes_3d_by_gpu = parse_gpu_size_map(self.args.extra_sizes_3d_by_gpu)
@@ -999,6 +1834,10 @@ class LocalPaperBenchmarkRunner:
             pencil_layouts=self.pencil_layouts,
             pencil_pipelines=self.pencil_pipelines,
             large_count_p2p_transports=self.large_count_p2p_transports,
+            contiguous_forward_send_modes=self.contiguous_forward_send_modes,
+            native_backward_second_peer_loop_modes=self.native_backward_second_peer_loop_modes,
+            fftm_3d_backends=self.fftm_3d_backends,
+            use_contiguous_forward_byte_send=self.args.use_contiguous_forward_byte_send,
             pencil_grid_orientations=self.pencil_grid_orientations,
         )
         if not self.specs:
@@ -1118,7 +1957,14 @@ class LocalPaperBenchmarkRunner:
                 if direct_p2p_cuda_aware
                 else "--no-direct-p2p-cuda-aware"
             )
+            command.append(
+                "--use-fft-exec-no-sync"
+                if self.args.use_fft_exec_no_sync
+                else "--no-fft-exec-no-sync"
+            )
             if spec.dim == 3:
+                if self.args.fftm_autotune_config:
+                    command.extend(["--autotune-config", self.args.fftm_autotune_config])
                 use_p2p_send_thread, use_persistent_p2p = p2p_scheduler_flags(
                     spec.p2p_scheduler,
                     self.args.use_p2p_send_thread,
@@ -1150,12 +1996,185 @@ class LocalPaperBenchmarkRunner:
                     if self.args.use_direct_forward_byte_receive
                     else "--no-direct-forward-byte-receive"
                 )
+                command.append(
+                    "--use-stable-forward-byte-send-buffer"
+                    if self.args.use_stable_forward_byte_send_buffer
+                    else "--no-stable-forward-byte-send-buffer"
+                )
+                command.append(
+                    "--use-ready-stable-forward-byte-send-buffer"
+                    if self.args.use_ready_stable_forward_byte_send_buffer
+                    else "--no-ready-stable-forward-byte-send-buffer"
+                )
+                command.append(
+                    "--use-contiguous-forward-byte-send"
+                    if self.args.use_contiguous_forward_byte_send
+                    else "--no-contiguous-forward-byte-send"
+                )
+                command.append(
+                    "--use-physical-forward-peer-exchange"
+                    if self.args.use_physical_forward_peer_exchange
+                    else "--no-physical-forward-peer-exchange"
+                )
+                if spec.native_backward_second_peer_loop is None:
+                    command.append(
+                        "--use-native-backward-second-peer-loop"
+                        if self.args.use_native_backward_second_peer_loop
+                        else "--no-native-backward-second-peer-loop"
+                    )
+                else:
+                    command.append(
+                        "--use-native-backward-second-peer-loop"
+                        if spec.native_backward_second_peer_loop
+                        else "--no-native-backward-second-peer-loop"
+                    )
+                command.append(
+                    "--use-native-opt0-default-z-layout"
+                    if self.args.use_native_opt0_default_z_layout
+                    else "--no-native-opt0-default-z-layout"
+                )
+                command.append(
+                    "--use-native-opt0-reference-y-buffer-topology"
+                    if self.args.use_native_opt0_reference_y_buffer_topology
+                    else "--no-native-opt0-reference-y-buffer-topology"
+                )
+                command.append(
+                    "--use-native-opt0-compact-y-workarea"
+                    if self.args.use_native_opt0_compact_y_workarea
+                    else "--no-native-opt0-compact-y-workarea"
+                )
+                command.append(
+                    "--use-native-opt0-tight-y-plan-sequence"
+                    if self.args.use_native_opt0_tight_y_plan_sequence
+                    else "--no-native-opt0-tight-y-plan-sequence"
+                )
+                command.append(
+                    "--use-native-opt0-shared-y-plan-handles"
+                    if self.args.use_native_opt0_shared_y_plan_handles
+                    else "--no-native-opt0-shared-y-plan-handles"
+                )
+                command.append(
+                    "--use-native-opt0-y-group-device-sync"
+                    if self.args.use_native_opt0_y_group_device_sync
+                    else "--no-native-opt0-y-group-device-sync"
+                )
+                command.append(
+                    "--use-native-opt0-y-no-sync-exec"
+                    if self.args.use_native_opt0_y_no_sync_exec
+                    else "--no-native-opt0-y-no-sync-exec"
+                )
+                command.append(
+                    "--use-native-opt0-raw-y-plan-array-executor"
+                    if self.args.use_native_opt0_raw_y_plan_array_executor
+                    else "--no-native-opt0-raw-y-plan-array-executor"
+                )
+                command.append(
+                    "--use-native-opt0-reference-y-plan-lifecycle"
+                    if self.args.use_native_opt0_reference_y_plan_lifecycle
+                    else "--no-native-opt0-reference-y-plan-lifecycle"
+                )
+                command.append(
+                    "--use-native-opt0-reference-y-plan-bundle"
+                    if self.args.use_native_opt0_reference_y_plan_bundle
+                    else "--no-native-opt0-reference-y-plan-bundle"
+                )
+                command.append(
+                    "--use-native-opt0-raw-y-plan-bundle"
+                    if self.args.use_native_opt0_raw_y_plan_bundle
+                    else "--no-native-opt0-raw-y-plan-bundle"
+                )
+                command.append(
+                    "--use-native-opt0-y-plan-bundle-stream-first"
+                    if self.args.use_native_opt0_y_plan_bundle_stream_first
+                    else "--no-native-opt0-y-plan-bundle-stream-first"
+                )
+                command.append(
+                    "--use-native-opt0-raw-y-plan-bundle-reference-streams"
+                    if self.args.use_native_opt0_raw_y_plan_bundle_reference_streams
+                    else "--no-native-opt0-raw-y-plan-bundle-reference-streams"
+                )
+                command.append(
+                    "--use-native-opt0-reference-local-plan-context"
+                    if self.args.use_native_opt0_reference_local_plan_context
+                    else "--no-native-opt0-reference-local-plan-context"
+                )
+                native_opt0_y_flags = {
+                    "reference_lifecycle": self.args.use_native_opt0_reference_y_plan_lifecycle,
+                    "reference_bundle": self.args.use_native_opt0_reference_y_plan_bundle,
+                    "raw_bundle": self.args.use_native_opt0_raw_y_plan_bundle,
+                    "stream_first": self.args.use_native_opt0_y_plan_bundle_stream_first,
+                    "reference_streams": self.args.use_native_opt0_raw_y_plan_bundle_reference_streams,
+                    "local_context": self.args.use_native_opt0_reference_local_plan_context,
+                }
+                allow_native_opt0_diagnostics = self.args.allow_native_opt0_diagnostic_variants
+                command.append(
+                    "--allow-native-opt0-diagnostic-variants"
+                    if allow_native_opt0_diagnostics
+                    else "--no-native-opt0-diagnostic-variants"
+                )
+                command.append(
+                    "--use-native-opt0-memory-feasibility-guard"
+                    if self.args.use_native_opt0_memory_feasibility_guard
+                    else "--no-native-opt0-memory-feasibility-guard"
+                )
+                command.extend(
+                    [
+                        "--native-opt0-memory-feasibility-reserve-mib",
+                        str(self.args.native_opt0_memory_feasibility_reserve_mib),
+                    ]
+                )
+                if spec.contiguous_forward_send_mode is not None:
+                    command.extend(["--contiguous-forward-send-mode", spec.contiguous_forward_send_mode])
+                else:
+                    command.extend(
+                        ["--contiguous-forward-send-mode", self.args.contiguous_forward_send_mode]
+                    )
+                command.extend(
+                    [
+                        "--contiguous-forward-send-chunk-mib",
+                        str(self.args.contiguous_forward_send_chunk_mib),
+                    ]
+                )
+                if spec.case_name == "benchmark":
+                    command.extend(
+                        [
+                            "--contiguous-forward-send-registration-warmups",
+                            str(self.args.contiguous_forward_send_registration_warmups),
+                        ]
+                    )
                 if spec.pencil_layout is not None:
                     command.extend(["--pencil-layout", spec.pencil_layout])
                 if spec.pencil_pipeline is not None:
                     command.extend(["--pencil-pipeline", spec.pencil_pipeline])
                 if spec.large_count_p2p_transport is not None:
                     command.extend(["--large-count-p2p-transport", spec.large_count_p2p_transport])
+                if spec.fftm_3d_backend is not None:
+                    command.extend(["--fftm-3d-backend", spec.fftm_3d_backend])
+                command.append(
+                    "--enable-fftm3d-backend-stage-timers"
+                    if self.args.enable_fftm3d_backend_stage_timers
+                    else "--disable-fftm3d-backend-stage-timers"
+                )
+                command.append(
+                    "--enable-local-fft-diagnostics"
+                    if self.args.enable_local_fft_diagnostics
+                    else "--disable-local-fft-diagnostics"
+                )
+                command.append(
+                    "--enable-native-stage-timers"
+                    if self.args.enable_native_stage_timers
+                    else "--disable-native-stage-timers"
+                )
+                command.append(
+                    "--use-large-count-datatype-cache"
+                    if self.args.use_large_count_datatype_cache
+                    else "--no-large-count-datatype-cache"
+                )
+                command.append(
+                    "--enable-gpu-telemetry"
+                    if self.args.enable_gpu_telemetry
+                    else "--disable-gpu-telemetry"
+                )
         command.extend(["--times", str(times)])
         if warmup > 0:
             command.extend(["--warmup", str(warmup)])
@@ -1171,12 +2190,15 @@ class LocalPaperBenchmarkRunner:
         warmup = self.args.test_warmup if phase == PHASE_MEASURE else 0
         command = self.build_command(spec, sizes, times, warmup)
         command_string = " ".join(shlex.quote(arg) for arg in command)
-        slug = slugify(
+        slug = short_log_slug(
             f"{self.run_index:05d}_{phase}_{spec.suite}_{spec.case_name}_{spec.dim}d_"
             f"g{spec.num_gpus}_{spec.transport}_{spec.strategy or 'default'}_{spec.mode or 'none'}_"
             f"{spec.p2p_variant or 'configured'}_{spec.p2p_scheduler or 'sched-configured'}_"
             f"{spec.pencil_layout or 'layout-configured'}_{spec.pencil_pipeline or 'pipe-configured'}_"
             f"{spec.large_count_p2p_transport or 'large-configured'}_"
+            f"{spec.contiguous_forward_send_mode or 'contig-configured'}_"
+            f"bwd2peer-{('on' if spec.native_backward_second_peer_loop else 'off') if spec.native_backward_second_peer_loop is not None else 'configured'}_"
+            f"{spec.fftm_3d_backend or 'backend-configured'}_"
             f"{grid_slug(spec.grid)}_{'x'.join(str(s) for s in sizes)}"
         )
         raw_path = self.raw_dir / f"{slug}.log"
@@ -1517,7 +2539,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Experimental: receive Egger-parity opt1 forward byte messages directly into strided "
+            "Experimental: receive reference-parity opt1 forward byte messages directly into strided "
             "stage storage. Default: disabled."
         ),
     )
@@ -1526,6 +2548,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="use_direct_forward_byte_receive",
         help="Disable experimental direct strided forward byte receives.",
+    )
+    parser.add_argument(
+        "--fftm-autotune-config",
+        default="",
+        help="Path passed to FFTM 3D binaries as --autotune-config.",
     )
     parser.add_argument(
         "--p2p-variants",
@@ -1559,7 +2586,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--use-ready-p2p-send",
         action="store_true",
         default=False,
-        help="Use experimental ready-polled P2P send posting in the owned Egger 3D pencil path. Default: disabled",
+        help="Use experimental ready-polled P2P send posting in the owned reference 3D pencil path. Default: disabled",
     )
     parser.add_argument(
         "--no-ready-p2p-send",
@@ -1571,13 +2598,434 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--print-pencil-schedule",
         action="store_true",
         default=False,
-        help="Print owned Egger pencil-pipeline peer schedules during initialization. Default: disabled",
+        help="Print owned reference pencil-pipeline peer schedules during initialization. Default: disabled",
     )
     parser.add_argument(
         "--no-print-pencil-schedule",
         action="store_false",
         dest="print_pencil_schedule",
-        help="Disable owned Egger pencil-pipeline schedule dumps.",
+        help="Disable owned reference pencil-pipeline schedule dumps.",
+    )
+    parser.add_argument(
+        "--use-stable-forward-byte-send-buffer",
+        action="store_true",
+        default=False,
+        help=(
+            "Copy forward reference-parity CUDA-aware byte sends into the stable communication buffer before MPI_Isend. "
+            "Default: disabled"
+        ),
+    )
+    parser.add_argument(
+        "--no-stable-forward-byte-send-buffer",
+        action="store_false",
+        dest="use_stable_forward_byte_send_buffer",
+        help="Disable stable-buffer forward byte sends.",
+    )
+    parser.add_argument(
+        "--use-ready-stable-forward-byte-send-buffer",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: after posting receives, enqueue all stable-buffer forward byte copies and post each send "
+            "when that peer stream becomes ready. Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-ready-stable-forward-byte-send-buffer",
+        action="store_false",
+        dest="use_ready_stable_forward_byte_send_buffer",
+        help="Disable experimental ready-polled stable-buffer forward byte sends.",
+    )
+    parser.add_argument(
+        "--use-contiguous-forward-byte-send",
+        action="store_true",
+        default=False,
+        help=(
+            "Post stable forward CUDA-aware sends from contiguous communication buffers. "
+            "Use --contiguous-forward-send-mode to select single or chunked posting. Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-contiguous-forward-byte-send",
+        action="store_false",
+        dest="use_contiguous_forward_byte_send",
+        help="Disable contiguous posting for stable forward byte sends.",
+    )
+    parser.add_argument(
+        "--use-physical-forward-peer-exchange",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: use stable contiguous forward peer exchange buffers and value-count MPI "
+            "for reference-parity CUDA-aware byte transfers when the per-peer value count fits MPI_INT. "
+            "Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-physical-forward-peer-exchange",
+        action="store_false",
+        dest="use_physical_forward_peer_exchange",
+        help="Disable experimental physical forward peer-exchange path.",
+    )
+    parser.add_argument(
+        "--use-native-backward-second-peer-loop",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: route backward second transpose through the native schedule-slot peer loop. "
+            "Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-backward-second-peer-loop",
+        action="store_false",
+        dest="use_native_backward_second_peer_loop",
+        help="Disable native backward-second peer-loop execution.",
+    )
+    parser.add_argument(
+        "--native-backward-second-peer-loop-modes",
+        default="configured",
+        help=(
+            "Native backward-second peer-loop matrix for 3D CUDA-aware native pencil-pencil P2P runs: "
+            "configured, both, or comma-separated off,on."
+        ),
+    )
+    parser.add_argument(
+        "--use-native-opt0-default-z-layout",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: use the FFTM-native opt0 default-Z bridge path for native 3D "
+            "pencil-pencil reference-owned runs. Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-default-z-layout",
+        action="store_false",
+        dest="use_native_opt0_default_z_layout",
+        help="Disable the native opt0 default-Z bridge path.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-egger-y-buffer-topology",
+        "--use-native-opt0-reference-y-buffer-topology",
+        action="store_true",
+        dest="use_native_opt0_reference_y_buffer_topology",
+        default=False,
+        help=(
+            "Experimental: bind native opt0 Y input/output buffers to the reference-style active "
+            "complex/mem_d slot topology. Requires --use-native-opt0-default-z-layout."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-egger-y-buffer-topology",
+        "--no-native-opt0-reference-y-buffer-topology",
+        action="store_false",
+        dest="use_native_opt0_reference_y_buffer_topology",
+        help="Disable the native opt0 reference Y-buffer topology experiment.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-compact-y-workarea",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: reuse the native opt0 reference-style receive slot as the Y workarea "
+            "when communication buffers are inactive, reducing the opt0 workspace lifetime."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-compact-y-workarea",
+        action="store_false",
+        dest="use_native_opt0_compact_y_workarea",
+        help="Disable the native opt0 compact Y workarea layout.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-tight-y-plan-sequence",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: execute native opt0 Y C2C plan arrays through the typed tight "
+            "plan-sequence executor. Requires --use-native-opt0-default-z-layout."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-tight-y-plan-sequence",
+        action="store_false",
+        dest="use_native_opt0_tight_y_plan_sequence",
+        help="Disable the native opt0 tight Y plan-sequence executor.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-shared-y-plan-handles",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: create one native opt0 Y C2C plan handle array and execute it in "
+            "forward or inverse direction, matching the reference opt0 plan-handle lifecycle."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-shared-y-plan-handles",
+        action="store_false",
+        dest="use_native_opt0_shared_y_plan_handles",
+        help="Disable the native opt0 shared Y C2C plan-handle experiment.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-y-group-device-sync",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: after native opt0 Y plan-sequence launch, synchronize once with "
+            "device_synchronize instead of synchronizing each Y plan stream."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-y-group-device-sync",
+        action="store_false",
+        dest="use_native_opt0_y_group_device_sync",
+        help="Disable the native opt0 grouped Y device synchronization experiment.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-y-no-sync-exec",
+        action="store_true",
+        default=True,
+        help=(
+            "Experimental: check native opt0 Y cuFFT exec calls without synchronizing each launch; "
+            "the executor still synchronizes after the whole Y plan group."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-y-no-sync-exec",
+        action="store_false",
+        dest="use_native_opt0_y_no_sync_exec",
+        help="Use the synchronized native opt0 Y cuFFT exec check.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-raw-y-plan-array-executor",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: execute native opt0 Y plans through an FFT-wrapper-owned opaque "
+            "C2C plan-handle array."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-raw-y-plan-array-executor",
+        action="store_false",
+        dest="use_native_opt0_raw_y_plan_array_executor",
+        help="Disable the native opt0 opaque/raw Y plan-array executor.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-reference-y-plan-lifecycle",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: recreate native opt0 Y plans with stream/work-area binding in the "
+            "reference/reference-style lifecycle inside the FFT abstraction."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-reference-y-plan-lifecycle",
+        action="store_false",
+        dest="use_native_opt0_reference_y_plan_lifecycle",
+        help="Disable the native opt0 reference-style Y plan lifecycle experiment.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-reference-y-plan-bundle",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: create an FFT-abstraction-owned native opt0 Y plan-array bundle "
+            "with bundle-owned streams, offsets, work areas, and direct opaque execution."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-reference-y-plan-bundle",
+        action="store_false",
+        dest="use_native_opt0_reference_y_plan_bundle",
+        help="Disable the native opt0 reference-style Y plan-array bundle experiment.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-raw-y-plan-bundle",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: create native opt0 Y C2C plan handles through a raw reference-style "
+            "plan-array path inside the FFT abstraction, then bind them to the pencil executor streams."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-raw-y-plan-bundle",
+        action="store_false",
+        dest="use_native_opt0_raw_y_plan_bundle",
+        help="Disable the native opt0 raw reference-style Y plan-array bundle experiment.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-y-plan-bundle-stream-first",
+        action="store_true",
+        default=False,
+        help="Experimental: bind native opt0 Y plan-array streams before work areas during bundle activation.",
+    )
+    parser.add_argument(
+        "--no-native-opt0-y-plan-bundle-stream-first",
+        action="store_false",
+        dest="use_native_opt0_y_plan_bundle_stream_first",
+        help="Disable stream-before-work native opt0 Y plan-array bundle activation.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-raw-y-plan-bundle-egger-streams",
+        "--use-native-opt0-raw-y-plan-bundle-reference-streams",
+        action="store_true",
+        dest="use_native_opt0_raw_y_plan_bundle_reference_streams",
+        default=False,
+        help=(
+            "Experimental: create raw native opt0 Y plan-array handles with pencil executor streams bound "
+            "immediately after plan creation, matching reference's lifecycle more closely."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-raw-y-plan-bundle-egger-streams",
+        "--no-native-opt0-raw-y-plan-bundle-reference-streams",
+        action="store_false",
+        dest="use_native_opt0_raw_y_plan_bundle_reference_streams",
+        help="Disable immediate reference-style stream binding during raw native opt0 Y plan-array creation.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-egger-local-plan-context",
+        "--use-native-opt0-reference-local-plan-context",
+        action="store_true",
+        dest="use_native_opt0_reference_local_plan_context",
+        default=False,
+        help=(
+            "Experimental: create an FFT-abstraction-owned opt0 local plan context in reference order "
+            "and use its Y plan array for native opt0 execution."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-egger-local-plan-context",
+        "--no-native-opt0-reference-local-plan-context",
+        action="store_false",
+        dest="use_native_opt0_reference_local_plan_context",
+        help="Disable the native opt0 reference local plan-context bundle experiment.",
+    )
+    parser.add_argument(
+        "--allow-native-opt0-diagnostic-variants",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow native opt0 diagnostic-only Y executor variants. Production runs leave this disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-diagnostic-variants",
+        action="store_false",
+        dest="allow_native_opt0_diagnostic_variants",
+        help="Reject native opt0 diagnostic-only Y executor variants.",
+    )
+    parser.add_argument(
+        "--use-native-opt0-memory-feasibility-guard",
+        action="store_true",
+        default=True,
+        help=(
+            "Check native opt0 reference-style shared workspace against runtime free device memory before "
+            "allocating it. Default: enabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-native-opt0-memory-feasibility-guard",
+        action="store_false",
+        dest="use_native_opt0_memory_feasibility_guard",
+        help="Disable the native opt0 shared-workspace memory feasibility guard.",
+    )
+    parser.add_argument(
+        "--native-opt0-memory-feasibility-reserve-mib",
+        type=int,
+        default=512,
+        help="Device-memory reserve kept by the native opt0 memory feasibility guard. Default: 512.",
+    )
+    parser.add_argument(
+        "--enable-fftm3d-backend-stage-timers",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable wrapped reference stage-timer CSVs when the fftm3d-scfd-fft-facade backend "
+            "is selected. Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--disable-fftm3d-backend-stage-timers",
+        action="store_false",
+        dest="enable_fftm3d_backend_stage_timers",
+        help="Disable wrapped reference stage-timer CSVs for the fftm3d backend.",
+    )
+    parser.add_argument(
+        "--enable-local-fft-diagnostics",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable per-rank local FFT plan descriptor and device-event timing CSVs for native 3D FFTM runs. "
+            "Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--disable-local-fft-diagnostics",
+        action="store_false",
+        dest="enable_local_fft_diagnostics",
+        help="Disable local FFT diagnostics.",
+    )
+    parser.add_argument(
+        "--enable-native-stage-timers",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable per-rank measured-loop native stage timing CSVs for native 3D FFTM runs. "
+            "Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--disable-native-stage-timers",
+        action="store_false",
+        dest="enable_native_stage_timers",
+        help="Disable native measured-loop stage timing CSVs.",
+    )
+    parser.add_argument(
+        "--enable-gpu-telemetry",
+        action="store_true",
+        default=False,
+        help=(
+            "Write per-rank pre/post GPU telemetry CSVs from inside the benchmark process. "
+            "Includes selected device, PCI bus id, clocks, temperature, power, memory, and utilization."
+        ),
+    )
+    parser.add_argument(
+        "--disable-gpu-telemetry",
+        action="store_false",
+        dest="enable_gpu_telemetry",
+        help="Disable per-rank GPU telemetry CSVs.",
+    )
+    parser.add_argument(
+        "--contiguous-forward-send-mode",
+        default="single",
+        choices=FFTM_CONTIGUOUS_FORWARD_SEND_MODES,
+        help="Configured contiguous forward send mode when not sweeping. Default: single.",
+    )
+    parser.add_argument(
+        "--contiguous-forward-send-modes",
+        default="configured",
+        help=(
+            "Contiguous forward send mode matrix for 3D CUDA-aware pencil-pencil P2P runs: "
+            "configured, all, or comma-separated subset of single,chunked."
+        ),
+    )
+    parser.add_argument(
+        "--contiguous-forward-send-chunk-mib",
+        type=int,
+        default=1024,
+        help="Chunk size in MiB for contiguous-forward-send mode=chunked. Default: 1024.",
+    )
+    parser.add_argument(
+        "--contiguous-forward-send-registration-warmups",
+        type=int,
+        default=0,
+        help="Extra untimed benchmark warmup iterations before normal warmups. Default: 0.",
     )
     parser.add_argument(
         "--pencil-layouts",
@@ -1589,7 +3037,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="configured",
         help=(
             "3D pencil-pencil pipeline matrix: configured, all, or comma-separated subset of "
-            "staged,fused,egger,egger-parity."
+            "staged,fused,reference,reference-parity. Deprecated aliases: egger,egger-parity."
         ),
     )
     parser.add_argument(
@@ -1602,10 +3050,48 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--fftm-3d-backends",
+        default="configured",
+        help=(
+            "3D FFTM benchmark backend matrix: configured, all, or comma-separated subset of "
+            f"{','.join(FFTM_3D_BACKENDS)}. The fftm3d backend is only emitted for CUDA-aware "
+            "3D pencil-pencil benchmark runs."
+        ),
+    )
+    parser.add_argument(
+        "--use-large-count-datatype-cache",
+        action="store_true",
+        default=False,
+        help="Cache hindexed large-count MPI datatypes per peer/stage. Default: disabled.",
+    )
+    parser.add_argument(
+        "--no-large-count-datatype-cache",
+        action="store_false",
+        dest="use_large_count_datatype_cache",
+        help="Disable hindexed large-count MPI datatype caching.",
+    )
+    parser.add_argument(
+        "--use-fft-exec-no-sync",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: check hot cuFFT exec launches without synchronizing inside the FFT abstraction. "
+            "Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-fft-exec-no-sync",
+        action="store_false",
+        dest="use_fft_exec_no_sync",
+        help="Use the synchronized FFT exec check in the generic FFT abstraction path.",
+    )
+    parser.add_argument(
         "--pencil-pencil-grid-orientations",
         default="both",
         help=(
-            "Pencil-pencil 3D process-grid orientations to run: both, default, or reversed. "
+            "Pencil-pencil 3D process-grid orientations to run: configured, both, production, default, or reversed. "
+            "configured passes no --grid argument so an autotune config can choose the grid. "
+            "production uses known safe choices, currently 8G opt0/auto -> 4x2 and 8G opt1 -> 2x4. "
             "Default: both, so e.g. 8 GPUs runs both 2x4 and 4x2."
         ),
     )

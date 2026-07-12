@@ -24,7 +24,7 @@ inline int init_cuda_mpi_for_tests( Log &log, const scfd::communication::mpi_com
 {
     if ( wrap_mpi_processes_over_gpus_enabled() )
     {
-        return scfd::utils::init_cuda_mpi<Log, true>( log, comm_info );
+        return scfd::utils::init_cuda_mpi( log, comm_info, 0, true );
     }
     return scfd::utils::init_cuda_mpi( log, comm_info );
 }

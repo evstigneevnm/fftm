@@ -20,6 +20,11 @@ CONTAINER_DATA_DIR="${FFTM_CONTAINER_DATA_DIR:-/data}"
 CONTAINER_TESTS_ROOT="${FFTM_CONTAINER_TESTS_ROOT:-/opt/fftm/bin}"
 CONTAINER_ENV="${FFTM_CONTAINER_ENV:-}"
 CONTAINER_MOUNTS="${FFTM_CONTAINER_MOUNTS:-}"
+AUTOTUNE_CONFIG="${FFTM_AUTOTUNE_CONFIG:-}"
+WRITE_NATIVE_PENCIL_SCHEDULE="${FFTM_WRITE_NATIVE_PENCIL_SCHEDULE:-0}"
+NATIVE_PENCIL_REFERENCE_DIR="${FFTM_NATIVE_PENCIL_REFERENCE_DIR:-}"
+NATIVE_PENCIL_SCHEDULE_CHECK_ONLY="${FFTM_NATIVE_PENCIL_SCHEDULE_CHECK_ONLY:-0}"
+SKIP_NATIVE_PENCIL_RANK_DEVICE_CHECK="${FFTM_SKIP_NATIVE_PENCIL_RANK_DEVICE_CHECK:-0}"
 RUN_PREFLIGHT="${FFTM_RUN_PREFLIGHT:-1}"
 PREFLIGHT_TIME="${FFTM_PREFLIGHT_TIME:-00:03:00}"
 STOP_ON_FAILURE="${FFTM_STOP_ON_FAILURE:-1}"
@@ -58,11 +63,51 @@ USE_PERSISTENT_P2P="${FFTM_USE_PERSISTENT_P2P:-0}"
 USE_READY_P2P_SEND="${FFTM_USE_READY_P2P_SEND:-0}"
 PRINT_PENCIL_SCHEDULE="${FFTM_PRINT_PENCIL_SCHEDULE:-0}"
 USE_DIRECT_FORWARD_BYTE_RECEIVE="${FFTM_USE_DIRECT_FORWARD_BYTE_RECEIVE:-0}"
+USE_STABLE_FORWARD_BYTE_SEND_BUFFER="${FFTM_USE_STABLE_FORWARD_BYTE_SEND_BUFFER:-0}"
+USE_READY_STABLE_FORWARD_BYTE_SEND_BUFFER="${FFTM_USE_READY_STABLE_FORWARD_BYTE_SEND_BUFFER:-0}"
+USE_CONTIGUOUS_FORWARD_BYTE_SEND="${FFTM_USE_CONTIGUOUS_FORWARD_BYTE_SEND:-0}"
+USE_PHYSICAL_FORWARD_PEER_EXCHANGE="${FFTM_USE_PHYSICAL_FORWARD_PEER_EXCHANGE:-0}"
+USE_NATIVE_BACKWARD_SECOND_PEER_LOOP="${FFTM_USE_NATIVE_BACKWARD_SECOND_PEER_LOOP:-0}"
+USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT="${FFTM_USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT:-0}"
+USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY="${FFTM_USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY:-${FFTM_USE_NATIVE_OPT0_EGGER_Y_BUFFER_TOPOLOGY:-0}}"
+USE_NATIVE_OPT0_COMPACT_Y_WORKAREA="${FFTM_USE_NATIVE_OPT0_COMPACT_Y_WORKAREA:-0}"
+USE_NATIVE_OPT0_TIGHT_Y_PLAN_SEQUENCE="${FFTM_USE_NATIVE_OPT0_TIGHT_Y_PLAN_SEQUENCE:-0}"
+USE_NATIVE_OPT0_SHARED_Y_PLAN_HANDLES="${FFTM_USE_NATIVE_OPT0_SHARED_Y_PLAN_HANDLES:-0}"
+USE_NATIVE_OPT0_Y_GROUP_DEVICE_SYNC="${FFTM_USE_NATIVE_OPT0_Y_GROUP_DEVICE_SYNC:-0}"
+USE_NATIVE_OPT0_Y_NO_SYNC_EXEC="${FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC:-1}"
+USE_NATIVE_OPT0_RAW_Y_PLAN_ARRAY_EXECUTOR="${FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_ARRAY_EXECUTOR:-0}"
+USE_NATIVE_OPT0_REFERENCE_Y_PLAN_LIFECYCLE="${FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_LIFECYCLE:-0}"
+USE_NATIVE_OPT0_REFERENCE_Y_PLAN_BUNDLE="${FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_BUNDLE:-0}"
+USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE="${FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE:-0}"
+USE_NATIVE_OPT0_Y_PLAN_BUNDLE_STREAM_FIRST="${FFTM_USE_NATIVE_OPT0_Y_PLAN_BUNDLE_STREAM_FIRST:-0}"
+USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_REFERENCE_STREAMS="${FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_REFERENCE_STREAMS:-${FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_EGGER_STREAMS:-0}}"
+USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT="${FFTM_USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT:-${FFTM_USE_NATIVE_OPT0_EGGER_LOCAL_PLAN_CONTEXT:-0}}"
+ALLOW_NATIVE_OPT0_DIAGNOSTIC_VARIANTS="${FFTM_ALLOW_NATIVE_OPT0_DIAGNOSTIC_VARIANTS:-0}"
+USE_NATIVE_OPT0_MEMORY_FEASIBILITY_GUARD="${FFTM_USE_NATIVE_OPT0_MEMORY_FEASIBILITY_GUARD:-1}"
+NATIVE_OPT0_MEMORY_FEASIBILITY_RESERVE_MIB="${FFTM_NATIVE_OPT0_MEMORY_FEASIBILITY_RESERVE_MIB:-512}"
+NATIVE_OPT0_Y_EXECUTOR_VARIANTS="${FFTM_NATIVE_OPT0_Y_EXECUTOR_VARIANTS:-configured}"
+NATIVE_BACKWARD_SECOND_PEER_LOOP_MODES="${FFTM_NATIVE_BACKWARD_SECOND_PEER_LOOP_MODES:-configured}"
+ENABLE_FFTM3D_BACKEND_STAGE_TIMERS="${FFTM_ENABLE_FFTM3D_BACKEND_STAGE_TIMERS:-0}"
+ENABLE_LOCAL_FFT_DIAGNOSTICS="${FFTM_ENABLE_LOCAL_FFT_DIAGNOSTICS:-0}"
+NATIVE_OPT0_Y_MICROBENCH="${FFTM_NATIVE_OPT0_Y_MICROBENCH:-0}"
+NATIVE_OPT0_Y_CROSS_MICROBENCH="${FFTM_NATIVE_OPT0_Y_CROSS_MICROBENCH:-0}"
+NATIVE_OPT0_Y_CROSS_FACTORY_MODES="${FFTM_NATIVE_OPT0_Y_CROSS_FACTORY_MODES:-configured}"
+NATIVE_OPT0_Y_MICROBENCH_ITERATIONS="${FFTM_NATIVE_OPT0_Y_MICROBENCH_ITERATIONS:-20}"
+NATIVE_OPT0_Y_MICROBENCH_WARMUP="${FFTM_NATIVE_OPT0_Y_MICROBENCH_WARMUP:-3}"
+ENABLE_NATIVE_STAGE_TIMERS="${FFTM_ENABLE_NATIVE_STAGE_TIMERS:-0}"
+ENABLE_GPU_TELEMETRY="${FFTM_ENABLE_GPU_TELEMETRY:-0}"
+CONTIGUOUS_FORWARD_SEND_MODE="${FFTM_CONTIGUOUS_FORWARD_SEND_MODE:-single}"
+CONTIGUOUS_FORWARD_SEND_MODES="${FFTM_CONTIGUOUS_FORWARD_SEND_MODES:-configured}"
+CONTIGUOUS_FORWARD_SEND_CHUNK_MIB="${FFTM_CONTIGUOUS_FORWARD_SEND_CHUNK_MIB:-1024}"
+CONTIGUOUS_FORWARD_SEND_REGISTRATION_WARMUPS="${FFTM_CONTIGUOUS_FORWARD_SEND_REGISTRATION_WARMUPS:-0}"
+USE_LARGE_COUNT_DATATYPE_CACHE="${FFTM_USE_LARGE_COUNT_DATATYPE_CACHE:-0}"
+USE_FFT_EXEC_NO_SYNC="${FFTM_USE_FFT_EXEC_NO_SYNC:-0}"
 P2P_VARIANTS="${FFTM_P2P_VARIANTS:-configured}"
 P2P_SCHEDULERS="${FFTM_P2P_SCHEDULERS:-configured}"
 PENCIL_LAYOUTS="${FFTM_PENCIL_LAYOUTS:-configured}"
 PENCIL_PIPELINES="${FFTM_PENCIL_PIPELINES:-configured}"
 LARGE_COUNT_P2P_TRANSPORTS="${FFTM_LARGE_COUNT_P2P_TRANSPORTS:-configured}"
+FFTM_3D_BACKENDS="${FFTM_3D_BACKENDS:-${FFTM_3D_BACKEND:-configured}}"
 PENCIL_PENCIL_GRID_ORIENTATIONS="${FFTM_PENCIL_PENCIL_GRID_ORIENTATIONS:-both}"
 EXTRA_SIZES_3D="${FFTM_EXTRA_SIZES_3D-}"
 EXTRA_SIZES_3D_BY_GPU="${FFTM_EXTRA_SIZES_3D_BY_GPU-1:1050;2:1344;3:1536;4:1680;5:1800,2048;6:1920,2048;7:2025,2048;8:2100,2048}"
@@ -206,7 +251,7 @@ args=(
     --gpu-counts "${GPU_COUNTS}"
     --gpus-per-node "${GPUS_PER_NODE}"
     --srun-time "${SRUN_TIME}"
-    --srun-extra-args "${SRUN_EXTRA_ARGS}"
+    "--srun-extra-args=${SRUN_EXTRA_ARGS}"
     --gpu-name "${GPU_NAME}"
     --device-memory-mib "${DEVICE_MEMORY_MIB}"
     --benchmark-sizes-3d "${BENCHMARK_SIZES_3D}"
@@ -227,6 +272,7 @@ args=(
     --pencil-layouts "${PENCIL_LAYOUTS}"
     --pencil-pipelines "${PENCIL_PIPELINES}"
     --large-count-p2p-transports "${LARGE_COUNT_P2P_TRANSPORTS}"
+    --fftm-3d-backends "${FFTM_3D_BACKENDS}"
     --extra-sizes-3d "${EXTRA_SIZES_3D}"
     --extra-sizes-3d-by-gpu "${EXTRA_SIZES_3D_BY_GPU}"
     --fixed-scaling-sizes-3d "${FIXED_SCALING_SIZES_3D}"
@@ -236,6 +282,7 @@ args=(
     --strategies-3d "${STRATEGIES_3D}"
     --strategies-4d "${STRATEGIES_4D}"
     --pencil-pencil-grid-orientations "${PENCIL_PENCIL_GRID_ORIENTATIONS}"
+    --native-opt0-y-executor-variants "${NATIVE_OPT0_Y_EXECUTOR_VARIANTS}"
     --timeout-seconds "${TIMEOUT_SECONDS}"
 )
 
@@ -279,6 +326,171 @@ case "${USE_DIRECT_FORWARD_BYTE_RECEIVE}" in
     *) args+=(--no-direct-forward-byte-receive) ;;
 esac
 
+case "${USE_STABLE_FORWARD_BYTE_SEND_BUFFER}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-stable-forward-byte-send-buffer) ;;
+    *) args+=(--no-stable-forward-byte-send-buffer) ;;
+esac
+
+case "${USE_READY_STABLE_FORWARD_BYTE_SEND_BUFFER}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-ready-stable-forward-byte-send-buffer) ;;
+    *) args+=(--no-ready-stable-forward-byte-send-buffer) ;;
+esac
+
+case "${USE_CONTIGUOUS_FORWARD_BYTE_SEND}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-contiguous-forward-byte-send) ;;
+    *) args+=(--no-contiguous-forward-byte-send) ;;
+esac
+
+case "${USE_PHYSICAL_FORWARD_PEER_EXCHANGE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-physical-forward-peer-exchange) ;;
+    *) args+=(--no-physical-forward-peer-exchange) ;;
+esac
+
+case "${USE_NATIVE_BACKWARD_SECOND_PEER_LOOP}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-backward-second-peer-loop) ;;
+    *) args+=(--no-native-backward-second-peer-loop) ;;
+esac
+
+case "${USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-default-z-layout) ;;
+    *) args+=(--no-native-opt0-default-z-layout) ;;
+esac
+
+case "${USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-reference-y-buffer-topology) ;;
+    *) args+=(--no-native-opt0-reference-y-buffer-topology) ;;
+esac
+
+case "${USE_NATIVE_OPT0_COMPACT_Y_WORKAREA}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-compact-y-workarea) ;;
+    *) args+=(--no-native-opt0-compact-y-workarea) ;;
+esac
+
+case "${USE_NATIVE_OPT0_TIGHT_Y_PLAN_SEQUENCE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-tight-y-plan-sequence) ;;
+    *) args+=(--no-native-opt0-tight-y-plan-sequence) ;;
+esac
+
+case "${USE_NATIVE_OPT0_SHARED_Y_PLAN_HANDLES}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-shared-y-plan-handles) ;;
+    *) args+=(--no-native-opt0-shared-y-plan-handles) ;;
+esac
+
+case "${USE_NATIVE_OPT0_Y_GROUP_DEVICE_SYNC}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-y-group-device-sync) ;;
+    *) args+=(--no-native-opt0-y-group-device-sync) ;;
+esac
+
+case "${USE_NATIVE_OPT0_Y_NO_SYNC_EXEC}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-y-no-sync-exec) ;;
+    *) args+=(--no-native-opt0-y-no-sync-exec) ;;
+esac
+
+case "${USE_NATIVE_OPT0_RAW_Y_PLAN_ARRAY_EXECUTOR}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-raw-y-plan-array-executor) ;;
+    *) args+=(--no-native-opt0-raw-y-plan-array-executor) ;;
+esac
+
+case "${USE_NATIVE_OPT0_REFERENCE_Y_PLAN_LIFECYCLE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-reference-y-plan-lifecycle) ;;
+    *) args+=(--no-native-opt0-reference-y-plan-lifecycle) ;;
+esac
+
+case "${USE_NATIVE_OPT0_REFERENCE_Y_PLAN_BUNDLE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-reference-y-plan-bundle) ;;
+    *) args+=(--no-native-opt0-reference-y-plan-bundle) ;;
+esac
+
+case "${USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-raw-y-plan-bundle) ;;
+    *) args+=(--no-native-opt0-raw-y-plan-bundle) ;;
+esac
+
+case "${USE_NATIVE_OPT0_Y_PLAN_BUNDLE_STREAM_FIRST}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-y-plan-bundle-stream-first) ;;
+    *) args+=(--no-native-opt0-y-plan-bundle-stream-first) ;;
+esac
+
+case "${USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_REFERENCE_STREAMS}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-raw-y-plan-bundle-reference-streams) ;;
+    *) args+=(--no-native-opt0-raw-y-plan-bundle-reference-streams) ;;
+esac
+
+case "${USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-native-opt0-reference-local-plan-context) ;;
+    *) args+=(--no-native-opt0-reference-local-plan-context) ;;
+esac
+
+case "${ALLOW_NATIVE_OPT0_DIAGNOSTIC_VARIANTS}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--allow-native-opt0-diagnostic-variants) ;;
+    *) args+=(--no-native-opt0-diagnostic-variants) ;;
+esac
+
+case "${USE_NATIVE_OPT0_MEMORY_FEASIBILITY_GUARD}" in
+    0|false|FALSE|no|NO|off|OFF) args+=(--no-native-opt0-memory-feasibility-guard) ;;
+    *) args+=(--use-native-opt0-memory-feasibility-guard) ;;
+esac
+args+=(--native-opt0-memory-feasibility-reserve-mib "${NATIVE_OPT0_MEMORY_FEASIBILITY_RESERVE_MIB}")
+
+case "${ENABLE_FFTM3D_BACKEND_STAGE_TIMERS}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--enable-fftm3d-backend-stage-timers) ;;
+    *) args+=(--disable-fftm3d-backend-stage-timers) ;;
+esac
+
+case "${ENABLE_LOCAL_FFT_DIAGNOSTICS}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--enable-local-fft-diagnostics) ;;
+    *) args+=(--disable-local-fft-diagnostics) ;;
+esac
+
+case "${NATIVE_OPT0_Y_MICROBENCH}" in
+    1|true|TRUE|yes|YES|on|ON)
+        args+=(
+            --native-opt0-y-microbench
+            --native-opt0-y-microbench-iterations "${NATIVE_OPT0_Y_MICROBENCH_ITERATIONS}"
+            --native-opt0-y-microbench-warmup "${NATIVE_OPT0_Y_MICROBENCH_WARMUP}"
+        )
+        ;;
+esac
+
+case "${NATIVE_OPT0_Y_CROSS_MICROBENCH}" in
+    1|true|TRUE|yes|YES|on|ON)
+        args+=(
+            --native-opt0-y-cross-microbench
+            --native-opt0-y-cross-factory-modes "${NATIVE_OPT0_Y_CROSS_FACTORY_MODES}"
+            --native-opt0-y-microbench-iterations "${NATIVE_OPT0_Y_MICROBENCH_ITERATIONS}"
+            --native-opt0-y-microbench-warmup "${NATIVE_OPT0_Y_MICROBENCH_WARMUP}"
+        )
+        ;;
+esac
+
+case "${ENABLE_NATIVE_STAGE_TIMERS}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--enable-native-stage-timers) ;;
+    *) args+=(--disable-native-stage-timers) ;;
+esac
+
+case "${ENABLE_GPU_TELEMETRY}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--enable-gpu-telemetry) ;;
+    *) args+=(--disable-gpu-telemetry) ;;
+esac
+
+args+=(
+    --native-backward-second-peer-loop-modes "${NATIVE_BACKWARD_SECOND_PEER_LOOP_MODES}"
+    --contiguous-forward-send-mode "${CONTIGUOUS_FORWARD_SEND_MODE}"
+    --contiguous-forward-send-modes "${CONTIGUOUS_FORWARD_SEND_MODES}"
+    --contiguous-forward-send-chunk-mib "${CONTIGUOUS_FORWARD_SEND_CHUNK_MIB}"
+    --contiguous-forward-send-registration-warmups "${CONTIGUOUS_FORWARD_SEND_REGISTRATION_WARMUPS}"
+)
+
+case "${USE_LARGE_COUNT_DATATYPE_CACHE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-large-count-datatype-cache) ;;
+    *) args+=(--no-large-count-datatype-cache) ;;
+esac
+
+case "${USE_FFT_EXEC_NO_SYNC}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-fft-exec-no-sync) ;;
+    *) args+=(--no-fft-exec-no-sync) ;;
+esac
+
 if [[ -n "${MAX_GPUS}" ]]; then
     args+=(--max-gpus "${MAX_GPUS}")
 fi
@@ -298,6 +510,26 @@ fi
 if [[ -n "${CONTAINER_ENV}" ]]; then
     args+=(--container-env "${CONTAINER_ENV}")
 fi
+
+if [[ -n "${AUTOTUNE_CONFIG}" ]]; then
+    args+=(--fftm-autotune-config "${AUTOTUNE_CONFIG}")
+fi
+
+case "${WRITE_NATIVE_PENCIL_SCHEDULE}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--write-native-pencil-schedule) ;;
+esac
+
+if [[ -n "${NATIVE_PENCIL_REFERENCE_DIR}" ]]; then
+    args+=(--native-pencil-reference-dir "${NATIVE_PENCIL_REFERENCE_DIR}")
+fi
+
+case "${NATIVE_PENCIL_SCHEDULE_CHECK_ONLY}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--native-pencil-schedule-check-only) ;;
+esac
+
+case "${SKIP_NATIVE_PENCIL_RANK_DEVICE_CHECK}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--skip-native-pencil-rank-device-check) ;;
+esac
 
 if [[ -n "${CONTAINER_MOUNTS}" ]]; then
     IFS=',' read -r -a mount_array <<< "${CONTAINER_MOUNTS}"

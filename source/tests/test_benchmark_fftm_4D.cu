@@ -100,7 +100,8 @@ int run_benchmark_case(
     const T        normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz * options.nw );
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
-    T max_norm = T( 0 );
+    T    max_norm          = T( 0 );
+    bool validation_failed = false;
 
     for ( int iter = 0; iter < options.warmup; ++iter )
     {
@@ -169,6 +170,8 @@ int run_benchmark_case(
                 fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), iter, diff_l2, options.epsilon
             );
         }
+        if ( diff_l2 > options.epsilon )
+            validation_failed = true;
     }
 
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
@@ -193,6 +196,7 @@ int run_benchmark_case(
         row << fftm::test::detail::csv_quote( "fftm-4d" ) << ',' << comm_info.num_procs << ','
             << fftm::test::detail::csv_quote( fftm_t::strategy_name_4d() ) << ','
             << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ) ) << ','
+            << ( options.use_fft_exec_no_sync ? 1 : 0 ) << ','
             << p1 << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
             << options.nw << ',' << options.times << ',' << options.warmup << ',' << options.epsilon << ','
             << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
@@ -200,13 +204,21 @@ int run_benchmark_case(
 
         fftm::test::detail::append_csv_row(
             options.directory, "benchmark_fftm_4d.csv",
-            "benchmark,num_gpus,strategy,mode,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
+            "benchmark,num_gpus,strategy,mode,fft_exec_no_sync,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
             "max_l2_diff,directory",
             row.str()
         );
     }
 
-    return 0;
+    if ( validation_failed && comm_info.myid == 0 )
+    {
+        log.error_f(
+            "benchmark=fftm-4d validation failed: max_l2_diff=%.8e exceeded epsilon=%.8e", max_norm,
+            options.epsilon
+        );
+    }
+
+    return validation_failed ? 1 : 0;
 }
 
 template <fftm::mpi_transpose_3d_mode Mode>

@@ -40,6 +40,7 @@ struct fftm_4d_test_options
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
     bool                          use_p2p_byte_transfer       = false;
+    bool                          use_fft_exec_no_sync        = false;
 };
 
 inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d( std::size_t num_procs )
@@ -104,6 +105,7 @@ usage_fftm_4d_test( const std::string &binary_name, bool allow_strategy_all, boo
     usage += " [--use-direct-backward-receive|--no-direct-backward-receive]";
     usage += " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]";
     usage += " [--use-p2p-byte-transfer|--no-p2p-byte-transfer]";
+    usage += " [--use-fft-exec-no-sync|--no-fft-exec-no-sync]";
     usage += " [Nx Ny Nz Nw]";
     return usage;
 }
@@ -230,6 +232,16 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.use_p2p_byte_transfer = false;
             argi += 1;
         }
+        else if ( arg == "--use-fft-exec-no-sync" )
+        {
+            options.use_fft_exec_no_sync = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-fft-exec-no-sync" )
+        {
+            options.use_fft_exec_no_sync = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -260,6 +272,7 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_test_opti
     init_options.use_direct_backward_receive = options.use_direct_backward_receive;
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
     init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+    init_options.use_fft_exec_no_sync        = options.use_fft_exec_no_sync;
     return init_options;
 }
 

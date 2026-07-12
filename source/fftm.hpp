@@ -5,11 +5,13 @@
 #include <array>
 #include <cstddef>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <vector>
 
 #include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
@@ -19,12 +21,13 @@
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/safe_call.h>
+#include <scfd/utils/system_timer_event.h>
 
 #include "detail/array_arrangers.h"
 #include "detail/direct_transpose_4d.h"
 #include "detail/memory_profile_utils.h"
 #include "detail/mpi_transpose_3d.h"
-#include "detail/mpi_transpose_3d_pencil_pencil_egger_owned.h"
+#include "detail/mpi_transpose_3d_pencil_pencil_reference_owned.h"
 #include "detail/mpi_transpose_3d_pencil_pencil_pipeline.h"
 #include "detail/mpi_transpose_4d.h"
 #include "fft_direction.h"
@@ -74,8 +77,10 @@ enum class fftm_3d_pencil_pipeline
 {
     staged,
     fused,
-    egger,
-    egger_parity
+    reference,
+    reference_parity,
+    egger = reference,
+    egger_parity = reference_parity
 };
 
 template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
@@ -99,16 +104,48 @@ struct fftm_init_options
 	    bool        use_p2p_byte_transfer            = false;
 	    bool        use_persistent_p2p               = false;
 	    bool        use_ready_p2p_send               = false;
-	    bool        print_pencil_schedule            = false;
+    bool        print_pencil_schedule            = false;
     bool        use_direct_forward_byte_receive  = false;
+    bool        use_stable_forward_byte_send_buffer = false;
+    bool        use_ready_stable_forward_byte_send_buffer = false;
+    bool        use_contiguous_forward_byte_send = false;
+    bool        use_physical_forward_peer_exchange = false;
+    fftm_3d_contiguous_forward_send_mode contiguous_forward_send_mode =
+        fftm_3d_contiguous_forward_send_mode::single;
+    std::size_t contiguous_forward_send_chunk_bytes = static_cast<std::size_t>( 1 ) << 30;
     fftm_3d_large_count_p2p_transport large_count_p2p_transport =
         fftm_3d_large_count_p2p_transport::hindexed;
-	    fftm_3d_pencil_layout pencil_layout_3d        = fftm_3d_pencil_layout::auto_select;
+    bool        use_large_count_datatype_cache = false;
+    bool        use_fft_exec_no_sync = false;
+    bool        use_native_backward_second_peer_loop = false;
+    bool        use_native_opt0_default_z_layout = false;
+    bool        use_native_opt0_reference_y_buffer_topology = false;
+    bool        use_native_opt0_compact_y_workarea = false;
+    bool        use_native_opt0_tight_y_plan_sequence = false;
+    bool        use_native_opt0_shared_y_plan_handles = false;
+    bool        use_native_opt0_y_group_device_sync = false;
+    bool        use_native_opt0_y_no_sync_exec = true;
+    bool        use_native_opt0_raw_y_plan_array_executor = false;
+    bool        use_native_opt0_reference_y_plan_lifecycle = false;
+    bool        use_native_opt0_reference_y_plan_bundle = false;
+    bool        use_native_opt0_raw_y_plan_bundle = false;
+    bool        use_native_opt0_y_plan_bundle_stream_first = false;
+    bool        use_native_opt0_raw_y_plan_bundle_reference_streams = false;
+    bool        use_native_opt0_reference_local_plan_context = false;
+    bool        allow_native_opt0_diagnostic_variants = false;
+    bool        use_native_opt0_memory_feasibility_guard = true;
+    std::size_t native_opt0_memory_feasibility_reserve_bytes =
+        static_cast<std::size_t>( 512 ) * static_cast<std::size_t>( 1024 ) * static_cast<std::size_t>( 1024 );
+    fftm_3d_pencil_layout pencil_layout_3d        = fftm_3d_pencil_layout::auto_select;
     fftm_3d_pencil_pipeline pencil_pipeline_3d    = fftm_3d_pencil_pipeline::staged;
     bool        print_profile_summary_on_destroy = true;
     bool        print_profile_totals_on_destroy  = true;
     bool        print_memory_profile_on_destroy  = true;
     bool        print_memory_totals_on_destroy   = true;
+    bool        enable_local_fft_diagnostics     = false;
+    std::string local_fft_diagnostics_directory;
+    std::string local_fft_diagnostics_label;
+    bool        enable_native_stage_timers       = false;
 };
 
 namespace detail
@@ -258,11 +295,13 @@ struct fftm_3d_array_traits<Real, Complex, Memory, strategy_3d_pencil_pencil<Mod
     using stage0_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_102_t>;
     // The local Y FFT reads Y-fast storage and writes an X-fast temporary.
-    // This mirrors Egger's pencil path and avoids explicit reorder kernels
+    // This mirrors reference's pencil path and avoids explicit reorder kernels
     // before and after the second redistribution.
     using stage1_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_201_t>;
-    using complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_120_t>;
+    // Optimized pencil-pencil stores the public spectral tensor in reference's
+    // z-fast (x,y,z) physical order.
+    using complex_array_t = scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_210_t>;
     using x_fft_complex_array_t =
         scfd::arrays::tensor_array_nd<Complex, 3, Memory, scfd::arrays::custom_arranger_012_t>;
 };
@@ -364,20 +403,20 @@ public:
     explicit fftm( const MPIComm &mpi, const Log &log = Log() )
         : mpi_( mpi ), log_( log ), partitioning_( mpi ), same_x_( mpi, log ), same_z_( mpi, log ),
           pencil_pencil_pipeline_( base_fft_, same_x_, same_z_, profiler_ ),
-          pencil_pencil_egger_owned_( base_fft_, mpi, log, profiler_ ), same_xy_( mpi, log ), same_xw_( mpi, log ),
+          pencil_pencil_reference_owned_( base_fft_, mpi, log, profiler_ ), same_xy_( mpi, log ), same_xw_( mpi, log ),
           same_zw_( mpi, log )
     {
         for_each_3d_.block_size = 128;
         for_each_4d_.block_size = 128;
         same_x_.use_external_work_area();
         same_z_.use_external_work_area();
-        pencil_pencil_egger_owned_.use_external_work_area();
+        pencil_pencil_reference_owned_.use_external_work_area();
         same_xy_.use_external_work_area();
         same_xw_.use_external_work_area();
         same_zw_.use_external_work_area();
         same_x_.use_external_host_work_area();
         same_z_.use_external_host_work_area();
-        pencil_pencil_egger_owned_.use_external_host_work_area();
+        pencil_pencil_reference_owned_.use_external_host_work_area();
         same_xy_.use_external_host_work_area();
         same_xw_.use_external_host_work_area();
         same_zw_.use_external_host_work_area();
@@ -422,6 +461,12 @@ public:
     std::tuple<std::size_t, std::size_t, std::size_t> get_local_output_sizes() const
     {
         ensure_dimension_( 3 );
+        if ( strategy_family_3d == transform_strategy_3d::pencil_pencil && strategy_3d_optimized_layout )
+        {
+            return std::make_tuple(
+                output_dim_.size_x[0], output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_]
+            );
+        }
         return std::make_tuple( output_dim_.size_x[0], output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_] );
     }
 
@@ -521,6 +566,64 @@ public:
         return collect_memory_profile_buckets_();
     }
 
+    void begin_native_stage_timing_iteration( int iteration )
+    {
+        pencil_pencil_reference_owned_.begin_native_stage_timing_iteration( iteration );
+    }
+
+    void end_native_stage_timing_iteration()
+    {
+        pencil_pencil_reference_owned_.end_native_stage_timing_iteration();
+    }
+
+    const std::vector<fftm_native_stage_timing> &native_stage_timings() const
+    {
+        return pencil_pencil_reference_owned_.native_stage_timings();
+    }
+
+    void run_native_opt0_y_same_buffer_microbench(
+        complex_array_t<3> &spectral_workspace, std::size_t iterations, std::size_t warmup
+    )
+    {
+        ensure_dimension_( 3 );
+        if ( strategy_family_3d != transform_strategy_3d::pencil_pencil )
+        {
+            throw std::logic_error( "native opt0 Y microbenchmark requires pencil-pencil strategy" );
+        }
+        if ( !native_opt0_default_z_layout_enabled_() )
+        {
+            throw std::logic_error( "native opt0 Y microbenchmark requires --use-native-opt0-default-z-layout" );
+        }
+        const bool have_named_y_plans =
+            !native_opt0_forward_y_plan_names_.empty() && !native_opt0_inverse_y_plan_names_.empty();
+        const bool have_bundle_y_plans =
+            native_opt0_y_plan_bundle_enabled_() &&
+            native_opt0_y_plan_array_bundle_ != base_fft_type::invalid_c2c_plan_array_id();
+        if ( native_opt0_y_plan_offsets_.empty() || ( !have_named_y_plans && !have_bundle_y_plans ) )
+        {
+            throw std::logic_error( "native opt0 Y microbenchmark requires initialized native opt0 Y plans" );
+        }
+
+        if ( native_opt0_reference_y_buffer_topology_enabled_() )
+        {
+            SCFD_SAFE_CALL( bind_native_opt0_reference_forward_views_( spectral_workspace ) );
+        }
+        else
+        {
+            SCFD_SAFE_CALL( bind_native_opt0_zfast_3d_views_() );
+        }
+
+        const auto diagnostic_raw_bundle = make_native_opt0_y_diagnostic_raw_bundle_();
+        complex   *production_backward_y_output_ptr =
+            native_opt0_reference_y_buffer_topology_enabled_() ? native_opt0_reference_backward_y_output_ptr_() : nullptr;
+        pencil_pencil_reference_owned_.dump_local_fft_plan_descriptors();
+        SCFD_SAFE_CALL( pencil_pencil_reference_owned_.run_native_opt0_y_same_buffer_microbench(
+            base_fft_, native_opt0_forward_y_plan_names_, native_opt0_inverse_y_plan_names_,
+            native_opt0_y_plan_offsets_, stage1_zfast_3d_, stage1_yfft_zfast_3d_, diagnostic_raw_bundle,
+            production_backward_y_output_ptr, iterations, warmup
+        ) );
+    }
+
 private:
     using strategy_family_3d_tag = std::integral_constant<transform_strategy_3d, strategy_family_3d>;
     using strategy_family_4d_tag = std::integral_constant<transform_strategy_4d_mpi, strategy_family_4d>;
@@ -537,6 +640,9 @@ private:
     using stage0_complex3_t = typename traits_3d_t::stage0_complex_array_t;
     using complex_array3_t  = typename traits_3d_t::complex_array_t;
     using x_fft_complex3_t  = typename traits_3d_t::x_fft_complex_array_t;
+    using zfast_complex3_t =
+        scfd::arrays::tensor_array_nd<complex, 3, memory_t, scfd::arrays::custom_arranger_210_t>;
+    using output_zfast_complex3_t = zfast_complex3_t;
     using stage1_complex3_t = typename std::conditional<
         strategy_family_3d == transform_strategy_3d::pencil_pencil, typename traits_3d_t::stage1_complex_array_t,
         complex_array3_t>::type;
@@ -555,8 +661,9 @@ private:
     using same_z_t                   = ::fftm::mpi_transpose_3d_same_z<complex, Backend, MPIComm, Log, runtime_api_t>;
     using pencil_pencil_pipeline_t =
         ::fftm::detail::mpi_transpose_3d_pencil_pencil_pipeline<BaseFFT, same_x_t, same_z_t, optional_profiler_t>;
-    using pencil_pencil_egger_owned_t = ::fftm::detail::mpi_transpose_3d_pencil_pencil_egger_owned<
+    using pencil_pencil_reference_owned_t = ::fftm::detail::mpi_transpose_3d_pencil_pencil_reference_owned<
         BaseFFT, complex, Backend, MPIComm, Log, runtime_api_t, optional_profiler_t>;
+    using pencil_pencil_plan_state_t = ::fftm::detail::mpi_transpose_3d_pencil_pencil_plan_state;
     using same_xy_t        = ::fftm::detail::mpi_transpose_4d_same_xy<complex, Backend, MPIComm, Log, runtime_api_t>;
     using same_xw_t        = ::fftm::detail::mpi_transpose_4d_same_xw<complex, Backend, MPIComm, Log, runtime_api_t>;
     using same_zw_t        = ::fftm::detail::mpi_transpose_4d_same_zw<complex, Backend, MPIComm, Log, runtime_api_t>;
@@ -592,27 +699,154 @@ private:
         return static_cast<void *>( static_cast<char *>( shared_host_work_buffer_.naive_ptr() ) + offset );
     }
 
+    std::size_t native_opt0_reference_domain_bytes_() const
+    {
+        return pencil_pencil_reference_owned_.native_opt0_reference_domain_size_bytes();
+    }
+
+    complex *native_opt0_reference_slot_ptr_( std::size_t slot ) const
+    {
+        const std::size_t offset = slot * native_opt0_reference_domain_bytes_();
+        return reinterpret_cast<complex *>( shared_work_ptr_( offset ) );
+    }
+
+    complex *native_opt0_reference_backward_y_output_ptr_() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return reinterpret_cast<complex *>( shared_work_ptr_( native_opt0_reference_backward_y_output_offset_bytes_() ) );
+#else
+        return native_opt0_reference_slot_ptr_( 0 );
+#endif
+    }
+
+    std::size_t native_opt0_y_reference_workspace_total_bytes_() const
+    {
+        if ( !native_opt0_default_z_layout_enabled_() )
+            return 0;
+        const std::size_t reference_work_offset =
+            pencil_pencil_reference_owned_.native_opt0_y_reference_work_base_offset_bytes();
+        const std::size_t total = reference_work_offset + native_opt0_reference_fft_work_span_();
+        return align_up_( total, 256 );
+    }
+
+    std::size_t native_opt0_reference_backward_y_output_offset_bytes_() const
+    {
+        const std::size_t work_total = native_opt0_y_reference_workspace_total_bytes_();
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        if ( native_opt0_compact_y_workarea_enabled_() )
+        {
+            const std::size_t domain_bytes = native_opt0_reference_domain_bytes_();
+            if ( domain_bytes > std::numeric_limits<std::size_t>::max() / 3 )
+                throw std::overflow_error( "native opt0 compact backward-Y output offset overflows size_t" );
+            return std::max( work_total, 3 * domain_bytes );
+        }
+#endif
+        return work_total;
+    }
+
+    std::size_t native_opt0_y_parallel_work_size_() const
+    {
+        std::size_t total = native_opt0_y_reference_workspace_total_bytes_();
+        if ( native_opt0_reference_y_buffer_topology_enabled_() )
+        {
+            const std::size_t backward_output_offset = native_opt0_reference_backward_y_output_offset_bytes_();
+            const std::size_t domain_bytes = native_opt0_reference_domain_bytes_();
+            if ( backward_output_offset > std::numeric_limits<std::size_t>::max() - domain_bytes )
+                throw std::overflow_error( "native opt0 compact Y workspace size overflows size_t" );
+            total = std::max( total, backward_output_offset + domain_bytes );
+        }
+        return align_up_( total, 256 );
+    }
+
+    std::size_t native_opt0_y_plan_work_stride_() const
+    {
+        if ( native_opt0_y_plan_bundle_enabled_() )
+        {
+            if ( native_opt0_y_plan_array_bundle_ == base_fft_type::invalid_c2c_plan_array_id() )
+                return 0;
+            return base_fft_.c2c_plan_array_work_size( native_opt0_y_plan_array_bundle_ );
+        }
+        if ( native_opt0_forward_y_plan_names_.size() != native_opt0_inverse_y_plan_names_.size() )
+            throw std::logic_error( "native opt0 y-plan forward/inverse count mismatch" );
+
+        std::size_t work_stride = 0;
+        for ( std::size_t i = 0; i < native_opt0_forward_y_plan_names_.size(); ++i )
+        {
+            const std::size_t forward_work = base_fft_.work_size( native_opt0_forward_y_plan_names_[i] );
+            const std::size_t inverse_work = base_fft_.work_size( native_opt0_inverse_y_plan_names_[i] );
+            work_stride = std::max( work_stride, std::max( forward_work, inverse_work ) );
+        }
+        return work_stride;
+    }
+
+    std::size_t native_opt0_reference_fft_work_span_() const
+    {
+        const std::size_t y_work_stride = native_opt0_y_plan_work_stride_();
+        const std::size_t y_plan_count  = native_opt0_y_plan_bundle_enabled_() &&
+                                          native_opt0_y_plan_array_bundle_ != base_fft_type::invalid_c2c_plan_array_id()
+                                              ? base_fft_.c2c_plan_array_size( native_opt0_y_plan_array_bundle_ )
+                                              : native_opt0_forward_y_plan_names_.size();
+        if ( y_work_stride != 0 && y_plan_count > std::numeric_limits<std::size_t>::max() / y_work_stride )
+            throw std::overflow_error( "native opt0 y-plan workspace span overflows size_t" );
+
+        std::size_t span = native_opt0_reference_domain_bytes_();
+        span = std::max( span, base_fft_.work_size( "forward_z" ) );
+        span = std::max( span, base_fft_.work_size( "inverse_z" ) );
+        span = std::max( span, base_fft_.work_size( "forward_x" ) );
+        span = std::max( span, base_fft_.work_size( "inverse_x" ) );
+        span = std::max( span, y_plan_count * y_work_stride );
+        return span;
+    }
+
+    void bind_native_opt0_y_parallel_fft_plans_()
+    {
+        if ( !native_opt0_default_z_layout_enabled_() )
+            return;
+        const std::size_t reference_work_offset =
+            pencil_pencil_reference_owned_.native_opt0_y_reference_work_base_offset_bytes();
+        void *reference_work_area = shared_work_ptr_( reference_work_offset );
+        base_fft_.set_work_area( "forward_z", reference_work_area );
+        base_fft_.set_work_area( "inverse_z", reference_work_area );
+        base_fft_.set_work_area( "forward_x", reference_work_area );
+        base_fft_.set_work_area( "inverse_x", reference_work_area );
+        if ( native_opt0_y_plan_bundle_enabled_() )
+        {
+            SCFD_SAFE_CALL( pencil_pencil_reference_owned_.bind_native_opt0_y_plan_array_bundle(
+                base_fft_, native_opt0_y_plan_array_bundle_, native_opt0_y_plan_work_stride_()
+            ) );
+        }
+        else
+        {
+            SCFD_SAFE_CALL( pencil_pencil_reference_owned_.bind_native_opt0_y_parallel_fft_plans(
+                base_fft_, native_opt0_forward_y_plan_names_, native_opt0_inverse_y_plan_names_,
+                native_opt0_y_plan_work_stride_()
+            ) );
+        }
+    }
+
     void activate_shared_work_area_()
     {
         const std::size_t fft_work_size       = base_fft_.activate_work_size();
         const std::size_t transpose_work_size = std::max(
             std::max(
                 std::max( same_x_.get_work_size_bytes(), same_z_.get_work_size_bytes() ),
-                pencil_pencil_egger_owned_.get_work_size_bytes()
+                pencil_pencil_reference_owned_.get_work_size_bytes()
             ),
             std::max(
                 same_xy_.get_work_size_bytes(),
                 std::max( same_xw_.get_work_size_bytes(), same_zw_.get_work_size_bytes() )
             )
         );
-        shared_work_size_ = align_up_( std::max( fft_work_size, transpose_work_size ), 256 );
+        const std::size_t native_opt0_y_work_size = native_opt0_y_parallel_work_size_();
+        shared_work_size_ = align_up_( std::max( std::max( fft_work_size, transpose_work_size ), native_opt0_y_work_size ), 256 );
+        preflight_native_opt0_shared_work_allocation_( shared_work_size_ );
         shared_work_buffer_.require_size_bytes( shared_work_size_ );
         shared_work_buffer_.activate();
 
         const std::size_t transpose_host_work_size = std::max(
             std::max(
                 std::max( same_x_.get_host_work_size_bytes(), same_z_.get_host_work_size_bytes() ),
-                pencil_pencil_egger_owned_.get_host_work_size_bytes()
+                pencil_pencil_reference_owned_.get_host_work_size_bytes()
             ),
             std::max(
                 same_xy_.get_host_work_size_bytes(),
@@ -630,16 +864,17 @@ private:
         base_fft_.set_external_work_area( work_area );
         same_x_.set_external_work_area( work_area );
         same_z_.set_external_work_area( work_area );
-        pencil_pencil_egger_owned_.set_external_work_area( work_area );
+        pencil_pencil_reference_owned_.set_external_work_area( work_area );
         same_xy_.set_external_work_area( work_area );
         same_xw_.set_external_work_area( work_area );
         same_zw_.set_external_work_area( work_area );
+        SCFD_SAFE_CALL( bind_native_opt0_y_parallel_fft_plans_() );
         if ( shared_host_work_size_ != 0 )
         {
             void *host_work_area = shared_host_work_ptr_();
             same_x_.set_external_host_work_area( host_work_area );
             same_z_.set_external_host_work_area( host_work_area );
-            pencil_pencil_egger_owned_.set_external_host_work_area( host_work_area );
+            pencil_pencil_reference_owned_.set_external_host_work_area( host_work_area );
             same_xy_.set_external_host_work_area( host_work_area );
             same_xw_.set_external_host_work_area( host_work_area );
             same_zw_.set_external_host_work_area( host_work_area );
@@ -648,19 +883,107 @@ private:
         update_memory_profile_for_current_dim_();
     }
 
-    static bool is_egger_owned_pencil_pipeline_( fftm_3d_pencil_pipeline pipeline )
+    void preflight_native_opt0_shared_work_allocation_( std::size_t allocation_bytes ) const
     {
-        return pipeline == fftm_3d_pencil_pipeline::egger || pipeline == fftm_3d_pencil_pipeline::egger_parity;
+        if ( !native_opt0_reference_y_buffer_topology_enabled_() ||
+             !init_options_.use_native_opt0_memory_feasibility_guard )
+        {
+            return;
+        }
+
+        const auto mem_info = runtime_api_t::get_device_memory_info();
+        if ( !mem_info.free_bytes_known )
+        {
+            return;
+        }
+
+        const std::size_t reserve_bytes = init_options_.native_opt0_memory_feasibility_reserve_bytes;
+        if ( reserve_bytes > std::numeric_limits<std::size_t>::max() - allocation_bytes )
+        {
+            throw std::overflow_error( "native opt0 memory feasibility guard overflows size_t" );
+        }
+        const std::size_t required_bytes = allocation_bytes + reserve_bytes;
+        if ( mem_info.free_bytes >= required_bytes )
+        {
+            return;
+        }
+
+        std::ostringstream ss;
+        ss << "FFTM native opt0 memory feasibility guard failed before allocating shared workspace: free="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( mem_info.free_bytes ) )
+           << " MiB, required="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( required_bytes ) )
+           << " MiB, shared_workspace="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( allocation_bytes ) )
+           << " MiB, reserve="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( reserve_bytes ) )
+           << " MiB. Use pencil layout opt1 for this GPU count/size, or explicitly try compact native opt0 "
+              "only when it fits the target device memory.";
+        throw std::runtime_error( ss.str() );
     }
 
-    static bool is_egger_parity_pencil_pipeline_( fftm_3d_pencil_pipeline pipeline )
+    static bool is_reference_owned_pencil_pipeline_( fftm_3d_pencil_pipeline pipeline )
     {
-        return pipeline == fftm_3d_pencil_pipeline::egger_parity;
+        return pipeline == fftm_3d_pencil_pipeline::reference || pipeline == fftm_3d_pencil_pipeline::reference_parity;
+    }
+
+    static bool is_reference_parity_pencil_pipeline_( fftm_3d_pencil_pipeline pipeline )
+    {
+        return pipeline == fftm_3d_pencil_pipeline::reference_parity;
+    }
+
+    ::fftm::detail::pencil_pencil_plan_layout native_pencil_pencil_plan_layout_() const
+    {
+        if ( init_options_.pencil_layout_3d == fftm_3d_pencil_layout::opt1 )
+        {
+            return ::fftm::detail::pencil_pencil_plan_layout::opt1;
+        }
+        if ( init_options_.pencil_layout_3d == fftm_3d_pencil_layout::opt0 )
+        {
+            return ::fftm::detail::pencil_pencil_plan_layout::opt0;
+        }
+        if ( init_options_.pencil_layout_3d == fftm_3d_pencil_layout::auto_select && strategy_3d_optimized_layout )
+        {
+            const processor_grid pg = partitioning_.get_process_grid();
+            return pg.p1 > pg.p2 && pg.p2 > 1 ? ::fftm::detail::pencil_pencil_plan_layout::opt0
+                                               : ::fftm::detail::pencil_pencil_plan_layout::opt1;
+        }
+        return ::fftm::detail::pencil_pencil_plan_layout::opt0;
+    }
+
+    void init_native_pencil_pencil_plan_state_()
+    {
+        processor_grid grid = partitioning_.get_process_grid();
+        global_sizes   sizes;
+        sizes.init( nx_, ny_, nz_ );
+        pencil_pencil_plan_state_.init(
+            grid, sizes, mpi_.myid, mpi_.num_procs, native_pencil_pencil_plan_layout_(), sizeof( complex )
+        );
+
+        if ( pencil_pencil_plan_state_.rank_i() != myid_i_ || pencil_pencil_plan_state_.rank_j() != myid_j_ )
+            throw std::logic_error( "fftm native pencil plan-state rank mismatch" );
     }
 
     static fftm_init_options normalize_init_options_( fftm_init_options options )
     {
-        if ( is_egger_parity_pencil_pipeline_( options.pencil_pipeline_3d ) )
+        if ( native_opt0_diagnostic_variant_requested_( options ) &&
+             !options.allow_native_opt0_diagnostic_variants )
+        {
+            throw std::logic_error(
+                "FFTM native opt0 diagnostic Y executor variants require "
+                "fftm_init_options::allow_native_opt0_diagnostic_variants=true. "
+                "Use the production native opt0 path without reference/bundle/context diagnostic flags."
+            );
+        }
+        if ( options.use_fft_exec_no_sync && !options.allow_native_opt0_diagnostic_variants )
+        {
+            throw std::logic_error(
+                "FFTM generic FFT exec no-sync is diagnostic-only. It can race later MPI/copy stages unless every "
+                "consumer has an explicit stage-boundary synchronization. Use the native opt0 Y no-sync path for "
+                "production, or set fftm_init_options::allow_native_opt0_diagnostic_variants=true for diagnostics."
+            );
+        }
+        if ( is_reference_parity_pencil_pipeline_( options.pencil_pipeline_3d ) )
         {
             options.use_direct_backward_receive = false;
             options.direct_p2p_cuda_aware       = true;
@@ -670,6 +993,16 @@ private:
             options.use_ready_p2p_send          = false;
         }
         return options;
+    }
+
+    static bool native_opt0_diagnostic_variant_requested_( const fftm_init_options &options )
+    {
+        return options.use_native_opt0_reference_y_plan_lifecycle ||
+               options.use_native_opt0_reference_y_plan_bundle ||
+               options.use_native_opt0_raw_y_plan_bundle ||
+               options.use_native_opt0_y_plan_bundle_stream_first ||
+               options.use_native_opt0_raw_y_plan_bundle_reference_streams ||
+               options.use_native_opt0_reference_local_plan_context;
     }
 
     void configure_profiling_( const fftm_init_options &options )
@@ -686,7 +1019,7 @@ private:
         configure_memory_profiling_( init_options_ );
         same_x_.set_profiler( profiler_.native_ptr() );
         same_z_.set_profiler( profiler_.native_ptr() );
-        pencil_pencil_egger_owned_.set_profiler( profiler_.native_ptr() );
+        pencil_pencil_reference_owned_.set_profiler( profiler_.native_ptr() );
         same_xy_.set_profiler( profiler_.native_ptr() );
         same_xw_.set_profiler( profiler_.native_ptr() );
         same_zw_.set_profiler( profiler_.native_ptr() );
@@ -696,33 +1029,89 @@ private:
         same_z_.set_direct_transfer_options(
             init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
         );
-        pencil_pencil_egger_owned_.set_direct_transfer_options(
+        pencil_pencil_reference_owned_.set_direct_transfer_options(
             init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
         );
         same_x_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
         same_z_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
-        pencil_pencil_egger_owned_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
+        pencil_pencil_reference_owned_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
         same_x_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
         same_z_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
-        pencil_pencil_egger_owned_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
+        pencil_pencil_reference_owned_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
         same_x_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
         same_z_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
-	        pencil_pencil_egger_owned_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
-	        pencil_pencil_egger_owned_.set_ready_p2p_send_enabled( init_options_.use_ready_p2p_send );
-	        pencil_pencil_egger_owned_.set_schedule_dump_enabled( init_options_.print_pencil_schedule );
-        pencil_pencil_egger_owned_.set_direct_forward_byte_receive_enabled(
+	        pencil_pencil_reference_owned_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
+	        pencil_pencil_reference_owned_.set_ready_p2p_send_enabled( init_options_.use_ready_p2p_send );
+	        pencil_pencil_reference_owned_.set_schedule_dump_enabled( init_options_.print_pencil_schedule );
+        pencil_pencil_reference_owned_.set_direct_forward_byte_receive_enabled(
             init_options_.use_direct_forward_byte_receive
         );
-        pencil_pencil_egger_owned_.set_large_count_p2p_transport( init_options_.large_count_p2p_transport );
-        const bool auto_uses_optimized_pencil_layout =
-            init_options_.pencil_layout_3d == fftm_3d_pencil_layout::auto_select && strategy_3d_optimized_layout;
-        pencil_pencil_egger_owned_.set_pencil_layout_selector(
-            init_options_.pencil_layout_3d == fftm_3d_pencil_layout::opt1 || auto_uses_optimized_pencil_layout ? 2 :
-            init_options_.pencil_layout_3d == fftm_3d_pencil_layout::opt0                                      ? 1 :
-                                                                                                                  0
+        pencil_pencil_reference_owned_.set_stable_forward_byte_send_buffer_enabled(
+            init_options_.use_stable_forward_byte_send_buffer
         );
-        pencil_pencil_egger_owned_.set_egger_parity_enabled(
-            is_egger_parity_pencil_pipeline_( init_options_.pencil_pipeline_3d )
+        pencil_pencil_reference_owned_.set_ready_stable_forward_byte_send_buffer_enabled(
+            init_options_.use_ready_stable_forward_byte_send_buffer
+        );
+        pencil_pencil_reference_owned_.set_contiguous_forward_byte_send_enabled(
+            init_options_.use_contiguous_forward_byte_send
+        );
+        pencil_pencil_reference_owned_.set_physical_forward_peer_exchange_enabled(
+            init_options_.use_physical_forward_peer_exchange
+        );
+        pencil_pencil_reference_owned_.set_contiguous_forward_send_mode(
+            init_options_.contiguous_forward_send_mode
+        );
+        pencil_pencil_reference_owned_.set_contiguous_forward_send_chunk_bytes(
+            init_options_.contiguous_forward_send_chunk_bytes
+        );
+        pencil_pencil_reference_owned_.set_large_count_p2p_transport( init_options_.large_count_p2p_transport );
+        pencil_pencil_reference_owned_.set_large_count_datatype_cache_enabled(
+            init_options_.use_large_count_datatype_cache
+        );
+        pencil_pencil_reference_owned_.set_native_backward_second_peer_loop_enabled(
+            init_options_.use_native_backward_second_peer_loop
+        );
+        pencil_pencil_reference_owned_.set_local_fft_diagnostics(
+            init_options_.enable_local_fft_diagnostics, init_options_.local_fft_diagnostics_directory,
+            init_options_.local_fft_diagnostics_label
+        );
+        pencil_pencil_reference_owned_.set_native_stage_timers_enabled( init_options_.enable_native_stage_timers );
+        pencil_pencil_reference_owned_.set_native_opt0_shared_y_plan_handles_enabled(
+            init_options_.use_native_opt0_shared_y_plan_handles
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_y_group_device_sync_enabled(
+            init_options_.use_native_opt0_y_group_device_sync
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_y_no_sync_exec_enabled(
+            init_options_.use_native_opt0_y_no_sync_exec
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_raw_y_plan_array_executor_enabled(
+            init_options_.use_native_opt0_raw_y_plan_array_executor
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_reference_y_plan_lifecycle_enabled(
+            init_options_.use_native_opt0_reference_y_plan_lifecycle
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_reference_y_plan_bundle_enabled(
+            init_options_.use_native_opt0_reference_y_plan_bundle
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_raw_y_plan_bundle_enabled(
+            init_options_.use_native_opt0_raw_y_plan_bundle
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_y_plan_bundle_stream_first_enabled(
+            init_options_.use_native_opt0_y_plan_bundle_stream_first
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_raw_y_plan_bundle_reference_streams_enabled(
+            init_options_.use_native_opt0_raw_y_plan_bundle_reference_streams
+        );
+        pencil_pencil_reference_owned_.set_native_opt0_reference_local_plan_context_enabled(
+            init_options_.use_native_opt0_reference_local_plan_context
+        );
+        const auto selected_pencil_layout = native_pencil_pencil_plan_layout_();
+        pencil_pencil_reference_owned_.set_pencil_layout_selector(
+            selected_pencil_layout == ::fftm::detail::pencil_pencil_plan_layout::opt0 ? 1 : 2
+        );
+        pencil_pencil_reference_owned_.set_reference_parity_enabled(
+            is_reference_parity_pencil_pipeline_( init_options_.pencil_pipeline_3d )
         );
     }
 
@@ -738,10 +1127,11 @@ private:
         }
 
         base_fft_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/base_fft" );
+        base_fft_.set_hot_exec_no_sync_enabled( init_options_.use_fft_exec_no_sync );
         same_x_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_x" );
         same_z_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_z" );
-        pencil_pencil_egger_owned_.set_memory_profiler(
-            memory_profiler_.native_ptr(), "fftm/transpose_3d_pencil_pencil_egger_owned"
+        pencil_pencil_reference_owned_.set_memory_profiler(
+            memory_profiler_.native_ptr(), "fftm/transpose_3d_pencil_pencil_reference_owned"
         );
         same_xy_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xy" );
         same_xw_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_4d_same_xw" );
@@ -970,6 +1360,106 @@ private:
             throw std::logic_error( "This 4D strategy currently requires p3 == 1." );
     }
 
+    bool native_opt0_default_z_layout_enabled_() const
+    {
+        if ( !init_options_.use_native_opt0_default_z_layout )
+        {
+            return false;
+        }
+        if ( strategy_family_3d != transform_strategy_3d::pencil_pencil || !strategy_3d_optimized_layout )
+        {
+            return false;
+        }
+        if ( !init_options_.use_optimized ||
+             native_pencil_pencil_plan_layout_() != ::fftm::detail::pencil_pencil_plan_layout::opt0 )
+        {
+            return false;
+        }
+        if ( !is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+        {
+            return false;
+        }
+        const processor_grid pg = partitioning_.get_process_grid();
+        return pg.p1 > 1 && pg.p2 > 1;
+    }
+
+    bool native_opt0_reference_y_buffer_topology_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               init_options_.use_native_opt0_reference_y_buffer_topology;
+    }
+
+    bool native_opt0_reference_scratch_aliasing_enabled_() const
+    {
+        return native_opt0_reference_y_buffer_topology_enabled_();
+    }
+
+    bool native_opt0_compact_y_workarea_enabled_() const
+    {
+        return native_opt0_reference_y_buffer_topology_enabled_() &&
+               init_options_.use_native_opt0_compact_y_workarea;
+    }
+
+    bool native_opt0_tight_y_plan_sequence_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               init_options_.use_native_opt0_tight_y_plan_sequence;
+    }
+
+    bool native_opt0_y_group_device_sync_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               init_options_.use_native_opt0_y_group_device_sync;
+    }
+
+    bool native_opt0_shared_y_plan_handles_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               init_options_.use_native_opt0_shared_y_plan_handles;
+    }
+
+    bool native_opt0_raw_y_plan_array_executor_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               init_options_.use_native_opt0_raw_y_plan_array_executor;
+    }
+
+    bool native_opt0_reference_y_plan_bundle_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               init_options_.use_native_opt0_reference_y_plan_bundle;
+    }
+
+    bool native_opt0_raw_y_plan_bundle_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               init_options_.use_native_opt0_raw_y_plan_bundle;
+    }
+
+    bool native_opt0_y_plan_bundle_enabled_() const
+    {
+        return native_opt0_reference_y_plan_bundle_enabled_() || native_opt0_raw_y_plan_bundle_enabled_() ||
+               native_opt0_reference_local_plan_context_enabled_();
+    }
+
+    bool native_opt0_y_plan_bundle_stream_first_enabled_() const
+    {
+        return native_opt0_y_plan_bundle_enabled_() && init_options_.use_native_opt0_y_plan_bundle_stream_first;
+    }
+
+    bool native_opt0_raw_y_plan_bundle_reference_streams_enabled_() const
+    {
+        return native_opt0_raw_y_plan_bundle_enabled_() &&
+               init_options_.use_native_opt0_raw_y_plan_bundle_reference_streams;
+    }
+
+    bool native_opt0_reference_local_plan_context_enabled_() const
+    {
+        return native_opt0_default_z_layout_enabled_() &&
+               is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) &&
+               init_options_.use_native_opt0_reference_local_plan_context;
+    }
+
     void init_(
         std::integral_constant<std::size_t, 3>, const processor_grid &pg, const global_sizes &gs,
         const fftm_init_options &options
@@ -1002,6 +1492,10 @@ private:
         SCFD_SAFE_CALL( init_strategy_( strategy_family_3d_tag() ) );
         SCFD_SAFE_CALL( add_plans_( strategy_family_3d_tag() ) );
         SCFD_SAFE_CALL( activate_shared_work_area_() );
+        if ( init_options_.enable_local_fft_diagnostics )
+        {
+            SCFD_SAFE_CALL( pencil_pencil_reference_owned_.dump_local_fft_plan_descriptors() );
+        }
         init_done_ = true;
     }
 
@@ -1065,7 +1559,7 @@ private:
         //   real(x,y,z)   -> z + Nz * (y + Ny_local * x)
         // The R2C output keeps the existing Y-fast half-spectrum layout:
         //   half(x,y,kz) -> y + Ny_local * (x + X * kz)
-        // This matches the Egger pencil plan shape and removes the large
+        // This matches the reference pencil plan shape and removes the large
         // strided-Z access pattern from the first local transform.
         const long long int batch       = x_size * y_size;
         const long long int output_step = x_size * y_size;
@@ -1081,11 +1575,26 @@ private:
         );
     }
 
+    void add_plan_z_r2c_default_layout_(
+        const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int y_size
+    )
+    {
+        const long long int batch = x_size * y_size;
+
+        base_fft_.template add_plan_1D_default<::fftm::direction::R2C>(
+            forward_name, static_cast<long long int>( nz_ ), batch
+        );
+
+        base_fft_.template add_plan_1D_default<::fftm::direction::C2R>(
+            inverse_name, static_cast<long long int>( nz_ ), batch
+        );
+    }
+
     void add_plan_yz_r2c_slab_optimized_(
         const std::string &forward_name, const std::string &inverse_name, long long int x_size
     )
     {
-        // Egger-style slab path: each local [y,z] plane is contiguous, so the
+        // reference-style slab path: each local [y,z] plane is contiguous, so the
         // first transform is a true batched 2D transform with unit stride.
         const long long int real_dist    = static_cast<long long int>( ny_ * nz_ );
         const long long int complex_dist = static_cast<long long int>( ny_ * nz_half_ );
@@ -1137,6 +1646,121 @@ private:
 
         base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
             inverse_name, static_cast<long long int>( ny_ ), output_step, output_step, 1, 1, 1, input_dist, batch
+        );
+    }
+
+    void add_plan_y_c2c_native_opt0_z_fast_(
+        const std::string &forward_prefix, const std::string &inverse_prefix, long long int x_size,
+        long long int z_size
+    )
+    {
+        native_opt0_forward_y_plan_names_.clear();
+        native_opt0_inverse_y_plan_names_.clear();
+        native_opt0_y_plan_offsets_.clear();
+        native_opt0_y_plan_array_bundle_ = base_fft_type::invalid_c2c_plan_array_id();
+
+        const long long int num_plans = std::min( x_size, z_size );
+        const long long int batch     = std::max( x_size, z_size );
+        const long long int nembed    = ( x_size <= z_size ) ? 1 : z_size * static_cast<long long int>( ny_ );
+        const long long int offset    = ( x_size <= z_size ) ? z_size * static_cast<long long int>( ny_ ) : 1;
+
+        if ( native_opt0_y_plan_bundle_enabled_() )
+        {
+            native_opt0_y_plan_offsets_.reserve( static_cast<std::size_t>( num_plans ) );
+            for ( long long int i = 0; i < num_plans; ++i )
+            {
+                native_opt0_y_plan_offsets_.push_back( static_cast<std::size_t>( i * offset ) );
+            }
+            if ( native_opt0_raw_y_plan_bundle_enabled_() )
+            {
+                if ( native_opt0_raw_y_plan_bundle_reference_streams_enabled_() )
+                {
+                    const auto stream_handles =
+                        pencil_pencil_reference_owned_.template native_opt0_y_stream_handles<base_fft_type>(
+                            native_opt0_y_plan_offsets_.size()
+                        );
+                    native_opt0_y_plan_array_bundle_ = base_fft_.make_raw_c2c_plan_array_1D_with_streams(
+                        static_cast<long long int>( ny_ ), nembed, z_size, nembed, nembed, z_size, nembed, batch,
+                        native_opt0_y_plan_offsets_, stream_handles
+                    );
+                }
+                else
+                {
+                    native_opt0_y_plan_array_bundle_ = base_fft_.make_raw_c2c_plan_array_1D(
+                        static_cast<long long int>( ny_ ), nembed, z_size, nembed, nembed, z_size, nembed, batch,
+                        native_opt0_y_plan_offsets_
+                    );
+                }
+            }
+            else if ( native_opt0_reference_local_plan_context_enabled_() )
+            {
+                const auto stream_handles =
+                    pencil_pencil_reference_owned_.template native_opt0_y_stream_handles<base_fft_type>(
+                        native_opt0_y_plan_offsets_.size()
+                    );
+                const long long int z_batch =
+                    x_size * static_cast<long long int>( input_dim_.size_y[myid_j_] );
+                const long long int x_batch =
+                    static_cast<long long int>( output_dim_.size_y[myid_i_] * output_dim_.size_z[myid_j_] );
+                native_opt0_y_plan_array_bundle_ = base_fft_.make_reference_opt0_local_plan_context_1D(
+                    static_cast<long long int>( nz_ ), z_batch,
+                    static_cast<long long int>( ny_ ), nembed, z_size, nembed, nembed, z_size, nembed, batch,
+                    static_cast<long long int>( nx_ ), 1, x_batch, 1, 1, x_batch, 1, x_batch,
+                    native_opt0_y_plan_offsets_, stream_handles
+                );
+            }
+            else
+            {
+                native_opt0_y_plan_array_bundle_ = base_fft_.make_c2c_plan_array_1D(
+                    static_cast<long long int>( ny_ ), nembed, z_size, nembed, nembed, z_size, nembed, batch,
+                    native_opt0_y_plan_offsets_
+                );
+            }
+            return;
+        }
+
+        for ( long long int i = 0; i < num_plans; ++i )
+        {
+            const std::string suffix       = std::to_string( i );
+            const std::string forward_name = forward_prefix + "_" + suffix;
+            const std::string inverse_name = inverse_prefix + "_" + suffix;
+
+            base_fft_.template add_plan_1D<::fftm::direction::C2CF>(
+                forward_name, static_cast<long long int>( ny_ ), nembed, z_size, nembed, nembed, z_size, nembed,
+                batch
+            );
+            if ( native_opt0_shared_y_plan_handles_enabled_() )
+            {
+                native_opt0_forward_y_plan_names_.push_back( forward_name );
+                native_opt0_inverse_y_plan_names_.push_back( forward_name );
+                native_opt0_y_plan_offsets_.push_back( static_cast<std::size_t>( i * offset ) );
+                continue;
+            }
+            base_fft_.template add_plan_1D<::fftm::direction::C2CB>(
+                inverse_name, static_cast<long long int>( ny_ ), nembed, z_size, nembed, nembed, z_size, nembed,
+                batch
+            );
+
+            native_opt0_forward_y_plan_names_.push_back( forward_name );
+            native_opt0_inverse_y_plan_names_.push_back( inverse_name );
+            native_opt0_y_plan_offsets_.push_back( static_cast<std::size_t>( i * offset ) );
+        }
+    }
+
+    typename base_fft_type::c2c_plan_array_id_t make_native_opt0_y_diagnostic_raw_bundle_()
+    {
+        if ( !native_opt0_default_z_layout_enabled_() || native_opt0_y_plan_offsets_.empty() )
+        {
+            return base_fft_type::invalid_c2c_plan_array_id();
+        }
+
+        const long long int x_size = static_cast<long long int>( input_dim_.size_x[myid_i_] );
+        const long long int z_size = static_cast<long long int>( transpose1_dim_.size_z[myid_j_] );
+        const long long int nembed = ( x_size <= z_size ) ? 1 : z_size * static_cast<long long int>( ny_ );
+        const long long int batch  = std::max( x_size, z_size );
+        return base_fft_.make_raw_c2c_plan_array_1D_diagnostic(
+            static_cast<long long int>( ny_ ), nembed, z_size, nembed, nembed, z_size, nembed, batch,
+            native_opt0_y_plan_offsets_
         );
     }
 
@@ -1342,6 +1966,7 @@ private:
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_3d_pencil_pencil" );
         output_dim_ = transpose2_dim_;
+        SCFD_SAFE_CALL( init_native_pencil_pencil_plan_state_() );
 
         SCFD_SAFE_CALL(
             init_strategy_3d_pencil_pencil_layout_( std::integral_constant<bool, strategy_3d_optimized_layout>() )
@@ -1358,12 +1983,22 @@ private:
 
         SCFD_SAFE_CALL( same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ ) );
         SCFD_SAFE_CALL( same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ ) );
-        if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+        if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
         {
-            SCFD_SAFE_CALL( pencil_pencil_egger_owned_.init(
-                transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
-                init_options_.use_persistent_p2p
-            ) );
+            if ( is_reference_parity_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+            {
+                SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
+                    transpose_mode_3d, pencil_pencil_plan_state_, half_input_dim_, transpose1_dim_, output_dim_,
+                    myid_i_, myid_j_, init_options_.use_persistent_p2p
+                ) );
+            }
+            else
+            {
+                SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
+                    transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
+                    init_options_.use_persistent_p2p
+                ) );
+            }
         }
         else if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
         {
@@ -1381,28 +2016,79 @@ private:
             );
         }
 
-        SCFD_SAFE_CALL( init_shared_stage0_xfft_3d_(
-            input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_, output_dim_.size_x[0],
-            output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_]
-        ) );
-        SCFD_SAFE_CALL( init_owned_stage1_xfast_3d_(
-            input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_
-        ) );
+        if ( !native_opt0_reference_scratch_aliasing_enabled_() )
+        {
+            SCFD_SAFE_CALL( init_shared_stage0_xfft_3d_(
+                input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_, output_dim_.size_x[0],
+                output_dim_.size_z[myid_j_], output_dim_.size_y[myid_i_]
+            ) );
+        }
+        if ( native_opt0_default_z_layout_enabled_() )
+        {
+            SCFD_SAFE_CALL( init_stage0_default_z_3d_(
+                input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_
+            ) );
+        }
+        if ( !native_opt0_reference_scratch_aliasing_enabled_() )
+        {
+            SCFD_SAFE_CALL( init_owned_stage1_xfast_3d_(
+                input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_
+            ) );
+        }
 
-        const std::size_t output_capacity =
-            output_dim_.size_x[0] * output_dim_.size_z[myid_j_] * output_dim_.size_y[myid_i_];
-        SCFD_SAFE_CALL( init_stage1_3d_(
-            input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_, output_capacity
-        ) );
+        if ( native_opt0_default_z_layout_enabled_() )
+        {
+            if ( !native_opt0_reference_scratch_aliasing_enabled_() )
+            {
+                SCFD_SAFE_CALL( init_owned_stage1_3d_(
+                    input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_
+                ) );
+                SCFD_SAFE_CALL( bind_native_opt0_zfast_3d_views_() );
+            }
+        }
+        else
+        {
+            const std::size_t output_capacity =
+                output_dim_.size_x[0] * output_dim_.size_z[myid_j_] * output_dim_.size_y[myid_i_];
+            SCFD_SAFE_CALL( init_stage1_3d_(
+                input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_], ny_, output_capacity
+            ) );
+        }
 
         SCFD_SAFE_CALL( same_x_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_ ) );
         SCFD_SAFE_CALL( same_z_.init( transpose1_dim_, output_dim_, myid_i_, myid_j_ ) );
-        if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+        if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
         {
-            SCFD_SAFE_CALL( pencil_pencil_egger_owned_.init(
-                transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
-                init_options_.use_persistent_p2p
-            ) );
+            pencil_pencil_reference_owned_.set_native_opt0_default_z_layout_enabled(
+                native_opt0_default_z_layout_enabled_()
+            );
+            pencil_pencil_reference_owned_.set_native_opt0_reference_y_buffer_topology_enabled(
+                native_opt0_reference_y_buffer_topology_enabled_()
+            );
+            pencil_pencil_reference_owned_.set_native_opt0_compact_y_workarea_enabled(
+                native_opt0_compact_y_workarea_enabled_()
+            );
+            pencil_pencil_reference_owned_.set_native_opt0_tight_y_plan_sequence_enabled(
+                native_opt0_tight_y_plan_sequence_enabled_()
+            );
+            const auto selected_pencil_layout = native_pencil_pencil_plan_layout_();
+            pencil_pencil_reference_owned_.set_pencil_layout_selector(
+                selected_pencil_layout == ::fftm::detail::pencil_pencil_plan_layout::opt0 ? 1 : 2
+            );
+            if ( is_reference_parity_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+            {
+                SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
+                    transpose_mode_3d, pencil_pencil_plan_state_, half_input_dim_, transpose1_dim_, output_dim_,
+                    myid_i_, myid_j_, init_options_.use_persistent_p2p
+                ) );
+            }
+            else
+            {
+                SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
+                    transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
+                    init_options_.use_persistent_p2p
+                ) );
+            }
         }
         else if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
         {
@@ -1535,7 +2221,7 @@ private:
             );
         }
 
-        if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) &&
+        if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) &&
              partitioning_.get_process_grid().p2 == 1 )
         {
             SCFD_SAFE_CALL( add_plan_yz_r2c_slab_optimized_(
@@ -1548,9 +2234,41 @@ private:
             return;
         }
 
-        SCFD_SAFE_CALL( add_plan_z_r2c_z_fast_to_y_fast_(
-            "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_]
-        ) );
+        if ( native_opt0_default_z_layout_enabled_() )
+        {
+            if ( native_opt0_reference_local_plan_context_enabled_() )
+            {
+                SCFD_SAFE_CALL( add_plan_y_c2c_native_opt0_z_fast_(
+                    "forward_y_native_opt0_zfast", "inverse_y_native_opt0_zfast",
+                    static_cast<long long int>( input_dim_.size_x[myid_i_] ),
+                    static_cast<long long int>( transpose1_dim_.size_z[myid_j_] )
+                ) );
+                SCFD_SAFE_CALL( add_plan_z_r2c_default_layout_(
+                    "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_]
+                ) );
+            }
+            else
+            {
+                SCFD_SAFE_CALL( add_plan_z_r2c_default_layout_(
+                    "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_]
+                ) );
+                SCFD_SAFE_CALL( add_plan_y_c2c_native_opt0_z_fast_(
+                    "forward_y_native_opt0_zfast", "inverse_y_native_opt0_zfast",
+                    static_cast<long long int>( input_dim_.size_x[myid_i_] ),
+                    static_cast<long long int>( transpose1_dim_.size_z[myid_j_] )
+                ) );
+            }
+            SCFD_SAFE_CALL( add_plan_x_c2c_(
+                "forward_x", "inverse_x", output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_]
+            ) );
+            return;
+        }
+        else
+        {
+            SCFD_SAFE_CALL( add_plan_z_r2c_z_fast_to_y_fast_(
+                "forward_z", "inverse_z", input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_]
+            ) );
+        }
         SCFD_SAFE_CALL( add_plan_y_c2c_y_fast_to_x_fast_(
             "forward_y", "inverse_y", input_dim_.size_x[myid_i_], transpose1_dim_.size_z[myid_j_]
         ) );
@@ -1778,12 +2496,12 @@ private:
 
         if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
         {
-            SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
-            if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+            if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
             {
                 if ( partitioning_.get_process_grid().p2 == 1 )
                 {
-                    FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_egger_p2_degenerate" );
+                    SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_reference_p2_degenerate" );
                     stage0_complex3_t stage0_slab_view(
                         stage0_3d_.raw_ptr(), input_dim_.size_x[myid_i_], nz_half_, ny_
                     );
@@ -1798,7 +2516,8 @@ private:
                 }
                 if ( partitioning_.get_process_grid().p1 == 1 )
                 {
-                    FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_egger_p1_degenerate" );
+                    SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_reference_p1_degenerate" );
                     SCFD_SAFE_CALL(
                         base_fft_.template exec<real_array3_t, stage0_complex3_t>( "forward_z", in, stage0_3d_ )
                     );
@@ -1814,7 +2533,37 @@ private:
                     );
                     return;
                 }
-                SCFD_SAFE_CALL( pencil_pencil_egger_owned_.template forward<
+                if ( native_opt0_default_z_layout_enabled_() )
+                {
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::forward_3d_pencil_pencil_native_opt0_zfast" );
+                    if ( native_opt0_reference_y_buffer_topology_enabled_() )
+                    {
+                        SCFD_SAFE_CALL( bind_native_opt0_reference_forward_views_( out ) );
+                    }
+                    SCFD_SAFE_CALL( pencil_pencil_reference_owned_.exec_local_fft(
+                        "reference_owned/forward_z_fft", "forward_z", in, stage0_default_z_3d_
+                    ) );
+                    if ( native_opt0_reference_y_buffer_topology_enabled_() )
+                    {
+                        SCFD_SAFE_CALL( pencil_pencil_reference_owned_.template forward_native_opt0_zfast_reference_buffers<
+                            zfast_complex3_t, zfast_complex3_t, zfast_complex3_t, output_zfast_complex3_t,
+                            complex_array3_t>(
+                            stage0_default_z_3d_, stage1_zfast_3d_, stage1_yfft_zfast_3d_, x_fft_zfast_3d_, out,
+                            native_opt0_forward_y_plan_names_, native_opt0_y_plan_offsets_, transpose_mode_3d
+                        ) );
+                    }
+                    else
+                    {
+                        SCFD_SAFE_CALL( pencil_pencil_reference_owned_.template forward_native_opt0_zfast<
+                            zfast_complex3_t, zfast_complex3_t, zfast_complex3_t, complex_array3_t>(
+                            stage0_default_z_3d_, stage1_zfast_3d_, stage1_yfft_zfast_3d_, out,
+                            native_opt0_forward_y_plan_names_, native_opt0_y_plan_offsets_, transpose_mode_3d
+                        ) );
+                    }
+                    return;
+                }
+                SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
+                SCFD_SAFE_CALL( pencil_pencil_reference_owned_.template forward<
                     real_array3_t, stage0_complex3_t, stage1_complex3_t, x_fft_complex3_t, x_fft_complex3_t,
                     complex_array3_t>(
                     in, stage0_3d_, stage1_3d_, stage1_xfast_3d_, x_fft_stage_3d_, out, transpose_mode_3d
@@ -1822,6 +2571,7 @@ private:
             }
             else
             {
+                SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( out, "forward pencil-pencil output" ) );
                 SCFD_SAFE_CALL( pencil_pencil_pipeline_.template forward<
                     real_array3_t, stage0_complex3_t, stage1_complex3_t, x_fft_complex3_t, x_fft_complex3_t,
                     complex_array3_t>(
@@ -1881,18 +2631,18 @@ private:
 
         if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
         {
-            SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
-            if ( is_egger_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
+            if ( is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) )
             {
                 if ( partitioning_.get_process_grid().p2 == 1 )
                 {
-                    FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_egger_p2_degenerate" );
+                    SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_reference_p2_degenerate" );
                     stage0_complex3_t stage0_slab_view(
                         stage0_3d_.raw_ptr(), input_dim_.size_x[myid_i_], nz_half_, ny_
                     );
                     SCFD_SAFE_CALL( base_fft_.template exec<complex_array3_t, complex_array3_t>( "inverse_x", in, in ) );
                     /*
-                     * The egger pipeline's datatype-direct variant is meant for
+                     * The reference pipeline's datatype-direct variant is meant for
                      * the owned non-degenerate pencil schedule.  For degenerate
                      * shortcut routes, CUDA-aware strided receive datatypes in
                      * the generic transpose can stall on some MPI stacks; keep
@@ -1922,7 +2672,8 @@ private:
                 }
                 if ( partitioning_.get_process_grid().p1 == 1 )
                 {
-                    FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_egger_p1_degenerate" );
+                    SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_reference_p1_degenerate" );
                     SCFD_SAFE_CALL(
                         base_fft_.template exec<complex_array3_t, x_fft_complex3_t>( "inverse_x", in, x_fft_stage_3d_ )
                     );
@@ -1957,7 +2708,26 @@ private:
                     );
                     return;
                 }
-                SCFD_SAFE_CALL( pencil_pencil_egger_owned_.template backward<
+                if ( native_opt0_default_z_layout_enabled_() )
+                {
+                    FFTM_PROFILE_SCOPED_TIC( "fftm::backward_3d_pencil_pencil_native_opt0_zfast" );
+                    if ( native_opt0_reference_y_buffer_topology_enabled_() )
+                    {
+                        SCFD_SAFE_CALL( bind_native_opt0_reference_backward_views_( in ) );
+                    }
+                    SCFD_SAFE_CALL( pencil_pencil_reference_owned_.template backward_native_opt0_zfast<
+                        complex_array3_t, output_zfast_complex3_t, zfast_complex3_t, zfast_complex3_t,
+                        zfast_complex3_t>(
+                        in, x_fft_zfast_3d_, stage1_yfft_zfast_3d_, stage1_zfast_3d_, stage0_default_z_3d_,
+                        native_opt0_inverse_y_plan_names_, native_opt0_y_plan_offsets_, transpose_mode_3d
+                    ) );
+                    SCFD_SAFE_CALL( pencil_pencil_reference_owned_.exec_local_fft(
+                        "reference_owned/backward_z_fft", "inverse_z", stage0_default_z_3d_, out
+                    ) );
+                    return;
+                }
+                SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
+                SCFD_SAFE_CALL( pencil_pencil_reference_owned_.template backward<
                     complex_array3_t, x_fft_complex3_t, x_fft_complex3_t, stage1_complex3_t, stage0_complex3_t,
                     real_array3_t>(
                     in, x_fft_stage_3d_, stage1_xfast_3d_, stage1_3d_, stage0_3d_, out, transpose_mode_3d
@@ -1965,6 +2735,7 @@ private:
             }
             else
             {
+                SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );
                 SCFD_SAFE_CALL( pencil_pencil_pipeline_.template backward<
                     complex_array3_t, x_fft_complex3_t, x_fft_complex3_t, stage1_complex3_t, stage0_complex3_t,
                     real_array3_t>(
@@ -2081,6 +2852,18 @@ private:
         SCFD_SAFE_CALL( for_each_3d_.wait() );
     }
 
+    void copy_default_z_to_stage0_yfast_()
+    {
+        auto scope = profiler_.scoped_tic( "fftm::native_opt0_default_z_to_yfast" );
+        SCFD_SAFE_CALL( reorder_x_stage_( stage0_default_z_3d_, stage0_3d_ ) );
+    }
+
+    void copy_stage0_yfast_to_default_z_()
+    {
+        auto scope = profiler_.scoped_tic( "fftm::native_opt0_yfast_to_default_z" );
+        SCFD_SAFE_CALL( reorder_x_stage_( stage0_3d_, stage0_default_z_3d_ ) );
+    }
+
     template <int DstAxis0, int DstAxis1, int DstAxis2, int DstAxis3, class ArrayIn, class ArrayOut>
     void transpose_local_4d_( const ArrayIn &in, ArrayOut &out )
     {
@@ -2130,6 +2913,76 @@ private:
             ) );
         }
         update_memory_profile_3d_();
+    }
+
+    void init_stage0_default_z_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
+    {
+        SCFD_SAFE_CALL( scratch_stage0_default_z_3d_.init( d0 * d1 * d2 ) );
+        SCFD_SAFE_CALL( stage0_default_z_3d_.init_by_raw_data( scratch_stage0_default_z_3d_.raw_ptr(), d0, d1, d2 ) );
+        update_memory_profile_3d_();
+    }
+
+    void bind_native_opt0_zfast_3d_views_()
+    {
+        SCFD_SAFE_CALL( stage1_zfast_3d_.init_by_raw_data(
+            scratch_stage1_3d_.raw_ptr(), input_dim_.size_x[myid_i_], ny_, transpose1_dim_.size_z[myid_j_]
+        ) );
+        SCFD_SAFE_CALL( stage1_yfft_zfast_3d_.init_by_raw_data(
+            scratch_stage1_xfast_3d_.raw_ptr(), input_dim_.size_x[myid_i_], ny_, transpose1_dim_.size_z[myid_j_]
+        ) );
+        SCFD_SAFE_CALL( x_fft_zfast_3d_.init_by_raw_data(
+            scratch_stage0_xfft_3d_.raw_ptr(), output_dim_.size_x[0], output_dim_.size_y[myid_i_],
+            output_dim_.size_z[myid_j_]
+        ) );
+    }
+
+    void bind_native_opt0_reference_forward_views_( complex_array3_t &out )
+    {
+        complex *temp_slot = native_opt0_reference_slot_ptr_( 0 );
+        const std::size_t zfast_stage_size =
+            input_dim_.size_x[myid_i_] * ny_ * transpose1_dim_.size_z[myid_j_];
+        if ( static_cast<std::size_t>( out.size() ) < zfast_stage_size )
+        {
+            throw std::logic_error( "native opt0 reference forward output is too small for aliased Y/X stage" );
+        }
+        stage0_default_z_3d_ = zfast_complex3_t(
+            scratch_stage0_default_z_3d_.raw_ptr(), input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_
+        );
+        stage1_zfast_3d_ = zfast_complex3_t(
+            temp_slot, input_dim_.size_x[myid_i_], ny_, transpose1_dim_.size_z[myid_j_]
+        );
+        stage1_yfft_zfast_3d_ = zfast_complex3_t(
+            out.raw_ptr(), input_dim_.size_x[myid_i_], ny_, transpose1_dim_.size_z[myid_j_]
+        );
+        x_fft_zfast_3d_ = output_zfast_complex3_t(
+            temp_slot, output_dim_.size_x[0], output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_]
+        );
+    }
+
+    void bind_native_opt0_reference_backward_views_( complex_array3_t &in )
+    {
+        complex *temp_slot = native_opt0_reference_slot_ptr_( 0 );
+        complex *backward_y_slot = native_opt0_reference_backward_y_output_ptr_();
+        const std::size_t zfast_stage_size =
+            input_dim_.size_x[myid_i_] * ny_ * transpose1_dim_.size_z[myid_j_];
+        if ( static_cast<std::size_t>( in.size() ) < zfast_stage_size )
+        {
+            throw std::logic_error( "native opt0 reference backward input is too small for aliased Y stage" );
+        }
+        stage0_default_z_3d_ = zfast_complex3_t(
+            scratch_stage0_default_z_3d_.raw_ptr(), input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_],
+            nz_half_
+        );
+        x_fft_zfast_3d_ = output_zfast_complex3_t(
+            temp_slot, output_dim_.size_x[0], output_dim_.size_y[myid_i_],
+            output_dim_.size_z[myid_j_]
+        );
+        stage1_yfft_zfast_3d_ = zfast_complex3_t(
+            in.raw_ptr(), input_dim_.size_x[myid_i_], ny_, transpose1_dim_.size_z[myid_j_]
+        );
+        stage1_zfast_3d_ = zfast_complex3_t(
+            backward_y_slot, input_dim_.size_x[myid_i_], ny_, transpose1_dim_.size_z[myid_j_]
+        );
     }
 
     void init_shared_stage0_stage1_xfast_3d_(
@@ -2291,6 +3144,10 @@ private:
             "fftm/scratch_stage1_xfast_3d",
             bytes_of_elems_( static_cast<std::size_t>( scratch_stage1_xfast_3d_.size() ), sizeof( complex ) )
         );
+        profiler->set_bytes(
+            "fftm/scratch_stage0_default_z_3d",
+            bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_default_z_3d_.size() ), sizeof( complex ) )
+        );
         profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
         profiler->set_bytes( "fftm/stage0_4d", 0 );
         profiler->set_bytes( "fftm/stage1_4d", 0 );
@@ -2318,6 +3175,7 @@ private:
         profiler->set_bytes( "fftm/scratch_stage0_xfft_3d", 0 );
         profiler->set_bytes( "fftm/scratch_stage1_3d", 0 );
         profiler->set_bytes( "fftm/scratch_stage1_xfast_3d", 0 );
+        profiler->set_bytes( "fftm/scratch_stage0_default_z_3d", 0 );
         profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
         profiler->set_bytes( "fftm/stage0_4d", 0 );
         profiler->set_bytes( "fftm/stage1_4d", 0 );
@@ -2348,7 +3206,8 @@ private:
     same_x_t                   same_x_;
     same_z_t                   same_z_;
     pencil_pencil_pipeline_t   pencil_pencil_pipeline_;
-    pencil_pencil_egger_owned_t pencil_pencil_egger_owned_;
+    pencil_pencil_reference_owned_t pencil_pencil_reference_owned_;
+    pencil_pencil_plan_state_t pencil_pencil_plan_state_;
     same_xy_t                  same_xy_;
     same_xw_t                  same_xw_;
     same_zw_t                  same_zw_;
@@ -2373,15 +3232,25 @@ private:
     partition_t transpose3_dim_;
     partition_t output_dim_;
 
-    complex_buffer_t  scratch_stage0_xfft_3d_;
-    complex_buffer_t  scratch_stage1_3d_;
-    complex_buffer_t  scratch_stage1_xfast_3d_;
+	    complex_buffer_t  scratch_stage0_xfft_3d_;
+    complex_buffer_t  scratch_stage0_default_z_3d_;
+	    complex_buffer_t  scratch_stage1_3d_;
+	    complex_buffer_t  scratch_stage1_xfast_3d_;
     complex_buffer_t  scratch_stage0_stage2_4d_;
     complex_buffer_t  scratch_stage1_4d_;
     stage0_complex3_t stage0_3d_;
-    stage1_complex3_t stage1_3d_;
+    zfast_complex3_t  stage0_default_z_3d_;
+    zfast_complex3_t  stage1_zfast_3d_;
+    zfast_complex3_t  stage1_yfft_zfast_3d_;
+    output_zfast_complex3_t x_fft_zfast_3d_;
+	    stage1_complex3_t stage1_3d_;
     x_fft_complex3_t  x_fft_stage_3d_;
     x_fft_complex3_t  stage1_xfast_3d_;
+    std::vector<std::string> native_opt0_forward_y_plan_names_;
+    std::vector<std::string> native_opt0_inverse_y_plan_names_;
+    std::vector<std::size_t> native_opt0_y_plan_offsets_;
+    typename base_fft_type::c2c_plan_array_id_t native_opt0_y_plan_array_bundle_ =
+        base_fft_type::invalid_c2c_plan_array_id();
     std::size_t       stage1_3d_d0_             = 0;
     std::size_t       stage1_3d_d1_             = 0;
     std::size_t       stage1_3d_d2_             = 0;

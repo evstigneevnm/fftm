@@ -59,7 +59,8 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
     const T        normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz * options.nw );
     std::vector<T> wall_times;
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
-    T max_norm = T( 0 );
+    T    max_norm          = T( 0 );
+    bool validation_failed = false;
 
     for ( int iter = 0; iter < options.warmup; ++iter )
     {
@@ -118,6 +119,7 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
                 "strategy=%s, iteration=%d: l2_diff=%.8e exceeded epsilon=%.8e", ffts_t::strategy_name(), iter, diff_l2,
                 options.epsilon
             );
+            validation_failed = true;
         }
     }
 
@@ -144,7 +146,15 @@ int run_benchmark_case( scfd::utils::log_std &log, const options_t &options )
         row.str()
     );
 
-    return 0;
+    if ( validation_failed )
+    {
+        log.error_f(
+            "benchmark=ffts-4d validation failed: max_l2_diff=%.8e exceeded epsilon=%.8e", max_norm,
+            options.epsilon
+        );
+    }
+
+    return validation_failed ? 1 : 0;
 }
 
 int dispatch_strategy( scfd::utils::log_std &log, const options_t &options, strategy_kind strategy )

@@ -62,8 +62,18 @@ struct test_options
     bool                                      use_p2p_byte_transfer       = false;
     bool                                      print_pencil_schedule       = false;
     bool                                      use_direct_forward_byte_receive = false;
+    bool                                      use_stable_forward_byte_send_buffer = false;
+    bool                                      use_ready_stable_forward_byte_send_buffer = false;
+    bool                                      use_contiguous_forward_byte_send = false;
+    bool                                      use_physical_forward_peer_exchange = false;
+    fftm::fftm_3d_contiguous_forward_send_mode contiguous_forward_send_mode =
+        fftm::fftm_3d_contiguous_forward_send_mode::single;
+    std::size_t                               contiguous_forward_send_chunk_bytes =
+        static_cast<std::size_t>( 1 ) << 30;
     fftm::fftm_3d_large_count_p2p_transport  large_count_p2p_transport =
         fftm::fftm_3d_large_count_p2p_transport::hindexed;
+    bool                                      use_large_count_datatype_cache = false;
+    bool                                      use_native_backward_second_peer_loop = false;
     fftm::fftm_3d_pencil_pipeline            pencil_pipeline = fftm::fftm_3d_pencil_pipeline::staged;
 };
 
@@ -186,6 +196,70 @@ test_options parse_options( int argc, char *argv[], int num_procs )
             options.use_direct_forward_byte_receive = false;
             argi += 1;
         }
+        else if ( arg == "--use-stable-forward-byte-send-buffer" )
+        {
+            options.use_stable_forward_byte_send_buffer = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-stable-forward-byte-send-buffer" )
+        {
+            options.use_stable_forward_byte_send_buffer = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-ready-stable-forward-byte-send-buffer" )
+        {
+            options.use_ready_stable_forward_byte_send_buffer = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-ready-stable-forward-byte-send-buffer" )
+        {
+            options.use_ready_stable_forward_byte_send_buffer = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-contiguous-forward-byte-send" )
+        {
+            options.use_contiguous_forward_byte_send = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-contiguous-forward-byte-send" )
+        {
+            options.use_contiguous_forward_byte_send = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-physical-forward-peer-exchange" )
+        {
+            options.use_physical_forward_peer_exchange = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-physical-forward-peer-exchange" )
+        {
+            options.use_physical_forward_peer_exchange = false;
+            argi += 1;
+        }
+        else if ( arg == "--contiguous-forward-send-mode" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --contiguous-forward-send-mode" );
+            const std::string value = argv[argi + 1];
+            if ( value == "single" )
+                options.contiguous_forward_send_mode = fftm::fftm_3d_contiguous_forward_send_mode::single;
+            else if ( value == "chunked" )
+                options.contiguous_forward_send_mode = fftm::fftm_3d_contiguous_forward_send_mode::chunked;
+            else
+                throw std::logic_error( "Unknown contiguous forward send mode '" + value + "'" );
+            argi += 2;
+        }
+        else if ( arg == "--contiguous-forward-send-chunk-mib" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --contiguous-forward-send-chunk-mib" );
+            const std::size_t mib = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
+            if ( mib == 0 )
+                throw std::logic_error( "--contiguous-forward-send-chunk-mib must be positive" );
+            options.contiguous_forward_send_chunk_bytes = mib * static_cast<std::size_t>( 1024 ) *
+                                                          static_cast<std::size_t>( 1024 );
+            argi += 2;
+        }
         else if ( arg == "--large-count-p2p-transport" )
         {
             if ( argi + 1 >= argc )
@@ -204,6 +278,26 @@ test_options parse_options( int argc, char *argv[], int num_procs )
                 throw std::logic_error( "Unknown large-count P2P transport '" + value + "'" );
             argi += 2;
         }
+        else if ( arg == "--use-large-count-datatype-cache" )
+        {
+            options.use_large_count_datatype_cache = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-large-count-datatype-cache" )
+        {
+            options.use_large_count_datatype_cache = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-native-backward-second-peer-loop" )
+        {
+            options.use_native_backward_second_peer_loop = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-native-backward-second-peer-loop" )
+        {
+            options.use_native_backward_second_peer_loop = false;
+            argi += 1;
+        }
         else if ( arg == "--pencil-pipeline" )
         {
             if ( argi + 1 >= argc )
@@ -213,10 +307,11 @@ test_options parse_options( int argc, char *argv[], int num_procs )
                 options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::staged;
             else if ( value == "fused" )
                 options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::fused;
-            else if ( value == "egger" )
-                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::egger;
-            else if ( value == "egger-parity" || value == "egger_parity" )
-                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::egger_parity;
+            else if ( value == "reference" || value == "egger" )
+                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::reference;
+            else if ( value == "reference-parity" || value == "reference_parity" ||
+                      value == "egger-parity" || value == "egger_parity" )
+                options.pencil_pipeline = fftm::fftm_3d_pencil_pipeline::reference_parity;
             else
                 throw std::logic_error( "Unknown pencil pipeline '" + value + "'" );
             argi += 2;
@@ -243,7 +338,15 @@ test_options parse_options( int argc, char *argv[], int num_procs )
             "[--use-p2p-byte-transfer|--no-p2p-byte-transfer] "
             "[--print-pencil-schedule|--no-print-pencil-schedule] "
             "[--use-direct-forward-byte-receive|--no-direct-forward-byte-receive] "
+            "[--use-stable-forward-byte-send-buffer|--no-stable-forward-byte-send-buffer] "
+            "[--use-ready-stable-forward-byte-send-buffer|--no-ready-stable-forward-byte-send-buffer] "
+            "[--use-contiguous-forward-byte-send|--no-contiguous-forward-byte-send] "
+            "[--use-physical-forward-peer-exchange|--no-physical-forward-peer-exchange] "
+            "[--contiguous-forward-send-mode single|chunked] "
+            "[--contiguous-forward-send-chunk-mib MiB] "
             "[--large-count-p2p-transport hindexed|mpi-count|element-count|chunked] "
+            "[--use-large-count-datatype-cache|--no-large-count-datatype-cache] "
+            "[--use-native-backward-second-peer-loop|--no-native-backward-second-peer-loop] "
             "[--pencil-pipeline staged|fused|egger|egger-parity] [Nx Ny Nz]"
         );
     }
@@ -279,7 +382,15 @@ fftm::fftm_init_options make_init_options( const test_options &options )
     init_options.use_p2p_byte_transfer      = options.use_p2p_byte_transfer;
     init_options.print_pencil_schedule      = options.print_pencil_schedule;
     init_options.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
+    init_options.use_stable_forward_byte_send_buffer = options.use_stable_forward_byte_send_buffer;
+    init_options.use_ready_stable_forward_byte_send_buffer = options.use_ready_stable_forward_byte_send_buffer;
+    init_options.use_contiguous_forward_byte_send = options.use_contiguous_forward_byte_send;
+    init_options.use_physical_forward_peer_exchange = options.use_physical_forward_peer_exchange;
+    init_options.contiguous_forward_send_mode = options.contiguous_forward_send_mode;
+    init_options.contiguous_forward_send_chunk_bytes = options.contiguous_forward_send_chunk_bytes;
     init_options.large_count_p2p_transport = options.large_count_p2p_transport;
+    init_options.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
+    init_options.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
     init_options.pencil_pipeline_3d         = options.pencil_pipeline;
     return init_options;
 }
