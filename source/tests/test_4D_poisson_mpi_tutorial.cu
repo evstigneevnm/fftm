@@ -69,16 +69,18 @@ int run_tutorial_case(
     fftm_t distributed_fft( comm_info, log );
     distributed_fft.template init<4>( grid, sizes, fftm::test::detail::make_fftm_init_options( options ) );
 
-    const auto  in_sizes    = distributed_fft.get_local_input_sizes_4d();
-    const auto  out_sizes   = distributed_fft.get_local_output_sizes_4d();
-    const auto &input_part  = distributed_fft.input_partition();
-    const auto &output_part = distributed_fft.output_partition();
+    const auto  in_sizes        = distributed_fft.get_local_input_sizes_4d();
+    const auto  spectral_sizes  = distributed_fft.get_local_spectral_sizes_4d();
+    const auto  spectral_starts = distributed_fft.get_local_spectral_starts_4d();
+    const bool  use_native_spectral_layout = distributed_fft.uses_native_spectral_layout_4d();
+    const auto &input_part      = distributed_fft.input_partition();
 
     real_array_t field;
     hat_array_t  field_hat;
     field.init( std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes ) );
     field_hat.init(
-        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+        std::get<0>( spectral_sizes ), std::get<1>( spectral_sizes ), std::get<2>( spectral_sizes ),
+        std::get<3>( spectral_sizes )
     );
 
     const T lx            = fftm::test::detail::poisson_4d_problem<T>::domain_length();
@@ -127,20 +129,44 @@ int run_tutorial_case(
         t0.record();
 
         // Step 2: FFT the RHS to Fourier space.
-        distributed_fft.forward( field, field_hat );
+        if ( use_native_spectral_layout )
+        {
+            auto field_hat_native = distributed_fft.make_native_spectral_view_4d( field_hat );
+            distributed_fft.forward_native_spectral_4d( field, field_hat_native );
 
-        // Step 3: solve -|k|^2 u_hat = f_hat directly on the local spectral chunk.
-        for_each(
-            fftm::test::detail::solve_poisson_4d_in_place_functor<T, idx_t, hat_array_t>{
-                field_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
-                static_cast<int>( options.nz ), static_cast<int>( output_part.start_y[myid_i] ),
-                static_cast<int>( output_part.start_z[myid_j] ), static_cast<int>( output_part.start_w[myid_k] ) },
-            fftm::test::detail::make_range_4d<idx_t, rect_t>( field_hat )
-        );
-        for_each.wait();
+            // Step 3: solve -|k|^2 u_hat = f_hat on the local native xzwy spectral chunk.
+            for_each(
+                fftm::test::detail::solve_poisson_4d_xzwy_in_place_functor<T, idx_t, decltype( field_hat_native )>{
+                    field_hat_native, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+                    static_cast<int>( options.nz ), static_cast<int>( std::get<0>( spectral_starts ) ),
+                    static_cast<int>( std::get<1>( spectral_starts ) ),
+                    static_cast<int>( std::get<2>( spectral_starts ) ),
+                    static_cast<int>( std::get<3>( spectral_starts ) ) },
+                fftm::test::detail::make_range_4d<idx_t, rect_t>( field_hat_native )
+            );
+            for_each.wait();
 
-        // Step 4: inverse FFT back to real space and apply CUFFT normalization.
-        distributed_fft.backward( field_hat, field );
+            // Step 4: inverse FFT back to real space and apply CUFFT normalization.
+            distributed_fft.backward_native_spectral_4d( field_hat_native, field );
+        }
+        else
+        {
+            distributed_fft.forward( field, field_hat );
+
+            // Step 3: solve -|k|^2 u_hat = f_hat on the local public yzwx spectral chunk.
+            for_each(
+                fftm::test::detail::solve_poisson_4d_in_place_functor<T, idx_t, hat_array_t>{
+                    field_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+                    static_cast<int>( options.nz ), static_cast<int>( std::get<0>( spectral_starts ) ),
+                    static_cast<int>( std::get<1>( spectral_starts ) ),
+                    static_cast<int>( std::get<2>( spectral_starts ) ) },
+                fftm::test::detail::make_range_4d<idx_t, rect_t>( field_hat )
+            );
+            for_each.wait();
+
+            // Step 4: inverse FFT back to real space and apply CUFFT normalization.
+            distributed_fft.backward( field_hat, field );
+        }
         for_each(
             fftm::test::detail::scale_real_4d_functor<T, idx_t, real_array_t>{ field, normalization },
             fftm::test::detail::make_range_4d<idx_t, rect_t>( field )
@@ -167,9 +193,11 @@ int run_tutorial_case(
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: solution_l2=%.8e, wall_ms=%.8e",
-            fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), options.nx,
-            options.ny, options.nz, options.nw, options.times, std::sqrt( global_l2_sq ), wall_ms
+            "strategy=%s, mode=%s, spectral_layout=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, times=%d: "
+            "solution_l2=%.8e, wall_ms=%.8e",
+            fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ),
+            fftm::fftm_4d_spectral_layout_name( distributed_fft.spectral_layout_4d() ), options.nx, options.ny,
+            options.nz, options.nw, options.times, std::sqrt( global_l2_sq ), wall_ms
         );
     }
 

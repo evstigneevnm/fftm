@@ -41,6 +41,17 @@ FFTM3D_WRAPPED_SRCS := \
 	$(WRAPPED_EGGER_ROOT)/src/pencil/mpicufft_pencil_opt1.cpp
 FFTM3D_WRAPPED_OBJS := $(patsubst $(WRAPPED_EGGER_ROOT)/src/%.cpp,$(BUILD_DIR)/fftm3d_egger_wrapped_%.o,$(FFTM3D_WRAPPED_SRCS))
 FFTM3D_BENCH_FOR_FFTM_OBJ := $(BUILD_DIR)/fftm3d_benchmark_3d_for_fftm.o
+FFTM_ENABLE_FFTM3D_BACKEND ?= 0
+
+ifeq ($(FFTM_ENABLE_FFTM3D_BACKEND),1)
+FFTM3D_BENCH_DEPS := $(FFTM3D_BENCH_FOR_FFTM_OBJ) $(FFTM3D_WRAPPED_OBJS)
+FFTM3D_BENCH_OBJS := $(FFTM3D_BENCH_FOR_FFTM_OBJ) $(FFTM3D_WRAPPED_OBJS)
+FFTM3D_BENCH_FLAGS := -I$(FFTM3D_DIR)/src -DFFTM_ENABLE_FFTM3D_SCFD_FFT_BACKEND=1
+else
+FFTM3D_BENCH_DEPS :=
+FFTM3D_BENCH_OBJS :=
+FFTM3D_BENCH_FLAGS :=
+endif
 
 ALL_BINS = \
 	test_init.bin \
@@ -174,13 +185,13 @@ $(BUILD_DIR)/fftm3d_egger_wrapped_%.o: $(WRAPPED_EGGER_ROOT)/src/%.cpp | $(BUILD
 $(FFTM3D_BENCH_FOR_FFTM_OBJ): $(FFTM3D_DIR)/src/fftm3d_benchmark_3d.cu $(FFTM3D_DIR)/src/fftm3d_benchmark_3d_api.hpp | $(BUILD_DIR)
 	$(NVCC) $(NVCCFLAGS) $(FFTM3D_WRAPPED_INCLUDES) $(SCFD_FLAGS) -DFFTM3D_WRAPPED_EGGER=1 -DFFTM3D_BENCHMARK_NO_MAIN=1 -c $< -o $@
 
-$(BUILD_DIR)/test_benchmark_fftm_3D.bin: $(TEST_DIR)/test_benchmark_fftm_3D.cu $(FFTM3D_BENCH_FOR_FFTM_OBJ) $(FFTM3D_WRAPPED_OBJS) | $(BUILD_DIR)
-	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) -I$(FFTM3D_DIR)/src $(SCFD_FLAGS_CA) -DFFTM_ENABLE_FFTM3D_SCFD_FFT_BACKEND=1 $< -c -o $(BUILD_DIR)/test_benchmark_fftm_3D.o
-	$(MPICXX) -g $(BUILD_DIR)/test_benchmark_fftm_3D.o $(FFTM3D_BENCH_FOR_FFTM_OBJ) $(FFTM3D_WRAPPED_OBJS) $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
+$(BUILD_DIR)/test_benchmark_fftm_3D.bin: $(TEST_DIR)/test_benchmark_fftm_3D.cu $(FFTM3D_BENCH_DEPS) | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $(FFTM3D_BENCH_FLAGS) $(SCFD_FLAGS_CA) $< -c -o $(BUILD_DIR)/test_benchmark_fftm_3D.o
+	$(MPICXX) -g $(BUILD_DIR)/test_benchmark_fftm_3D.o $(FFTM3D_BENCH_OBJS) $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
 
-$(BUILD_DIR)/test_benchmark_fftm_3D_nca.bin: $(TEST_DIR)/test_benchmark_fftm_3D.cu $(FFTM3D_BENCH_FOR_FFTM_OBJ) $(FFTM3D_WRAPPED_OBJS) | $(BUILD_DIR)
-	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) -I$(FFTM3D_DIR)/src $(SCFD_FLAGS_NCA) -DFFTM_ENABLE_FFTM3D_SCFD_FFT_BACKEND=1 $< -c -o $(BUILD_DIR)/test_benchmark_fftm_3D_nca.o
-	$(MPICXX) -g $(BUILD_DIR)/test_benchmark_fftm_3D_nca.o $(FFTM3D_BENCH_FOR_FFTM_OBJ) $(FFTM3D_WRAPPED_OBJS) $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
+$(BUILD_DIR)/test_benchmark_fftm_3D_nca.bin: $(TEST_DIR)/test_benchmark_fftm_3D.cu $(FFTM3D_BENCH_DEPS) | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $(FFTM3D_BENCH_FLAGS) $(SCFD_FLAGS_NCA) $< -c -o $(BUILD_DIR)/test_benchmark_fftm_3D_nca.o
+	$(MPICXX) -g $(BUILD_DIR)/test_benchmark_fftm_3D_nca.o $(FFTM3D_BENCH_OBJS) $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
 
 $(eval $(call BUILD_MPI_TEST,test_benchmark_fftm_4D.bin,test_benchmark_fftm_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_benchmark_fftm_4D.o,-lcudart -lcufft -lmpi))
 $(eval $(call BUILD_MPI_TEST,test_benchmark_fftm_4D_nca.bin,test_benchmark_fftm_4D.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_benchmark_fftm_4D_nca.o,-lcudart -lcufft -lmpi))

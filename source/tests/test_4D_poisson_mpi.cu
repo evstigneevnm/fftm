@@ -69,10 +69,11 @@ int run_poisson(
     fftm_t distributed_fft( comm_info, log );
     distributed_fft.template init<4>( grid, sizes, fftm::test::detail::make_fftm_init_options( options ) );
 
-    const auto  in_sizes    = distributed_fft.get_local_input_sizes_4d();
-    const auto  out_sizes   = distributed_fft.get_local_output_sizes_4d();
-    const auto &input_part  = distributed_fft.input_partition();
-    const auto &output_part = distributed_fft.output_partition();
+    const auto  in_sizes        = distributed_fft.get_local_input_sizes_4d();
+    const auto  spectral_sizes  = distributed_fft.get_local_spectral_sizes_4d();
+    const auto  spectral_starts = distributed_fft.get_local_spectral_starts_4d();
+    const bool  use_native_spectral_layout = distributed_fft.uses_native_spectral_layout_4d();
+    const auto &input_part      = distributed_fft.input_partition();
 
     real_array_t rhs;
     real_array_t exact_solution;
@@ -124,22 +125,28 @@ int run_poisson(
         std::get<0>( in_sizes ), std::get<1>( in_sizes ), std::get<2>( in_sizes ), std::get<3>( in_sizes )
     );
     rhs_hat.init(
-        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+        std::get<0>( spectral_sizes ), std::get<1>( spectral_sizes ), std::get<2>( spectral_sizes ),
+        std::get<3>( spectral_sizes )
     );
     solution_hat.init(
-        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+        std::get<0>( spectral_sizes ), std::get<1>( spectral_sizes ), std::get<2>( spectral_sizes ),
+        std::get<3>( spectral_sizes )
     );
     dx_hat.init(
-        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+        std::get<0>( spectral_sizes ), std::get<1>( spectral_sizes ), std::get<2>( spectral_sizes ),
+        std::get<3>( spectral_sizes )
     );
     dy_hat.init(
-        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+        std::get<0>( spectral_sizes ), std::get<1>( spectral_sizes ), std::get<2>( spectral_sizes ),
+        std::get<3>( spectral_sizes )
     );
     dz_hat.init(
-        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+        std::get<0>( spectral_sizes ), std::get<1>( spectral_sizes ), std::get<2>( spectral_sizes ),
+        std::get<3>( spectral_sizes )
     );
     dw_hat.init(
-        std::get<0>( out_sizes ), std::get<1>( out_sizes ), std::get<2>( out_sizes ), std::get<3>( out_sizes )
+        std::get<0>( spectral_sizes ), std::get<1>( spectral_sizes ), std::get<2>( spectral_sizes ),
+        std::get<3>( spectral_sizes )
     );
 
     const T lx            = fftm::test::detail::poisson_4d_problem<T>::domain_length();
@@ -173,16 +180,67 @@ int run_poisson(
     runtime_api_t::device_synchronize();
     t0.record();
 
-    distributed_fft.forward( rhs, rhs_hat );
-    for_each(
-        fftm::test::detail::solve_poisson_4d_functor<T, idx_t, hat_array_t>{
-            rhs_hat, solution_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
-            static_cast<int>( options.nz ), static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] ), static_cast<int>( output_part.start_w[myid_k] ) },
-        fftm::test::detail::make_range_4d<idx_t, rect_t>( rhs_hat )
-    );
-    for_each.wait();
-    distributed_fft.backward( solution_hat, numerical_solution );
+    if ( use_native_spectral_layout )
+    {
+        auto rhs_hat_native      = distributed_fft.make_native_spectral_view_4d( rhs_hat );
+        auto solution_hat_native = distributed_fft.make_native_spectral_view_4d( solution_hat );
+        auto dx_hat_native       = distributed_fft.make_native_spectral_view_4d( dx_hat );
+        auto dy_hat_native       = distributed_fft.make_native_spectral_view_4d( dy_hat );
+        auto dz_hat_native       = distributed_fft.make_native_spectral_view_4d( dz_hat );
+        auto dw_hat_native       = distributed_fft.make_native_spectral_view_4d( dw_hat );
+
+        distributed_fft.forward_native_spectral_4d( rhs, rhs_hat_native );
+        for_each(
+            fftm::test::detail::solve_poisson_4d_xzwy_functor<T, idx_t, decltype( rhs_hat_native )>{
+                rhs_hat_native, solution_hat_native, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+                static_cast<int>( options.nz ), static_cast<int>( std::get<0>( spectral_starts ) ),
+                static_cast<int>( std::get<1>( spectral_starts ) ),
+                static_cast<int>( std::get<2>( spectral_starts ) ),
+                static_cast<int>( std::get<3>( spectral_starts ) ) },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( rhs_hat_native )
+        );
+        for_each.wait();
+
+        for_each(
+            fftm::test::detail::poisson_4d_xzwy_derivative_spectra_functor<T, idx_t, decltype( solution_hat_native )>{
+                solution_hat_native, dx_hat_native, dy_hat_native, dz_hat_native, dw_hat_native,
+                static_cast<int>( options.nx ), static_cast<int>( options.ny ), static_cast<int>( options.nz ),
+                static_cast<int>( std::get<0>( spectral_starts ) ),
+                static_cast<int>( std::get<1>( spectral_starts ) ),
+                static_cast<int>( std::get<2>( spectral_starts ) ),
+                static_cast<int>( std::get<3>( spectral_starts ) ) },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( solution_hat_native )
+        );
+        for_each.wait();
+
+        distributed_fft.backward_native_spectral_4d( solution_hat_native, numerical_solution );
+    }
+    else
+    {
+        distributed_fft.forward( rhs, rhs_hat );
+        for_each(
+            fftm::test::detail::solve_poisson_4d_functor<T, idx_t, hat_array_t>{
+                rhs_hat, solution_hat, static_cast<int>( options.nx ), static_cast<int>( options.ny ),
+                static_cast<int>( options.nz ), static_cast<int>( std::get<0>( spectral_starts ) ),
+                static_cast<int>( std::get<1>( spectral_starts ) ),
+                static_cast<int>( std::get<2>( spectral_starts ) ) },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( rhs_hat )
+        );
+        for_each.wait();
+
+        for_each(
+            fftm::test::detail::poisson_4d_derivative_spectra_functor<T, idx_t, hat_array_t>{
+                solution_hat, dx_hat, dy_hat, dz_hat, dw_hat, static_cast<int>( options.nx ),
+                static_cast<int>( options.ny ), static_cast<int>( options.nz ),
+                static_cast<int>( std::get<0>( spectral_starts ) ),
+                static_cast<int>( std::get<1>( spectral_starts ) ),
+                static_cast<int>( std::get<2>( spectral_starts ) ) },
+            fftm::test::detail::make_range_4d<idx_t, rect_t>( solution_hat )
+        );
+        for_each.wait();
+
+        distributed_fft.backward( solution_hat, numerical_solution );
+    }
     for_each(
         fftm::test::detail::scale_real_4d_functor<T, idx_t, real_array_t>{ numerical_solution, normalization },
         fftm::test::detail::make_range_4d<idx_t, rect_t>( numerical_solution )
@@ -193,20 +251,25 @@ int run_poisson(
     t1.record();
     const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
 
-    for_each(
-        fftm::test::detail::poisson_4d_derivative_spectra_functor<T, idx_t, hat_array_t>{
-            solution_hat, dx_hat, dy_hat, dz_hat, dw_hat, static_cast<int>( options.nx ),
-            static_cast<int>( options.ny ), static_cast<int>( options.nz ),
-            static_cast<int>( output_part.start_y[myid_i] ), static_cast<int>( output_part.start_z[myid_j] ),
-            static_cast<int>( output_part.start_w[myid_k] ) },
-        fftm::test::detail::make_range_4d<idx_t, rect_t>( solution_hat )
-    );
-    for_each.wait();
+    if ( use_native_spectral_layout )
+    {
+        auto dx_hat_native = distributed_fft.make_native_spectral_view_4d( dx_hat );
+        auto dy_hat_native = distributed_fft.make_native_spectral_view_4d( dy_hat );
+        auto dz_hat_native = distributed_fft.make_native_spectral_view_4d( dz_hat );
+        auto dw_hat_native = distributed_fft.make_native_spectral_view_4d( dw_hat );
 
-    distributed_fft.backward( dx_hat, numerical_dx );
-    distributed_fft.backward( dy_hat, numerical_dy );
-    distributed_fft.backward( dz_hat, numerical_dz );
-    distributed_fft.backward( dw_hat, numerical_dw );
+        distributed_fft.backward_native_spectral_4d( dx_hat_native, numerical_dx );
+        distributed_fft.backward_native_spectral_4d( dy_hat_native, numerical_dy );
+        distributed_fft.backward_native_spectral_4d( dz_hat_native, numerical_dz );
+        distributed_fft.backward_native_spectral_4d( dw_hat_native, numerical_dw );
+    }
+    else
+    {
+        distributed_fft.backward( dx_hat, numerical_dx );
+        distributed_fft.backward( dy_hat, numerical_dy );
+        distributed_fft.backward( dz_hat, numerical_dz );
+        distributed_fft.backward( dw_hat, numerical_dw );
+    }
 
     for_each(
         fftm::test::detail::scale_real_4d_functor<T, idx_t, real_array_t>{ numerical_dx, normalization },
@@ -238,17 +301,30 @@ int run_poisson(
     const T local_h1_sq  = reduce( gradient_error_sq.total_size(), gradient_error_sq.raw_ptr(), T( 0 ) ) * cell_volume;
     const T global_l2_sq = comm_info.all_reduce_sum( local_l2_sq );
     const T global_h1_sq = comm_info.all_reduce_sum( local_h1_sq );
+    const T l2           = std::sqrt( global_l2_sq );
+    const T h1           = std::sqrt( global_h1_sq );
+    const T l2_threshold = static_cast<T>( options.l2_threshold >= 0.0 ? options.l2_threshold : options.threshold );
+    const T h1_threshold = static_cast<T>( options.h1_threshold >= 0.0 ? options.h1_threshold : options.threshold );
 
     if ( comm_info.myid == 0 )
     {
         log.info_f(
-            "strategy=%s, mode=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: L2=%.8e, H1=%.8e, wall_ms=%.8e",
-            fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), options.nx,
-            options.ny, options.nz, options.nw, std::sqrt( global_l2_sq ), std::sqrt( global_h1_sq ), wall_ms
+            "strategy=%s, mode=%s, spectral_layout=%s, Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu: "
+            "L2=%.8e, H1=%.8e, l2_threshold=%.8e, h1_threshold=%.8e, wall_ms=%.8e",
+            fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ),
+            fftm::fftm_4d_spectral_layout_name( distributed_fft.spectral_layout_4d() ), options.nx, options.ny,
+            options.nz, options.nw, l2, h1, l2_threshold, h1_threshold, wall_ms
         );
+        if ( l2 > l2_threshold || h1 > h1_threshold )
+        {
+            log.error_f(
+                "4D Poisson validation failed: L2=%.8e, H1=%.8e, l2_threshold=%.8e, h1_threshold=%.8e",
+                l2, h1, l2_threshold, h1_threshold
+            );
+        }
     }
 
-    return 0;
+    return ( l2 > l2_threshold || h1 > h1_threshold ) ? 1 : 0;
 }
 
 template <fftm::mpi_transpose_3d_mode Mode>
@@ -301,7 +377,7 @@ int main( int argc, char *argv[] )
         fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
 
         const test_options options =
-            fftm::test::detail::parse_fftm_4d_test_options( argc, argv, "test_4D_poisson_mpi.bin", true, false, false );
+            fftm::test::detail::parse_fftm_4d_test_options( argc, argv, "test_4D_poisson_mpi.bin", true, true, false );
 
         int failed = 0;
         if ( options.run_all )

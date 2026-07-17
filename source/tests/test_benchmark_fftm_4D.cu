@@ -40,6 +40,63 @@ using rect_t        = scfd::static_vec::rect<int, 4>;
 using options_t     = fftm::test::detail::fftm_4d_benchmark_options<T>;
 using strategy_kind = fftm::test::detail::fftm_4d_strategy_kind;
 
+std::string stage_times_4d_filename( int rank )
+{
+    return "fftm_4d_stage_times_r" + std::to_string( rank ) + ".csv";
+}
+
+const char *stage_timer_4d_strategy_name( strategy_kind strategy )
+{
+    switch ( strategy )
+    {
+    case strategy_kind::pencil_pencil:
+        return "pencil-pencil";
+    case strategy_kind::slab_slab:
+        return "slab-slab";
+    }
+    return "unknown";
+}
+
+void append_4d_stage_timer_rows(
+    const options_t &options, int num_procs, int rank, int iteration, std::size_t p1, std::size_t p2,
+    std::size_t p3, double wall_ms, const std::vector<fftm::fftm_native_stage_timing> &rows
+)
+{
+    if ( rows.empty() )
+        return;
+
+    const std::string header =
+        "source,rank,num_gpus,iteration,stage_index,stage,stage_ms,wall_ms,strategy,mode,p1,p2,p3,"
+        "nx,ny,nz,nw,fft_exec_no_sync,slab_native_xw,slab_native_xw_batched_peer_kernels,"
+        "slab_native_xw_tensor_coalesced_kernels,slab_native_xw_vector4_kernels,"
+        "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,"
+        "slab_native_xw_native_spectral_layout,directory";
+
+    for ( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        std::ostringstream row;
+        row << fftm::test::detail::csv_quote( "fftm-4d-stage" ) << ',' << rank << ',' << num_procs << ','
+            << iteration << ',' << i << ',' << fftm::test::detail::csv_quote( rows[i].stage ) << ','
+            << rows[i].ms << ',' << wall_ms << ','
+            << fftm::test::detail::csv_quote( stage_timer_4d_strategy_name( options.strategy ) ) << ','
+            << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( options.mode ) ) << ','
+            << p1 << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz
+            << ',' << options.nw << ',' << ( options.use_fft_exec_no_sync ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_transpose ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_batched_peer_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_tensor_coalesced_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_vector4_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_tiled_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_layout_stage ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
+            << fftm::test::detail::csv_quote( options.directory );
+
+        fftm::test::detail::append_csv_row(
+            options.directory, stage_times_4d_filename( rank ), header, row.str()
+        );
+    }
+}
+
 template <class DistStrategy4D, fftm::mpi_transpose_3d_mode Mode>
 int run_benchmark_case(
     strategy_kind strategy, scfd::utils::log_mpi &log, const options_t &options,
@@ -66,6 +123,17 @@ int run_benchmark_case(
     base_options.p2        = options.p2;
     base_options.p3        = options.p3;
     base_options.times     = options.times;
+    base_options.enable_native_stage_timers = options.enable_native_stage_timers;
+    base_options.use_4d_slab_native_xw_transpose = options.use_4d_slab_native_xw_transpose;
+    base_options.use_4d_slab_native_xw_batched_peer_kernels =
+        options.use_4d_slab_native_xw_batched_peer_kernels;
+    base_options.use_4d_slab_native_xw_tensor_coalesced_kernels =
+        options.use_4d_slab_native_xw_tensor_coalesced_kernels;
+    base_options.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
+    base_options.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
+    base_options.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
+    base_options.use_4d_slab_native_xw_native_spectral_layout =
+        options.use_4d_slab_native_xw_native_spectral_layout;
     std::tie( p1, p2, p3 ) = fftm::test::detail::choose_grid_4d( base_options, strategy, comm_info.num_procs );
 
     fftm::processor_grid grid;
@@ -84,8 +152,9 @@ int run_benchmark_case(
     distributed_fft.template init<4>( grid, sizes, fftm::test::detail::make_fftm_init_options( options ) );
 
     const auto  in_sizes   = distributed_fft.get_local_input_sizes_4d();
-    const auto  out_sizes  = distributed_fft.get_local_output_sizes_4d();
+    const auto  out_sizes  = distributed_fft.get_local_spectral_sizes_4d();
     const auto &input_part = distributed_fft.input_partition();
+    const bool use_native_spectral_layout = distributed_fft.uses_native_spectral_layout_4d();
 
     real_array_t work;
     hat_array_t  hat;
@@ -116,8 +185,17 @@ int run_benchmark_case(
         for_each.wait();
 
         runtime_api_t::device_synchronize();
-        distributed_fft.forward( work, hat );
-        distributed_fft.backward( hat, work );
+        if ( use_native_spectral_layout )
+        {
+            auto hat_native = distributed_fft.make_native_spectral_view_4d( hat );
+            distributed_fft.forward_native_spectral_4d( work, hat_native );
+            distributed_fft.backward_native_spectral_4d( hat_native, work );
+        }
+        else
+        {
+            distributed_fft.forward( work, hat );
+            distributed_fft.backward( hat, work );
+        }
         runtime_api_t::device_synchronize();
     }
 
@@ -135,12 +213,34 @@ int run_benchmark_case(
 
         scfd::utils::system_timer_event t0, t1;
         runtime_api_t::device_synchronize();
+        if ( options.enable_native_stage_timers )
+        {
+            distributed_fft.begin_native_stage_timing_iteration( iter );
+        }
         t0.record();
-        distributed_fft.forward( work, hat );
-        distributed_fft.backward( hat, work );
+        if ( use_native_spectral_layout )
+        {
+            auto hat_native = distributed_fft.make_native_spectral_view_4d( hat );
+            distributed_fft.forward_native_spectral_4d( work, hat_native );
+            distributed_fft.backward_native_spectral_4d( hat_native, work );
+        }
+        else
+        {
+            distributed_fft.forward( work, hat );
+            distributed_fft.backward( hat, work );
+        }
         runtime_api_t::device_synchronize();
         t1.record();
-        wall_times.push_back( static_cast<T>( t1.elapsed_time( t0 ) ) );
+        const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
+        wall_times.push_back( wall_ms );
+        if ( options.enable_native_stage_timers )
+        {
+            append_4d_stage_timer_rows(
+                options, comm_info.num_procs, comm_info.myid, iter, p1, p2, p3, static_cast<double>( wall_ms ),
+                distributed_fft.native_stage_timings()
+            );
+            distributed_fft.end_native_stage_timing_iteration();
+        }
 
         for_each(
             fftm::test::detail::scale_real_functor<T, idx_t, real_array_t>{ work, normalization },
@@ -197,6 +297,14 @@ int run_benchmark_case(
             << fftm::test::detail::csv_quote( fftm_t::strategy_name_4d() ) << ','
             << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ) ) << ','
             << ( options.use_fft_exec_no_sync ? 1 : 0 ) << ','
+            << ( options.enable_native_stage_timers ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_transpose ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_batched_peer_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_tensor_coalesced_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_vector4_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_tiled_kernels ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_layout_stage ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
             << p1 << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
             << options.nw << ',' << options.times << ',' << options.warmup << ',' << options.epsilon << ','
             << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
@@ -204,8 +312,11 @@ int run_benchmark_case(
 
         fftm::test::detail::append_csv_row(
             options.directory, "benchmark_fftm_4d.csv",
-            "benchmark,num_gpus,strategy,mode,fft_exec_no_sync,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
-            "max_l2_diff,directory",
+            "benchmark,num_gpus,strategy,mode,fft_exec_no_sync,native_stage_timers,slab_native_xw,slab_native_xw_batched_peer_kernels,"
+            "slab_native_xw_tensor_coalesced_kernels,slab_native_xw_vector4_kernels,"
+            "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,"
+            "slab_native_xw_native_spectral_layout,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,"
+            "avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
             row.str()
         );
     }

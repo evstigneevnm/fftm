@@ -98,6 +98,13 @@ ENABLE_NATIVE_STAGE_TIMERS="${FFTM_ENABLE_NATIVE_STAGE_TIMERS:-0}"
 ENABLE_GPU_TELEMETRY="${FFTM_ENABLE_GPU_TELEMETRY:-0}"
 CONTIGUOUS_FORWARD_SEND_MODE="${FFTM_CONTIGUOUS_FORWARD_SEND_MODE:-single}"
 CONTIGUOUS_FORWARD_SEND_MODES="${FFTM_CONTIGUOUS_FORWARD_SEND_MODES:-configured}"
+FFTM_4D_SLAB_XW_TRANSPOSES="${FFTM_4D_SLAB_XW_TRANSPOSES:-configured}"
+FFTM_4D_SLAB_XW_BATCHED_PEER_KERNELS="${FFTM_4D_SLAB_XW_BATCHED_PEER_KERNELS:-configured}"
+FFTM_4D_SLAB_XW_KERNEL_LAYOUTS="${FFTM_4D_SLAB_XW_KERNEL_LAYOUTS:-configured}"
+FFTM_4D_SLAB_XW_VECTOR4_KERNELS="${FFTM_4D_SLAB_XW_VECTOR4_KERNELS:-configured}"
+FFTM_4D_SLAB_XW_TILED_KERNELS="${FFTM_4D_SLAB_XW_TILED_KERNELS:-configured}"
+FFTM_4D_SLAB_XW_LAYOUT_STAGES="${FFTM_4D_SLAB_XW_LAYOUT_STAGES:-configured}"
+FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS="${FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS:-configured}"
 CONTIGUOUS_FORWARD_SEND_CHUNK_MIB="${FFTM_CONTIGUOUS_FORWARD_SEND_CHUNK_MIB:-1024}"
 CONTIGUOUS_FORWARD_SEND_REGISTRATION_WARMUPS="${FFTM_CONTIGUOUS_FORWARD_SEND_REGISTRATION_WARMUPS:-0}"
 USE_LARGE_COUNT_DATATYPE_CACHE="${FFTM_USE_LARGE_COUNT_DATATYPE_CACHE:-0}"
@@ -203,9 +210,9 @@ if dim_is_active "${BENCHMARK_SIZES_4D}" "${FIXED_SCALING_SIZES_4D}" "" ""; then
     fi
 fi
 
-preflight_test_script="test -d '${CONTAINER_DATA_DIR}' && test -w '${CONTAINER_DATA_DIR}'"
+preflight_test_script="set -e; test -d '${CONTAINER_DATA_DIR}' || { echo 'missing container data directory: ${CONTAINER_DATA_DIR}' >&2; exit 41; }; test -w '${CONTAINER_DATA_DIR}' || { echo 'container data directory is not writable: ${CONTAINER_DATA_DIR}' >&2; exit 42; }"
 for bin_name in "${selected_preflight_bins[@]}"; do
-    preflight_test_script="${preflight_test_script} && test -x '${CONTAINER_TESTS_ROOT}/${bin_name}'"
+    preflight_test_script="${preflight_test_script}; test -x '${CONTAINER_TESTS_ROOT}/${bin_name}' || { echo 'missing or non-executable benchmark binary: ${CONTAINER_TESTS_ROOT}/${bin_name}' >&2; ls -l '${CONTAINER_TESTS_ROOT}' >&2 || true; exit 43; }"
 done
 
 if [[ "${RUN_PREFLIGHT}" != "0" && "${RUN_PREFLIGHT}" != "false" && "${RUN_PREFLIGHT}" != "FALSE" &&
@@ -283,6 +290,13 @@ args=(
     --strategies-4d "${STRATEGIES_4D}"
     --pencil-pencil-grid-orientations "${PENCIL_PENCIL_GRID_ORIENTATIONS}"
     --native-opt0-y-executor-variants "${NATIVE_OPT0_Y_EXECUTOR_VARIANTS}"
+    --fftm-4d-slab-xw-transposes "${FFTM_4D_SLAB_XW_TRANSPOSES}"
+    --fftm-4d-slab-xw-batched-peer-kernels "${FFTM_4D_SLAB_XW_BATCHED_PEER_KERNELS}"
+    --fftm-4d-slab-xw-kernel-layouts "${FFTM_4D_SLAB_XW_KERNEL_LAYOUTS}"
+    --fftm-4d-slab-xw-vector4-kernels "${FFTM_4D_SLAB_XW_VECTOR4_KERNELS}"
+    --fftm-4d-slab-xw-tiled-kernels "${FFTM_4D_SLAB_XW_TILED_KERNELS}"
+    --fftm-4d-slab-xw-layout-stages "${FFTM_4D_SLAB_XW_LAYOUT_STAGES}"
+    --fftm-4d-slab-xw-native-spectral-layouts "${FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS}"
     --timeout-seconds "${TIMEOUT_SECONDS}"
 )
 

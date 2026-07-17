@@ -40,6 +40,13 @@ from run_local_paper_benchmarks import (  # noqa: E402
     FFTM_MODES,
     FFTM_P2P_VARIANTS,
     FFTM_CONTIGUOUS_FORWARD_SEND_MODES,
+    FFTM_4D_SLAB_XW_TRANSPOSES,
+    FFTM_4D_SLAB_XW_BATCHED_PEER_KERNELS,
+    FFTM_4D_SLAB_XW_KERNEL_LAYOUTS,
+    FFTM_4D_SLAB_XW_VECTOR4_KERNELS,
+    FFTM_4D_SLAB_XW_TILED_KERNELS,
+    FFTM_4D_SLAB_XW_LAYOUT_STAGES,
+    FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS,
     FFTM_LARGE_COUNT_P2P_TRANSPORTS,
     FFTM_3D_BACKENDS,
     FFTM_NATIVE_OPT0_Y_CROSS_FACTORY_MODES,
@@ -60,12 +67,26 @@ from run_local_paper_benchmarks import (  # noqa: E402
     p2p_schedulers_for_spec,
     p2p_variants_for_spec,
     contiguous_forward_send_modes_for_spec,
+    fftm_4d_slab_xw_transposes_for_spec,
+    fftm_4d_slab_xw_batched_peer_kernels_for_spec,
+    fftm_4d_slab_xw_kernel_layouts_for_spec,
+    fftm_4d_slab_xw_vector4_kernels_for_spec,
+    fftm_4d_slab_xw_tiled_kernels_for_spec,
+    fftm_4d_slab_xw_layout_stages_for_spec,
+    fftm_4d_slab_xw_native_spectral_layouts_for_spec,
     fftm_3d_backends_for_spec,
     large_count_p2p_transports_for_spec,
     pencil_layouts_for_spec,
     pencil_pipelines_for_spec,
     parse_large_count_p2p_transports,
     parse_contiguous_forward_send_modes,
+    parse_fftm_4d_slab_xw_transposes,
+    parse_fftm_4d_slab_xw_batched_peer_kernels,
+    parse_fftm_4d_slab_xw_kernel_layouts,
+    parse_fftm_4d_slab_xw_vector4_kernels,
+    parse_fftm_4d_slab_xw_tiled_kernels,
+    parse_fftm_4d_slab_xw_layout_stages,
+    parse_fftm_4d_slab_xw_native_spectral_layouts,
     parse_fftm_3d_backends,
     parse_gpu_size_map,
     parse_native_backward_second_peer_loop_modes,
@@ -228,6 +249,51 @@ def binary_name_for_ffts(dim: int, case_name: str) -> str:
     return f"test_ffts_{case_name}_{dim}D.bin"
 
 
+def fftm_4d_xw_matrix_cases_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    slab_native_xw: Optional[bool],
+    factory_modes: Sequence[Optional[str]],
+    fftm_4d_slab_xw_kernel_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_vector4_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_tiled_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_layout_stages: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_native_spectral_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_batched_peer_kernels: Sequence[Optional[bool]],
+) -> List[Tuple[Optional[str], Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool]]]:
+    cases: List[
+        Tuple[Optional[str], Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool]]
+    ] = []
+    kernel_values = fftm_4d_slab_xw_kernel_layouts_for_spec(
+        dim, strategy, slab_native_xw, fftm_4d_slab_xw_kernel_layouts
+    )
+    layout_values = fftm_4d_slab_xw_layout_stages_for_spec(
+        dim, strategy, slab_native_xw, fftm_4d_slab_xw_layout_stages
+    )
+    batched_values = fftm_4d_slab_xw_batched_peer_kernels_for_spec(
+        dim, strategy, slab_native_xw, fftm_4d_slab_xw_batched_peer_kernels
+    )
+
+    for factory_mode in factory_modes:
+        for kernel in kernel_values:
+            vector_values = fftm_4d_slab_xw_vector4_kernels_for_spec(
+                dim, strategy, slab_native_xw, kernel, fftm_4d_slab_xw_vector4_kernels
+            )
+            for vector4 in vector_values:
+                tiled_values = fftm_4d_slab_xw_tiled_kernels_for_spec(
+                    dim, strategy, slab_native_xw, kernel, vector4, fftm_4d_slab_xw_tiled_kernels
+                )
+                for tiled in tiled_values:
+                    for layout_stage in layout_values:
+                        native_spectral_values = fftm_4d_slab_xw_native_spectral_layouts_for_spec(
+                            dim, strategy, slab_native_xw, layout_stage, fftm_4d_slab_xw_native_spectral_layouts
+                        )
+                        for native_spectral in native_spectral_values:
+                            for batched in batched_values:
+                                cases.append((factory_mode, kernel, vector4, tiled, layout_stage, native_spectral, batched))
+    return cases
+
+
 def build_specs(
     binaries: Dict[str, Path],
     gpu_counts: Sequence[int],
@@ -246,6 +312,13 @@ def build_specs(
     pencil_pipelines: Sequence[Optional[str]],
     large_count_p2p_transports: Sequence[Optional[str]],
     contiguous_forward_send_modes: Sequence[Optional[str]],
+    fftm_4d_slab_xw_transposes: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_batched_peer_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_kernel_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_vector4_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_tiled_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_layout_stages: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_native_spectral_layouts: Sequence[Optional[bool]],
     native_backward_second_peer_loop_modes: Sequence[Optional[bool]],
     native_opt0_y_executor_variants: Sequence[Optional[str]],
     native_opt0_y_cross_factory_modes: Sequence[Optional[str]],
@@ -314,6 +387,9 @@ def build_specs(
                             for mode in modes:
                                 for variant in p2p_variants_for_spec(dim, transport, strategy, mode, p2p_variants):
                                     for scheduler in p2p_schedulers_for_spec(dim, transport, mode, p2p_schedulers):
+                                        for slab_native_xw in fftm_4d_slab_xw_transposes_for_spec(
+                                            dim, strategy, fftm_4d_slab_xw_transposes
+                                        ):
                                             for pencil_layout in pencil_layouts_for_spec(dim, strategy, pencil_layouts):
                                                 for pencil_pipeline in pencil_pipelines_for_spec(
                                                     dim, strategy, mode, pencil_pipelines
@@ -381,34 +457,72 @@ def build_specs(
                                                                                     and fftm_3d_backend in (None, "native")
                                                                                 ):
                                                                                     factory_modes = [None]
-                                                                            for native_opt0_y_cross_factory_mode in factory_modes:
-                                                                                specs.append(
-                                                                                    RunSpec(
-                                                                                        suite="fftm",
-                                                                                        dim=dim,
-                                                                                        case_name="benchmark",
-                                                                                        binary_name=name,
-                                                                                        binary_path=str(binaries[name]),
-                                                                                        num_gpus=num_gpus,
-                                                                                        transport=transport,
-                                                                                        strategy=strategy,
-                                                                                        mode=mode,
-                                                                                        uses_mpi=True,
-                                                                                        supports_directory=True,
-                                                                                        memory_family=f"fftm:{dim}d:benchmark:{num_gpus}:{transport}:{strategy}:{fftm_3d_backend or 'configured'}:{native_opt0_y_executor_variant or 'y-configured'}:{native_opt0_y_cross_factory_mode or 'factory-configured'}",
-                                                                                        p2p_variant=variant,
-                                                                                        p2p_scheduler=scheduler,
-                                                                                        pencil_layout=pencil_layout,
-                                                                                        pencil_pipeline=pencil_pipeline,
-                                                                                        large_count_p2p_transport=large_count_transport,
-                                                                                        contiguous_forward_send_mode=contiguous_forward_send_mode,
-                                                                                        native_backward_second_peer_loop=native_backward_second_peer_loop,
-                                                                                        fftm_3d_backend=fftm_3d_backend,
-                                                                                        native_opt0_y_executor_variant=native_opt0_y_executor_variant,
-                                                                                        native_opt0_y_cross_factory_mode=native_opt0_y_cross_factory_mode,
-                                                                                        grid=grid,
+                                                                            for (
+                                                                                native_opt0_y_cross_factory_mode,
+                                                                                slab_xw_kernel,
+                                                                                slab_xw_vector4,
+                                                                                slab_xw_tiled,
+                                                                                slab_xw_layout_stage,
+                                                                                slab_xw_native_spectral,
+                                                                                slab_xw_batched,
+                                                                            ) in fftm_4d_xw_matrix_cases_for_spec(
+                                                                                dim,
+                                                                                strategy,
+                                                                                slab_native_xw,
+                                                                                factory_modes,
+                                                                                fftm_4d_slab_xw_kernel_layouts,
+                                                                                fftm_4d_slab_xw_vector4_kernels,
+                                                                                fftm_4d_slab_xw_tiled_kernels,
+                                                                                fftm_4d_slab_xw_layout_stages,
+                                                                                fftm_4d_slab_xw_native_spectral_layouts,
+                                                                                fftm_4d_slab_xw_batched_peer_kernels,
+                                                                            ):
+                                                                                    specs.append(
+                                                                                        RunSpec(
+                                                                                            suite="fftm",
+                                                                                            dim=dim,
+                                                                                            case_name="benchmark",
+                                                                                            binary_name=name,
+                                                                                            binary_path=str(binaries[name]),
+                                                                                            num_gpus=num_gpus,
+                                                                                            transport=transport,
+                                                                                            strategy=strategy,
+                                                                                            mode=mode,
+                                                                                            uses_mpi=True,
+                                                                                            supports_directory=True,
+                                                                                            memory_family=(
+                                                                                                f"fftm:{dim}d:benchmark:{num_gpus}:{transport}:{strategy}:"
+                                                                                                f"{'native-xw' if slab_native_xw else 'staged-xw' if slab_native_xw is False else 'configured-xw'}:"
+                                                                                                f"{'tensor' if slab_xw_kernel else 'buffer' if slab_xw_kernel is False else 'kernel-configured'}:"
+                                                                                                f"{'vector4' if slab_xw_vector4 else 'scalar' if slab_xw_vector4 is False else 'vector-configured'}:"
+                                                                                                f"{'tiled' if slab_xw_tiled else 'untiled' if slab_xw_tiled is False else 'tile-configured'}:"
+                                                                                                f"{'layout-stage' if slab_xw_layout_stage else 'direct-layout' if slab_xw_layout_stage is False else 'layout-configured'}:"
+                                                                                                f"{'native-spectral' if slab_xw_native_spectral else 'public-spectral' if slab_xw_native_spectral is False else 'spectral-configured'}:"
+                                                                                                f"{'batched' if slab_xw_batched else 'legacy' if slab_xw_batched is False else 'batch-configured'}:"
+                                                                                                f"{fftm_3d_backend or 'configured'}:"
+                                                                                                f"{native_opt0_y_executor_variant or 'y-configured'}:"
+                                                                                                f"{native_opt0_y_cross_factory_mode or 'factory-configured'}"
+                                                                                            ),
+                                                                                            p2p_variant=variant,
+                                                                                            p2p_scheduler=scheduler,
+                                                                                            pencil_layout=pencil_layout,
+                                                                                            pencil_pipeline=pencil_pipeline,
+                                                                                            large_count_p2p_transport=large_count_transport,
+                                                                                            contiguous_forward_send_mode=contiguous_forward_send_mode,
+                                                                                            native_backward_second_peer_loop=native_backward_second_peer_loop,
+                                                                                            fftm_4d_slab_native_xw=slab_native_xw,
+                                                                                            fftm_4d_slab_xw_batched_peer_kernels=slab_xw_batched,
+                                                                                            fftm_4d_slab_xw_tensor_coalesced_kernels=slab_xw_kernel,
+                                                                                            fftm_4d_slab_xw_vector4_kernels=slab_xw_vector4,
+                                                                                            fftm_4d_slab_xw_tiled_kernels=slab_xw_tiled,
+                                                                                            fftm_4d_slab_xw_layout_stage=slab_xw_layout_stage,
+                                                                                            fftm_4d_slab_xw_native_spectral_layout=slab_xw_native_spectral,
+                                                                                            fftm_3d_backend=fftm_3d_backend,
+                                                                                            native_opt0_y_executor_variant=native_opt0_y_executor_variant,
+                                                                                            native_opt0_y_cross_factory_mode=native_opt0_y_cross_factory_mode,
+                                                                                            grid=grid,
+                                                                                        )
                                                                                     )
-                                                                                )
 
                     if include_versioned:
                         versioned_modes = modes if versioned_full_matrix else ("p2p-waitany",)
@@ -499,6 +613,27 @@ class PaperClusterRunner:
         self.contiguous_forward_send_modes = parse_contiguous_forward_send_modes(
             args.contiguous_forward_send_modes
         )
+        self.fftm_4d_slab_xw_transposes = parse_fftm_4d_slab_xw_transposes(
+            args.fftm_4d_slab_xw_transposes
+        )
+        self.fftm_4d_slab_xw_batched_peer_kernels = parse_fftm_4d_slab_xw_batched_peer_kernels(
+            args.fftm_4d_slab_xw_batched_peer_kernels
+        )
+        self.fftm_4d_slab_xw_kernel_layouts = parse_fftm_4d_slab_xw_kernel_layouts(
+            args.fftm_4d_slab_xw_kernel_layouts
+        )
+        self.fftm_4d_slab_xw_vector4_kernels = parse_fftm_4d_slab_xw_vector4_kernels(
+            args.fftm_4d_slab_xw_vector4_kernels
+        )
+        self.fftm_4d_slab_xw_tiled_kernels = parse_fftm_4d_slab_xw_tiled_kernels(
+            args.fftm_4d_slab_xw_tiled_kernels
+        )
+        self.fftm_4d_slab_xw_layout_stages = parse_fftm_4d_slab_xw_layout_stages(
+            args.fftm_4d_slab_xw_layout_stages
+        )
+        self.fftm_4d_slab_xw_native_spectral_layouts = parse_fftm_4d_slab_xw_native_spectral_layouts(
+            args.fftm_4d_slab_xw_native_spectral_layouts
+        )
         self.native_backward_second_peer_loop_modes = parse_native_backward_second_peer_loop_modes(
             args.native_backward_second_peer_loop_modes
         )
@@ -537,6 +672,13 @@ class PaperClusterRunner:
             pencil_pipelines=self.pencil_pipelines,
             large_count_p2p_transports=self.large_count_p2p_transports,
             contiguous_forward_send_modes=self.contiguous_forward_send_modes,
+            fftm_4d_slab_xw_transposes=self.fftm_4d_slab_xw_transposes,
+            fftm_4d_slab_xw_batched_peer_kernels=self.fftm_4d_slab_xw_batched_peer_kernels,
+            fftm_4d_slab_xw_kernel_layouts=self.fftm_4d_slab_xw_kernel_layouts,
+            fftm_4d_slab_xw_vector4_kernels=self.fftm_4d_slab_xw_vector4_kernels,
+            fftm_4d_slab_xw_tiled_kernels=self.fftm_4d_slab_xw_tiled_kernels,
+            fftm_4d_slab_xw_layout_stages=self.fftm_4d_slab_xw_layout_stages,
+            fftm_4d_slab_xw_native_spectral_layouts=self.fftm_4d_slab_xw_native_spectral_layouts,
             native_backward_second_peer_loop_modes=self.native_backward_second_peer_loop_modes,
             native_opt0_y_executor_variants=self.native_opt0_y_executor_variants,
             native_opt0_y_cross_factory_modes=self.native_opt0_y_cross_factory_modes,
@@ -1069,6 +1211,54 @@ class PaperClusterRunner:
                     if self.args.enable_gpu_telemetry
                     else "--disable-gpu-telemetry"
                 )
+            else:
+                args.append(
+                    "--enable-native-stage-timers"
+                    if self.args.enable_native_stage_timers
+                    else "--disable-native-stage-timers"
+                )
+                if spec.fftm_4d_slab_native_xw is not None:
+                    args.append(
+                        "--use-4d-slab-native-xw-transpose"
+                        if spec.fftm_4d_slab_native_xw
+                        else "--no-4d-slab-native-xw-transpose"
+                    )
+                if spec.fftm_4d_slab_xw_batched_peer_kernels is not None:
+                    args.append(
+                        "--use-4d-slab-native-xw-batched-peer-kernels"
+                        if spec.fftm_4d_slab_xw_batched_peer_kernels
+                        else "--no-4d-slab-native-xw-batched-peer-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_tensor_coalesced_kernels is not None:
+                    args.append(
+                        "--use-4d-slab-native-xw-tensor-coalesced-kernels"
+                        if spec.fftm_4d_slab_xw_tensor_coalesced_kernels
+                        else "--no-4d-slab-native-xw-tensor-coalesced-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_vector4_kernels is not None:
+                    args.append(
+                        "--use-4d-slab-native-xw-vector4-kernels"
+                        if spec.fftm_4d_slab_xw_vector4_kernels
+                        else "--no-4d-slab-native-xw-vector4-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_tiled_kernels is not None:
+                    args.append(
+                        "--use-4d-slab-native-xw-tiled-kernels"
+                        if spec.fftm_4d_slab_xw_tiled_kernels
+                        else "--no-4d-slab-native-xw-tiled-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_layout_stage is not None:
+                    args.append(
+                        "--use-4d-slab-native-xw-layout-stage"
+                        if spec.fftm_4d_slab_xw_layout_stage
+                        else "--no-4d-slab-native-xw-layout-stage"
+                    )
+                if spec.fftm_4d_slab_xw_native_spectral_layout is not None:
+                    args.append(
+                        "--use-4d-slab-native-xw-native-spectral-layout"
+                        if spec.fftm_4d_slab_xw_native_spectral_layout
+                        else "--no-4d-slab-native-xw-native-spectral-layout"
+                    )
         args.extend(["--times", str(times)])
         warmup = self.warmup_for_spec(spec)
         if warmup > 0:
@@ -1145,6 +1335,13 @@ class PaperClusterRunner:
             f"{spec.pencil_layout or 'layout-configured'}_{spec.pencil_pipeline or 'pipe-configured'}_"
             f"{spec.large_count_p2p_transport or 'large-configured'}_"
             f"{spec.contiguous_forward_send_mode or 'contig-configured'}_"
+            f"4dxw-{('native' if spec.fftm_4d_slab_native_xw else 'staged') if spec.fftm_4d_slab_native_xw is not None else 'configured'}_"
+            f"xwkernel-{('tensor' if spec.fftm_4d_slab_xw_tensor_coalesced_kernels else 'buffer') if spec.fftm_4d_slab_xw_tensor_coalesced_kernels is not None else 'configured'}_"
+            f"xwvec4-{('on' if spec.fftm_4d_slab_xw_vector4_kernels else 'off') if spec.fftm_4d_slab_xw_vector4_kernels is not None else 'configured'}_"
+            f"xwtile-{('on' if spec.fftm_4d_slab_xw_tiled_kernels else 'off') if spec.fftm_4d_slab_xw_tiled_kernels is not None else 'configured'}_"
+            f"xwstage-{('on' if spec.fftm_4d_slab_xw_layout_stage else 'off') if spec.fftm_4d_slab_xw_layout_stage is not None else 'configured'}_"
+            f"xwspec-{('native' if spec.fftm_4d_slab_xw_native_spectral_layout else 'public') if spec.fftm_4d_slab_xw_native_spectral_layout is not None else 'configured'}_"
+            f"xwbatch-{('on' if spec.fftm_4d_slab_xw_batched_peer_kernels else 'off') if spec.fftm_4d_slab_xw_batched_peer_kernels is not None else 'configured'}_"
             f"bwd2peer-{('on' if spec.native_backward_second_peer_loop else 'off') if spec.native_backward_second_peer_loop is not None else 'configured'}_"
             f"{spec.fftm_3d_backend or 'backend-configured'}_"
             f"{spec.native_opt0_y_executor_variant or 'y-configured'}_"
@@ -1216,6 +1413,13 @@ class PaperClusterRunner:
             f"yfactory={spec.native_opt0_y_cross_factory_mode or 'configured'} "
             f"{spec.large_count_p2p_transport or 'large-configured'} "
             f"{spec.contiguous_forward_send_mode or 'contig-configured'} "
+            f"4dxw={('native' if spec.fftm_4d_slab_native_xw else 'staged') if spec.fftm_4d_slab_native_xw is not None else 'configured'} "
+            f"xwkernel={('tensor' if spec.fftm_4d_slab_xw_tensor_coalesced_kernels else 'buffer') if spec.fftm_4d_slab_xw_tensor_coalesced_kernels is not None else 'configured'} "
+            f"xwvec4={('on' if spec.fftm_4d_slab_xw_vector4_kernels else 'off') if spec.fftm_4d_slab_xw_vector4_kernels is not None else 'configured'} "
+            f"xwtile={('on' if spec.fftm_4d_slab_xw_tiled_kernels else 'off') if spec.fftm_4d_slab_xw_tiled_kernels is not None else 'configured'} "
+            f"xwstage={('on' if spec.fftm_4d_slab_xw_layout_stage else 'off') if spec.fftm_4d_slab_xw_layout_stage is not None else 'configured'} "
+            f"xwspec={('native' if spec.fftm_4d_slab_xw_native_spectral_layout else 'public') if spec.fftm_4d_slab_xw_native_spectral_layout is not None else 'configured'} "
+            f"xwbatch={('on' if spec.fftm_4d_slab_xw_batched_peer_kernels else 'off') if spec.fftm_4d_slab_xw_batched_peer_kernels is not None else 'configured'} "
             f"bwd2peer={('on' if spec.native_backward_second_peer_loop else 'off') if spec.native_backward_second_peer_loop is not None else 'configured'} "
             f"{grid_slug(spec.grid)} sizes={sizes}",
             flush=True,
@@ -1989,6 +2193,62 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--fftm-4d-slab-xw-transposes",
+        default="configured",
+        help=(
+            "4D slab-slab XW transpose matrix: configured, all/both, or comma-separated subset "
+            f"of {','.join(FFTM_4D_SLAB_XW_TRANSPOSES)}."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-batched-peer-kernels",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW pack/unpack kernel matrix: configured, all/both, or comma-separated subset "
+            f"of {','.join(FFTM_4D_SLAB_XW_BATCHED_PEER_KERNELS)}."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-kernel-layouts",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW kernel memory-layout matrix: configured, all/both, or comma-separated subset "
+            f"of {','.join(FFTM_4D_SLAB_XW_KERNEL_LAYOUTS)}."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-vector4-kernels",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW vectorized-buffer kernel matrix: configured, all/both, or comma-separated subset "
+            f"of {','.join(FFTM_4D_SLAB_XW_VECTOR4_KERNELS)}."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-tiled-kernels",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW tiled kernel matrix: configured, all/both, or comma-separated subset "
+            f"of {','.join(FFTM_4D_SLAB_XW_TILED_KERNELS)}."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-layout-stages",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW output layout matrix: configured, all/both, or comma-separated subset "
+            f"of {','.join(FFTM_4D_SLAB_XW_LAYOUT_STAGES)}."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-native-spectral-layouts",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW spectral buffer layout matrix: configured, all/both, or comma-separated subset "
+            f"of {','.join(FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS)}."
+        ),
+    )
+    parser.add_argument(
         "--contiguous-forward-send-chunk-mib",
         type=int,
         default=1024,
@@ -2064,7 +2324,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Grid orientations scheduled for 3D pencil-pencil FFTM runs: configured, both, production, default, or reversed. "
             "configured passes no --grid argument so an autotune config can choose the grid. "
-            "production uses known safe choices, currently 8G opt0/auto -> 4x2 and 8G opt1 -> 2x4. "
+            "production uses known safe choices, currently 7G opt0/auto -> 7x1, "
+            "8G opt0/auto -> 4x2, and 8G opt1 -> 2x4. "
             "Default: both"
         ),
     )

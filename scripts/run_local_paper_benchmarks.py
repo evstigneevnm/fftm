@@ -37,6 +37,13 @@ FFTM_PENCIL_PIPELINE_ALIASES = {
 }
 FFTM_LARGE_COUNT_P2P_TRANSPORTS = ("hindexed", "mpi-count", "element-count", "chunked")
 FFTM_CONTIGUOUS_FORWARD_SEND_MODES = ("single", "chunked")
+FFTM_4D_SLAB_XW_TRANSPOSES = ("staged", "native")
+FFTM_4D_SLAB_XW_BATCHED_PEER_KERNELS = ("legacy", "batched")
+FFTM_4D_SLAB_XW_KERNEL_LAYOUTS = ("buffer", "tensor")
+FFTM_4D_SLAB_XW_VECTOR4_KERNELS = ("off", "on")
+FFTM_4D_SLAB_XW_TILED_KERNELS = ("off", "on")
+FFTM_4D_SLAB_XW_LAYOUT_STAGES = ("direct", "stage")
+FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS = ("public", "native")
 FFTM_NATIVE_BACKWARD_SECOND_PEER_LOOP_MODES = ("off", "on")
 FFTM_3D_BACKENDS = ("native", "fftm3d-scfd-fft-facade")
 FFTM_NATIVE_OPT0_Y_CROSS_FACTORY_MODES = (
@@ -964,6 +971,411 @@ def contiguous_forward_send_modes_for_spec(
     return [None]
 
 
+def parse_fftm_4d_slab_xw_transposes(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "staged": False,
+        "stage": False,
+        "old": False,
+        "native": True,
+        "direct": True,
+        "native-xw": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_SLAB_XW_TRANSPOSES]
+        raise ValueError(
+            "unknown --fftm-4d-slab-xw-transposes value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def fftm_4d_slab_xw_transposes_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "slab-slab":
+        return list(selected)
+    return [None]
+
+
+def parse_fftm_4d_slab_xw_batched_peer_kernels(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "legacy": False,
+        "old": False,
+        "per-peer": False,
+        "perpeer": False,
+        "sync": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "batched": True,
+        "batch": True,
+        "optimized": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_SLAB_XW_BATCHED_PEER_KERNELS]
+        raise ValueError(
+            "unknown --fftm-4d-slab-xw-batched-peer-kernels value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def fftm_4d_slab_xw_batched_peer_kernels_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    slab_native_xw: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "slab-slab" and slab_native_xw is not False:
+        return list(selected)
+    return [None]
+
+
+def parse_fftm_4d_slab_xw_kernel_layouts(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "buffer": False,
+        "buffer-contiguous": False,
+        "mpi-buffer": False,
+        "mpi": False,
+        "old": False,
+        "legacy": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "tensor": True,
+        "tensor-contiguous": True,
+        "tensor-coalesced": True,
+        "coalesced": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_SLAB_XW_KERNEL_LAYOUTS]
+        raise ValueError(
+            "unknown --fftm-4d-slab-xw-kernel-layouts value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def fftm_4d_slab_xw_kernel_layouts_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    slab_native_xw: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "slab-slab" and slab_native_xw is not False:
+        return list(selected)
+    return [None]
+
+
+def parse_fftm_4d_slab_xw_vector4_kernels(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "off": False,
+        "0": False,
+        "false": False,
+        "legacy": False,
+        "buffer": False,
+        "on": True,
+        "1": True,
+        "true": True,
+        "vector": True,
+        "vector4": True,
+        "vec4": True,
+        "x4": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_SLAB_XW_VECTOR4_KERNELS]
+        raise ValueError(
+            "unknown --fftm-4d-slab-xw-vector4-kernels value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def fftm_4d_slab_xw_vector4_kernels_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    slab_native_xw: Optional[bool],
+    slab_xw_tensor_coalesced: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "slab-slab" and slab_native_xw is not False:
+        if slab_xw_tensor_coalesced:
+            return [False]
+        return list(selected)
+    return [None]
+
+
+def parse_fftm_4d_slab_xw_tiled_kernels(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "off": False,
+        "0": False,
+        "false": False,
+        "legacy": False,
+        "scalar": False,
+        "on": True,
+        "1": True,
+        "true": True,
+        "tile": True,
+        "tiled": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_SLAB_XW_TILED_KERNELS]
+        raise ValueError(
+            "unknown --fftm-4d-slab-xw-tiled-kernels value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def fftm_4d_slab_xw_tiled_kernels_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    slab_native_xw: Optional[bool],
+    slab_xw_tensor_coalesced: Optional[bool],
+    slab_xw_vector4: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "slab-slab" and slab_native_xw is not False:
+        if slab_xw_tensor_coalesced or slab_xw_vector4:
+            return [False]
+        return list(selected)
+    return [None]
+
+
+def parse_fftm_4d_slab_xw_layout_stages(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "direct": False,
+        "public": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "stage": True,
+        "staged": True,
+        "layout-stage": True,
+        "xzwy": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_SLAB_XW_LAYOUT_STAGES]
+        raise ValueError(
+            "unknown --fftm-4d-slab-xw-layout-stages value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def fftm_4d_slab_xw_layout_stages_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    slab_native_xw: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "slab-slab" and slab_native_xw is not False:
+        return list(selected)
+    return [None]
+
+
+def parse_fftm_4d_slab_xw_native_spectral_layouts(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "public": False,
+        "yzwx": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "native": True,
+        "xzwy": True,
+        "native-spectral": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS]
+        raise ValueError(
+            "unknown --fftm-4d-slab-xw-native-spectral-layouts value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def fftm_4d_slab_xw_native_spectral_layouts_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    slab_native_xw: Optional[bool],
+    slab_xw_layout_stage: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "slab-slab" and slab_native_xw is not False:
+        if slab_xw_layout_stage:
+            return [False]
+        return list(selected)
+    return [None]
+
+
 def native_backward_second_peer_loop_modes_for_spec(
     dim: int,
     transport: str,
@@ -1324,6 +1736,13 @@ class RunSpec:
     large_count_p2p_transport: Optional[str] = None
     contiguous_forward_send_mode: Optional[str] = None
     native_backward_second_peer_loop: Optional[bool] = None
+    fftm_4d_slab_native_xw: Optional[bool] = None
+    fftm_4d_slab_xw_batched_peer_kernels: Optional[bool] = None
+    fftm_4d_slab_xw_tensor_coalesced_kernels: Optional[bool] = None
+    fftm_4d_slab_xw_vector4_kernels: Optional[bool] = None
+    fftm_4d_slab_xw_tiled_kernels: Optional[bool] = None
+    fftm_4d_slab_xw_layout_stage: Optional[bool] = None
+    fftm_4d_slab_xw_native_spectral_layout: Optional[bool] = None
     fftm_3d_backend: Optional[str] = None
     native_opt0_y_executor_variant: Optional[str] = None
     native_opt0_y_cross_factory_mode: Optional[str] = None
@@ -1360,6 +1779,10 @@ def grid_orientations_for_spec(
     reversed_grid = (default_grid[1], default_grid[0])
 
     if orientation_mode == "production":
+        if num_gpus == 7:
+            if pencil_layout == "opt1":
+                return [default_grid]
+            return [reversed_grid]
         if num_gpus == 8:
             if pencil_layout == "opt1":
                 return [default_grid]
@@ -1520,6 +1943,13 @@ def add_fftm_specs(
     pencil_pipelines: Sequence[Optional[str]],
     large_count_p2p_transports: Sequence[Optional[str]],
     contiguous_forward_send_modes: Sequence[Optional[str]],
+    fftm_4d_slab_xw_transposes: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_batched_peer_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_kernel_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_vector4_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_tiled_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_layout_stages: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_native_spectral_layouts: Sequence[Optional[bool]],
     native_backward_second_peer_loop_modes: Sequence[Optional[bool]],
     fftm_3d_backends: Sequence[Optional[str]],
     use_contiguous_forward_byte_send: bool,
@@ -1606,22 +2036,61 @@ def add_fftm_specs(
             if benchmark_4d in binaries:
                 for strategy in FFTM_STRATEGIES_4D:
                     for mode in FFTM_MODES:
-                        specs.append(
-                            RunSpec(
-                                suite="fftm",
-                                dim=4,
-                                case_name="benchmark",
-                                binary_name=benchmark_4d,
-                                binary_path=str(binaries[benchmark_4d]),
-                                num_gpus=num_gpus,
-                                transport=transport_name,
-                                strategy=strategy,
-                                mode=mode,
-                                uses_mpi=True,
-                                supports_directory=True,
-                                memory_family=f"fftm:4d:small:{num_gpus}:{strategy}",
-                            )
-                        )
+                        for slab_native_xw in fftm_4d_slab_xw_transposes_for_spec(
+                            4, strategy, fftm_4d_slab_xw_transposes
+                        ):
+                            for slab_xw_tensor in fftm_4d_slab_xw_kernel_layouts_for_spec(
+                                4, strategy, slab_native_xw, fftm_4d_slab_xw_kernel_layouts
+                            ):
+                                for slab_xw_vector4 in fftm_4d_slab_xw_vector4_kernels_for_spec(
+                                    4, strategy, slab_native_xw, slab_xw_tensor, fftm_4d_slab_xw_vector4_kernels
+                                ):
+                                    for slab_xw_tiled in fftm_4d_slab_xw_tiled_kernels_for_spec(
+                                        4, strategy, slab_native_xw, slab_xw_tensor, slab_xw_vector4,
+                                        fftm_4d_slab_xw_tiled_kernels
+                                    ):
+                                        for slab_xw_layout_stage in fftm_4d_slab_xw_layout_stages_for_spec(
+                                            4, strategy, slab_native_xw, fftm_4d_slab_xw_layout_stages
+                                        ):
+                                            for slab_xw_native_spectral in fftm_4d_slab_xw_native_spectral_layouts_for_spec(
+                                                4, strategy, slab_native_xw, slab_xw_layout_stage,
+                                                fftm_4d_slab_xw_native_spectral_layouts
+                                            ):
+                                                for slab_xw_batched in fftm_4d_slab_xw_batched_peer_kernels_for_spec(
+                                                    4, strategy, slab_native_xw, fftm_4d_slab_xw_batched_peer_kernels
+                                                ):
+                                                    specs.append(
+                                                        RunSpec(
+                                                            suite="fftm",
+                                                            dim=4,
+                                                            case_name="benchmark",
+                                                            binary_name=benchmark_4d,
+                                                            binary_path=str(binaries[benchmark_4d]),
+                                                            num_gpus=num_gpus,
+                                                            transport=transport_name,
+                                                            strategy=strategy,
+                                                            mode=mode,
+                                                            uses_mpi=True,
+                                                            supports_directory=True,
+                                                            memory_family=(
+                                                                f"fftm:4d:small:{num_gpus}:{strategy}:"
+                                                                f"{'native-xw' if slab_native_xw else 'staged-xw' if slab_native_xw is False else 'configured-xw'}:"
+                                                                f"{'tensor' if slab_xw_tensor else 'buffer' if slab_xw_tensor is False else 'kernel-configured'}:"
+                                                                f"{'vector4' if slab_xw_vector4 else 'scalar' if slab_xw_vector4 is False else 'vector-configured'}:"
+                                                                f"{'tiled' if slab_xw_tiled else 'untiled' if slab_xw_tiled is False else 'tile-configured'}:"
+                                                                f"{'layout-stage' if slab_xw_layout_stage else 'direct-layout' if slab_xw_layout_stage is False else 'layout-configured'}:"
+                                                                f"{'native-spectral' if slab_xw_native_spectral else 'public-spectral' if slab_xw_native_spectral is False else 'spectral-configured'}:"
+                                                                f"{'batched' if slab_xw_batched else 'legacy' if slab_xw_batched is False else 'batch-configured'}"
+                                                            ),
+                                                            fftm_4d_slab_native_xw=slab_native_xw,
+                                                            fftm_4d_slab_xw_batched_peer_kernels=slab_xw_batched,
+                                                            fftm_4d_slab_xw_tensor_coalesced_kernels=slab_xw_tensor,
+                                                            fftm_4d_slab_xw_vector4_kernels=slab_xw_vector4,
+                                                            fftm_4d_slab_xw_tiled_kernels=slab_xw_tiled,
+                                                            fftm_4d_slab_xw_layout_stage=slab_xw_layout_stage,
+                                                            fftm_4d_slab_xw_native_spectral_layout=slab_xw_native_spectral,
+                                                        )
+                                                    )
 
             for testcase in range(5):
                 name_3d = f"test_fftm_v{testcase}_3D{suffix}"
@@ -1676,22 +2145,44 @@ def add_fftm_specs(
                     family_kind = "compare" if testcase == 1 else "poisson" if testcase == 4 else "small"
                     for strategy in FFTM_STRATEGIES_4D:
                         for mode in FFTM_MODES:
-                            specs.append(
-                                RunSpec(
-                                    suite="fftm",
-                                    dim=4,
-                                    case_name=f"v{testcase}",
-                                    binary_name=name_4d,
-                                    binary_path=str(binaries[name_4d]),
-                                    num_gpus=num_gpus,
-                                    transport=transport_name,
-                                    strategy=strategy,
-                                    mode=mode,
-                                    uses_mpi=True,
-                                    supports_directory=False,
-                                    memory_family=f"fftm:4d:{family_kind}:{num_gpus}:{strategy}",
-                                )
-                            )
+                            for slab_native_xw in fftm_4d_slab_xw_transposes_for_spec(
+                                4, strategy, fftm_4d_slab_xw_transposes
+                            ):
+                                for slab_xw_tensor in fftm_4d_slab_xw_kernel_layouts_for_spec(
+                                    4, strategy, slab_native_xw, fftm_4d_slab_xw_kernel_layouts
+                                ):
+                                    for slab_xw_vector4 in fftm_4d_slab_xw_vector4_kernels_for_spec(
+                                        4, strategy, slab_native_xw, slab_xw_tensor, fftm_4d_slab_xw_vector4_kernels
+                                    ):
+                                        for slab_xw_batched in fftm_4d_slab_xw_batched_peer_kernels_for_spec(
+                                            4, strategy, slab_native_xw, fftm_4d_slab_xw_batched_peer_kernels
+                                        ):
+                                            specs.append(
+                                                RunSpec(
+                                                    suite="fftm",
+                                                    dim=4,
+                                                    case_name=f"v{testcase}",
+                                                    binary_name=name_4d,
+                                                    binary_path=str(binaries[name_4d]),
+                                                    num_gpus=num_gpus,
+                                                    transport=transport_name,
+                                                    strategy=strategy,
+                                                    mode=mode,
+                                                    uses_mpi=True,
+                                                    supports_directory=False,
+                                                    memory_family=(
+                                                        f"fftm:4d:{family_kind}:{num_gpus}:{strategy}:"
+                                                        f"{'native-xw' if slab_native_xw else 'staged-xw' if slab_native_xw is False else 'configured-xw'}:"
+                                                        f"{'tensor' if slab_xw_tensor else 'buffer' if slab_xw_tensor is False else 'kernel-configured'}:"
+                                                        f"{'vector4' if slab_xw_vector4 else 'scalar' if slab_xw_vector4 is False else 'vector-configured'}:"
+                                                        f"{'batched' if slab_xw_batched else 'legacy' if slab_xw_batched is False else 'batch-configured'}"
+                                                    ),
+                                                    fftm_4d_slab_native_xw=slab_native_xw,
+                                                    fftm_4d_slab_xw_batched_peer_kernels=slab_xw_batched,
+                                                    fftm_4d_slab_xw_tensor_coalesced_kernels=slab_xw_tensor,
+                                                    fftm_4d_slab_xw_vector4_kernels=slab_xw_vector4,
+                                                )
+                                            )
 
 
 def build_measurement_specs(
@@ -1704,6 +2195,13 @@ def build_measurement_specs(
     pencil_pipelines: Sequence[Optional[str]],
     large_count_p2p_transports: Sequence[Optional[str]],
     contiguous_forward_send_modes: Sequence[Optional[str]],
+    fftm_4d_slab_xw_transposes: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_batched_peer_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_kernel_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_vector4_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_tiled_kernels: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_layout_stages: Sequence[Optional[bool]],
+    fftm_4d_slab_xw_native_spectral_layouts: Sequence[Optional[bool]],
     native_backward_second_peer_loop_modes: Sequence[Optional[bool]],
     fftm_3d_backends: Sequence[Optional[str]],
     use_contiguous_forward_byte_send: bool,
@@ -1722,6 +2220,13 @@ def build_measurement_specs(
         pencil_pipelines=pencil_pipelines,
         large_count_p2p_transports=large_count_p2p_transports,
         contiguous_forward_send_modes=contiguous_forward_send_modes,
+        fftm_4d_slab_xw_transposes=fftm_4d_slab_xw_transposes,
+        fftm_4d_slab_xw_batched_peer_kernels=fftm_4d_slab_xw_batched_peer_kernels,
+        fftm_4d_slab_xw_kernel_layouts=fftm_4d_slab_xw_kernel_layouts,
+        fftm_4d_slab_xw_vector4_kernels=fftm_4d_slab_xw_vector4_kernels,
+        fftm_4d_slab_xw_tiled_kernels=fftm_4d_slab_xw_tiled_kernels,
+        fftm_4d_slab_xw_layout_stages=fftm_4d_slab_xw_layout_stages,
+        fftm_4d_slab_xw_native_spectral_layouts=fftm_4d_slab_xw_native_spectral_layouts,
         native_backward_second_peer_loop_modes=native_backward_second_peer_loop_modes,
         fftm_3d_backends=fftm_3d_backends,
         use_contiguous_forward_byte_send=use_contiguous_forward_byte_send,
@@ -1764,6 +2269,9 @@ def build_probe_families(specs: Sequence[RunSpec], probe_mode: str) -> List[Prob
                 large_count_p2p_transport=spec.large_count_p2p_transport,
                 contiguous_forward_send_mode=spec.contiguous_forward_send_mode,
                 native_backward_second_peer_loop=spec.native_backward_second_peer_loop,
+                fftm_4d_slab_native_xw=spec.fftm_4d_slab_native_xw,
+                fftm_4d_slab_xw_batched_peer_kernels=spec.fftm_4d_slab_xw_batched_peer_kernels,
+                fftm_4d_slab_xw_tensor_coalesced_kernels=spec.fftm_4d_slab_xw_tensor_coalesced_kernels,
                 fftm_3d_backend=spec.fftm_3d_backend,
                 grid=spec.grid,
             )
@@ -1816,6 +2324,27 @@ class LocalPaperBenchmarkRunner:
         self.contiguous_forward_send_modes = parse_contiguous_forward_send_modes(
             self.args.contiguous_forward_send_modes
         )
+        self.fftm_4d_slab_xw_transposes = parse_fftm_4d_slab_xw_transposes(
+            self.args.fftm_4d_slab_xw_transposes
+        )
+        self.fftm_4d_slab_xw_batched_peer_kernels = parse_fftm_4d_slab_xw_batched_peer_kernels(
+            self.args.fftm_4d_slab_xw_batched_peer_kernels
+        )
+        self.fftm_4d_slab_xw_kernel_layouts = parse_fftm_4d_slab_xw_kernel_layouts(
+            self.args.fftm_4d_slab_xw_kernel_layouts
+        )
+        self.fftm_4d_slab_xw_vector4_kernels = parse_fftm_4d_slab_xw_vector4_kernels(
+            self.args.fftm_4d_slab_xw_vector4_kernels
+        )
+        self.fftm_4d_slab_xw_tiled_kernels = parse_fftm_4d_slab_xw_tiled_kernels(
+            self.args.fftm_4d_slab_xw_tiled_kernels
+        )
+        self.fftm_4d_slab_xw_layout_stages = parse_fftm_4d_slab_xw_layout_stages(
+            self.args.fftm_4d_slab_xw_layout_stages
+        )
+        self.fftm_4d_slab_xw_native_spectral_layouts = parse_fftm_4d_slab_xw_native_spectral_layouts(
+            self.args.fftm_4d_slab_xw_native_spectral_layouts
+        )
         self.native_backward_second_peer_loop_modes = parse_native_backward_second_peer_loop_modes(
             self.args.native_backward_second_peer_loop_modes
         )
@@ -1835,6 +2364,13 @@ class LocalPaperBenchmarkRunner:
             pencil_pipelines=self.pencil_pipelines,
             large_count_p2p_transports=self.large_count_p2p_transports,
             contiguous_forward_send_modes=self.contiguous_forward_send_modes,
+            fftm_4d_slab_xw_transposes=self.fftm_4d_slab_xw_transposes,
+            fftm_4d_slab_xw_batched_peer_kernels=self.fftm_4d_slab_xw_batched_peer_kernels,
+            fftm_4d_slab_xw_kernel_layouts=self.fftm_4d_slab_xw_kernel_layouts,
+            fftm_4d_slab_xw_vector4_kernels=self.fftm_4d_slab_xw_vector4_kernels,
+            fftm_4d_slab_xw_tiled_kernels=self.fftm_4d_slab_xw_tiled_kernels,
+            fftm_4d_slab_xw_layout_stages=self.fftm_4d_slab_xw_layout_stages,
+            fftm_4d_slab_xw_native_spectral_layouts=self.fftm_4d_slab_xw_native_spectral_layouts,
             native_backward_second_peer_loop_modes=self.native_backward_second_peer_loop_modes,
             fftm_3d_backends=self.fftm_3d_backends,
             use_contiguous_forward_byte_send=self.args.use_contiguous_forward_byte_send,
@@ -2175,6 +2711,54 @@ class LocalPaperBenchmarkRunner:
                     if self.args.enable_gpu_telemetry
                     else "--disable-gpu-telemetry"
                 )
+            else:
+                command.append(
+                    "--enable-native-stage-timers"
+                    if self.args.enable_native_stage_timers
+                    else "--disable-native-stage-timers"
+                )
+                if spec.fftm_4d_slab_native_xw is not None:
+                    command.append(
+                        "--use-4d-slab-native-xw-transpose"
+                        if spec.fftm_4d_slab_native_xw
+                        else "--no-4d-slab-native-xw-transpose"
+                    )
+                if spec.fftm_4d_slab_xw_batched_peer_kernels is not None:
+                    command.append(
+                        "--use-4d-slab-native-xw-batched-peer-kernels"
+                        if spec.fftm_4d_slab_xw_batched_peer_kernels
+                        else "--no-4d-slab-native-xw-batched-peer-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_tensor_coalesced_kernels is not None:
+                    command.append(
+                        "--use-4d-slab-native-xw-tensor-coalesced-kernels"
+                        if spec.fftm_4d_slab_xw_tensor_coalesced_kernels
+                        else "--no-4d-slab-native-xw-tensor-coalesced-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_vector4_kernels is not None:
+                    command.append(
+                        "--use-4d-slab-native-xw-vector4-kernels"
+                        if spec.fftm_4d_slab_xw_vector4_kernels
+                        else "--no-4d-slab-native-xw-vector4-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_tiled_kernels is not None:
+                    command.append(
+                        "--use-4d-slab-native-xw-tiled-kernels"
+                        if spec.fftm_4d_slab_xw_tiled_kernels
+                        else "--no-4d-slab-native-xw-tiled-kernels"
+                    )
+                if spec.fftm_4d_slab_xw_layout_stage is not None:
+                    command.append(
+                        "--use-4d-slab-native-xw-layout-stage"
+                        if spec.fftm_4d_slab_xw_layout_stage
+                        else "--no-4d-slab-native-xw-layout-stage"
+                    )
+                if spec.fftm_4d_slab_xw_native_spectral_layout is not None:
+                    command.append(
+                        "--use-4d-slab-native-xw-native-spectral-layout"
+                        if spec.fftm_4d_slab_xw_native_spectral_layout
+                        else "--no-4d-slab-native-xw-native-spectral-layout"
+                    )
         command.extend(["--times", str(times)])
         if warmup > 0:
             command.extend(["--warmup", str(warmup)])
@@ -2197,6 +2781,13 @@ class LocalPaperBenchmarkRunner:
             f"{spec.pencil_layout or 'layout-configured'}_{spec.pencil_pipeline or 'pipe-configured'}_"
             f"{spec.large_count_p2p_transport or 'large-configured'}_"
             f"{spec.contiguous_forward_send_mode or 'contig-configured'}_"
+            f"4dxw-{('native' if spec.fftm_4d_slab_native_xw else 'staged') if spec.fftm_4d_slab_native_xw is not None else 'configured'}_"
+            f"xwkernel-{('tensor' if spec.fftm_4d_slab_xw_tensor_coalesced_kernels else 'buffer') if spec.fftm_4d_slab_xw_tensor_coalesced_kernels is not None else 'configured'}_"
+            f"xwvec4-{('on' if spec.fftm_4d_slab_xw_vector4_kernels else 'off') if spec.fftm_4d_slab_xw_vector4_kernels is not None else 'configured'}_"
+            f"xwtile-{('on' if spec.fftm_4d_slab_xw_tiled_kernels else 'off') if spec.fftm_4d_slab_xw_tiled_kernels is not None else 'configured'}_"
+            f"xwstage-{('on' if spec.fftm_4d_slab_xw_layout_stage else 'off') if spec.fftm_4d_slab_xw_layout_stage is not None else 'configured'}_"
+            f"xwspec-{('native' if spec.fftm_4d_slab_xw_native_spectral_layout else 'public') if spec.fftm_4d_slab_xw_native_spectral_layout is not None else 'configured'}_"
+            f"xwbatch-{('on' if spec.fftm_4d_slab_xw_batched_peer_kernels else 'off') if spec.fftm_4d_slab_xw_batched_peer_kernels is not None else 'configured'}_"
             f"bwd2peer-{('on' if spec.native_backward_second_peer_loop else 'off') if spec.native_backward_second_peer_loop is not None else 'configured'}_"
             f"{spec.fftm_3d_backend or 'backend-configured'}_"
             f"{grid_slug(spec.grid)}_{'x'.join(str(s) for s in sizes)}"
@@ -3016,6 +3607,63 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--fftm-4d-slab-xw-transposes",
+        default="configured",
+        help=(
+            "4D slab-slab XW transpose matrix: configured, all/both, or comma-separated subset "
+            "of staged,native. staged is the current local-reorder path; native skips the local "
+            "xywz/xzwy reorder pair around same_xw."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-batched-peer-kernels",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW pack/unpack kernel matrix: configured, all/both, or comma-separated subset "
+            "of legacy,batched. legacy waits after each peer kernel; batched waits once per pack/unpack group."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-kernel-layouts",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW kernel memory-layout matrix: configured, all/both, or comma-separated subset "
+            "of buffer,tensor. buffer keeps MPI-buffer-contiguous lanes; tensor keeps tensor-contiguous lanes."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-vector4-kernels",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW vectorized-buffer kernel matrix: configured, all/both, or comma-separated "
+            "subset of off,on. on processes four X-contiguous MPI-buffer elements per work item."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-tiled-kernels",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW tiled kernel matrix: configured, all/both, or comma-separated "
+            "subset of off,on."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-layout-stages",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW output layout matrix: configured, all/both, or comma-separated "
+            "subset of direct,stage. stage unpacks to xzwy scratch before the public yzwx layout conversion."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-xw-native-spectral-layouts",
+        default="configured",
+        help=(
+            "4D slab-slab native-XW spectral buffer layout matrix: configured, all/both, or comma-separated "
+            "subset of public,native. native keeps the spectral buffer in xzwy layout for forward/backward."
+        ),
+    )
+    parser.add_argument(
         "--contiguous-forward-send-chunk-mib",
         type=int,
         default=1024,
@@ -3091,7 +3739,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Pencil-pencil 3D process-grid orientations to run: configured, both, production, default, or reversed. "
             "configured passes no --grid argument so an autotune config can choose the grid. "
-            "production uses known safe choices, currently 8G opt0/auto -> 4x2 and 8G opt1 -> 2x4. "
+            "production uses known safe choices, currently 7G opt0/auto -> 7x1, "
+            "8G opt0/auto -> 4x2, and 8G opt1 -> 2x4. "
             "Default: both, so e.g. 8 GPUs runs both 2x4 and 4x2."
         ),
     )

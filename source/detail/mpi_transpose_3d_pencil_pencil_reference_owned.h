@@ -2923,7 +2923,8 @@ public:
 
     void debug_native_opt0_topology_marker_( const char *stage )
     {
-        if ( !print_schedule_ || !native_opt0_reference_y_buffer_topology_enabled_() )
+        if ( !print_schedule_ || !native_opt0_reference_y_buffer_topology_enabled_() ||
+             !( local_fft_diagnostics_enabled_ || native_stage_timers_enabled_ ) )
             return;
         std::ostringstream ss;
         ss << "native_opt0_reference_y_buffer_topology_marker rank_i=" << myid_i_ << " rank_j=" << myid_j_

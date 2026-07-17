@@ -50,6 +50,24 @@ enum class transform_strategy_4d_mpi
     slab_slab
 };
 
+enum class fftm_4d_spectral_layout
+{
+    public_yzwx,
+    native_xzwy
+};
+
+inline const char *fftm_4d_spectral_layout_name( fftm_4d_spectral_layout layout )
+{
+    switch ( layout )
+    {
+    case fftm_4d_spectral_layout::public_yzwx:
+        return "public-yzwx";
+    case fftm_4d_spectral_layout::native_xzwy:
+        return "native-xzwy";
+    }
+    return "unknown";
+}
+
 template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv, bool UseOptimized = true>
 struct strategy_3d_slab_pencil
 {
@@ -146,6 +164,15 @@ struct fftm_init_options
     std::string local_fft_diagnostics_directory;
     std::string local_fft_diagnostics_label;
     bool        enable_native_stage_timers       = false;
+    bool        use_4d_slab_native_xw_transpose  = true;
+    bool        use_4d_slab_native_xw_batched_peer_kernels = false;
+    bool        use_4d_slab_native_xw_tensor_coalesced_kernels = false;
+    bool        use_4d_slab_native_xw_vector4_kernels = false;
+    bool        use_4d_slab_native_xw_tiled_kernels = false;
+    bool        use_4d_slab_native_xw_layout_stage = false;
+    fftm_4d_spectral_layout spectral_layout_4d = fftm_4d_spectral_layout::public_yzwx;
+    // Deprecated compatibility alias for the benchmark/script layer. Prefer spectral_layout_4d.
+    bool        use_4d_slab_native_xw_native_spectral_layout = false;
 };
 
 namespace detail
@@ -384,6 +411,9 @@ public:
             Dim == 4, typename detail::fftm_4d_array_traits<real, complex, memory_t, Strategy4D>::complex_array_t,
             void>::type>::type;
 
+    using native_spectral_array4_t =
+        typename detail::fftm_4d_array_traits<real, complex, memory_t, Strategy4D>::stage2_complex_array_t;
+
     static constexpr transform_strategy_3d     strategy_family_3d = detail::fftm_3d_strategy_traits<Strategy3D>::family;
     static constexpr mpi_transpose_3d_mode     transpose_mode_3d  = detail::fftm_3d_strategy_traits<Strategy3D>::mode;
     static constexpr bool strategy_3d_optimized_layout = detail::fftm_3d_strategy_traits<Strategy3D>::optimized_layout;
@@ -481,9 +511,72 @@ public:
     std::tuple<std::size_t, std::size_t, std::size_t, std::size_t> get_local_output_sizes_4d() const
     {
         ensure_dimension_( 4 );
+        return get_local_spectral_sizes_4d( fftm_4d_spectral_layout::public_yzwx );
+    }
+
+    std::tuple<std::size_t, std::size_t, std::size_t, std::size_t> get_local_spectral_sizes_4d() const
+    {
+        ensure_dimension_( 4 );
+        return get_local_spectral_sizes_4d( spectral_layout_4d() );
+    }
+
+    std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>
+    get_local_spectral_sizes_4d( fftm_4d_spectral_layout layout ) const
+    {
+        ensure_dimension_( 4 );
+        if ( layout == fftm_4d_spectral_layout::native_xzwy )
+        {
+            ensure_native_spectral_layout_supported_();
+            return std::make_tuple(
+                transpose2_dim_.size_x[myid_i_], transpose2_dim_.size_z[myid_j_],
+                transpose2_dim_.size_w[myid_k_], transpose2_dim_.size_y[0]
+            );
+        }
         return std::make_tuple(
             output_dim_.size_y[myid_i_], output_dim_.size_z[myid_j_], output_dim_.size_w[myid_k_], output_dim_.size_x[0]
         );
+    }
+
+    std::tuple<std::size_t, std::size_t, std::size_t, std::size_t> get_local_spectral_starts_4d() const
+    {
+        ensure_dimension_( 4 );
+        return get_local_spectral_starts_4d( spectral_layout_4d() );
+    }
+
+    std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>
+    get_local_spectral_starts_4d( fftm_4d_spectral_layout layout ) const
+    {
+        ensure_dimension_( 4 );
+        if ( layout == fftm_4d_spectral_layout::native_xzwy )
+        {
+            ensure_native_spectral_layout_supported_();
+            return std::make_tuple(
+                transpose2_dim_.start_x[myid_i_], transpose2_dim_.start_z[myid_j_],
+                transpose2_dim_.start_w[myid_k_], transpose2_dim_.start_y[0]
+            );
+        }
+        return std::make_tuple(
+            output_dim_.start_y[myid_i_], output_dim_.start_z[myid_j_], output_dim_.start_w[myid_k_],
+            output_dim_.start_x[0]
+        );
+    }
+
+    fftm_4d_spectral_layout spectral_layout_4d() const
+    {
+        ensure_dimension_( 4 );
+        return init_options_.spectral_layout_4d;
+    }
+
+    bool uses_native_spectral_layout_4d() const
+    {
+        return spectral_layout_4d() == fftm_4d_spectral_layout::native_xzwy;
+    }
+
+    native_spectral_array4_t make_native_spectral_view_4d( complex_array_t<4> &array ) const
+    {
+        ensure_dimension_( 4 );
+        ensure_native_spectral_layout_supported_();
+        return slab_4d_native_xw_native_spectral_view_( array );
     }
 
     const partition_t &input_partition() const
@@ -517,11 +610,25 @@ public:
         SCFD_SAFE_CALL( forward_4d_( strategy_family_4d_tag(), in, out ) );
     }
 
+    void forward_native_spectral_4d( const real_array_t<4> &in, native_spectral_array4_t &out )
+    {
+        ensure_dimension_( 4 );
+        ensure_native_spectral_layout_supported_();
+        SCFD_SAFE_CALL( forward_native_spectral_4d_( strategy_family_4d_tag(), in, out ) );
+    }
+
     // Destructive inverse: the spectral input is reused as a work buffer to avoid a full-domain copy.
     void backward( complex_array_t<4> &in, real_array_t<4> &out )
     {
         ensure_dimension_( 4 );
         SCFD_SAFE_CALL( backward_4d_( strategy_family_4d_tag(), in, out ) );
+    }
+
+    void backward_native_spectral_4d( native_spectral_array4_t &in, real_array_t<4> &out )
+    {
+        ensure_dimension_( 4 );
+        ensure_native_spectral_layout_supported_();
+        SCFD_SAFE_CALL( backward_native_spectral_4d_( strategy_family_4d_tag(), in, out ) );
     }
 
     void log_profile()
@@ -568,17 +675,43 @@ public:
 
     void begin_native_stage_timing_iteration( int iteration )
     {
+        if ( dim_ == 4 )
+        {
+            native_4d_stage_timing_iteration_ = iteration;
+            native_4d_stage_timings_.clear();
+            native_4d_stage_timing_active_ = init_options_.enable_native_stage_timers;
+        }
         pencil_pencil_reference_owned_.begin_native_stage_timing_iteration( iteration );
     }
 
     void end_native_stage_timing_iteration()
     {
+        native_4d_stage_timing_active_ = false;
         pencil_pencil_reference_owned_.end_native_stage_timing_iteration();
     }
 
     const std::vector<fftm_native_stage_timing> &native_stage_timings() const
     {
+        if ( dim_ == 4 )
+        {
+            return native_4d_stage_timings_;
+        }
         return pencil_pencil_reference_owned_.native_stage_timings();
+    }
+
+    bool native_opt0_compact_y_workarea_effective() const
+    {
+        return native_opt0_compact_y_workarea_enabled_();
+    }
+
+    bool native_opt0_auto_compact_y_workarea_effective() const
+    {
+        return native_opt0_auto_compact_y_workarea_;
+    }
+
+    bool native_opt0_default_z_scratch_aliased() const
+    {
+        return native_opt0_default_z_scratch_aliased_;
     }
 
     void run_native_opt0_y_same_buffer_microbench(
@@ -697,6 +830,17 @@ private:
     void *shared_host_work_ptr_( std::size_t offset = 0 ) const
     {
         return static_cast<void *>( static_cast<char *>( shared_host_work_buffer_.naive_ptr() ) + offset );
+    }
+
+    std::size_t add_reserve_bytes_( std::size_t allocation_bytes, std::size_t reserve_bytes, const char *what ) const
+    {
+        if ( reserve_bytes > std::numeric_limits<std::size_t>::max() - allocation_bytes )
+        {
+            std::ostringstream ss;
+            ss << what << " overflows size_t";
+            throw std::overflow_error( ss.str() );
+        }
+        return allocation_bytes + reserve_bytes;
     }
 
     std::size_t native_opt0_reference_domain_bytes_() const
@@ -858,6 +1002,78 @@ private:
         }
     }
 
+    void release_native_opt0_default_z_scratch_if_aliased_()
+    {
+        if ( !native_opt0_default_z_scratch_aliasing_enabled_() || scratch_stage0_default_z_3d_.is_free() )
+            return;
+
+        const std::size_t released_bytes =
+            bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_default_z_3d_.size() ), sizeof( complex ) );
+        scratch_stage0_default_z_3d_.free();
+        native_opt0_default_z_scratch_aliased_ = true;
+
+        std::ostringstream ss;
+        ss << "FFTM native opt0 default-Z scratch aliased into shared workspace: released="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( released_bytes ) )
+           << " MiB";
+        log_.info( ss.str() );
+    }
+
+    void maybe_enable_native_opt0_auto_compact_y_workarea_(
+        std::size_t fft_work_size, std::size_t transpose_work_size
+    )
+    {
+        if ( !native_opt0_reference_y_buffer_topology_enabled_() ||
+             !init_options_.use_native_opt0_memory_feasibility_guard ||
+             init_options_.use_native_opt0_compact_y_workarea ||
+             native_opt0_auto_compact_y_workarea_ )
+        {
+            return;
+        }
+
+        const auto mem_info = runtime_api_t::get_device_memory_info();
+        if ( !mem_info.free_bytes_known )
+        {
+            return;
+        }
+
+        const std::size_t reserve_bytes = init_options_.native_opt0_memory_feasibility_reserve_bytes;
+        const std::size_t noncompact_workspace_bytes = align_up_(
+            std::max( std::max( fft_work_size, transpose_work_size ), native_opt0_y_parallel_work_size_( false ) ),
+            256
+        );
+        const std::size_t compact_workspace_bytes = align_up_(
+            std::max( std::max( fft_work_size, transpose_work_size ), native_opt0_y_parallel_work_size_( true ) ),
+            256
+        );
+        const std::size_t noncompact_required_bytes =
+            add_reserve_bytes_( noncompact_workspace_bytes, reserve_bytes, "native opt0 noncompact requirement" );
+        const std::size_t compact_required_bytes =
+            add_reserve_bytes_( compact_workspace_bytes, reserve_bytes, "native opt0 compact requirement" );
+
+        if ( mem_info.free_bytes >= noncompact_required_bytes || mem_info.free_bytes < compact_required_bytes )
+        {
+            return;
+        }
+
+        native_opt0_auto_compact_y_workarea_ = true;
+        pencil_pencil_reference_owned_.set_native_opt0_compact_y_workarea_enabled( true );
+
+        std::ostringstream ss;
+        ss << "FFTM native opt0 auto-compact Y workspace enabled: free="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( mem_info.free_bytes ) )
+           << " MiB, noncompact_required="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( noncompact_required_bytes ) )
+           << " MiB, compact_required="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( compact_required_bytes ) )
+           << " MiB, saved="
+           << bytes_to_mib_(
+                  static_cast<memory_profile_bytes_t>( noncompact_workspace_bytes - compact_workspace_bytes )
+              )
+           << " MiB";
+        log_.info( ss.str() );
+    }
+
     void activate_shared_work_area_()
     {
         const std::size_t fft_work_size       = base_fft_.activate_work_size();
@@ -871,6 +1087,8 @@ private:
                 std::max( same_xw_.get_work_size_bytes(), same_zw_.get_work_size_bytes() )
             )
         );
+        maybe_enable_native_opt0_auto_compact_y_workarea_( fft_work_size, transpose_work_size );
+
         const std::size_t native_opt0_y_work_size = native_opt0_y_parallel_work_size_();
         shared_work_size_ = align_up_( std::max( std::max( fft_work_size, transpose_work_size ), native_opt0_y_work_size ), 256 );
         preflight_native_opt0_shared_work_allocation_( shared_work_size_ );
@@ -902,6 +1120,7 @@ private:
         same_xy_.set_external_work_area( work_area );
         same_xw_.set_external_work_area( work_area );
         same_zw_.set_external_work_area( work_area );
+        release_native_opt0_default_z_scratch_if_aliased_();
         SCFD_SAFE_CALL( bind_native_opt0_y_parallel_fft_plans_() );
         if ( shared_host_work_size_ != 0 )
         {
@@ -932,11 +1151,8 @@ private:
         }
 
         const std::size_t reserve_bytes = init_options_.native_opt0_memory_feasibility_reserve_bytes;
-        if ( reserve_bytes > std::numeric_limits<std::size_t>::max() - allocation_bytes )
-        {
-            throw std::overflow_error( "native opt0 memory feasibility guard overflows size_t" );
-        }
-        const std::size_t required_bytes = allocation_bytes + reserve_bytes;
+        const std::size_t required_bytes =
+            add_reserve_bytes_( allocation_bytes, reserve_bytes, "native opt0 memory feasibility guard" );
         if ( mem_info.free_bytes >= required_bytes )
         {
             return;
@@ -970,8 +1186,9 @@ private:
            << " MiB. ";
         if ( !native_opt0_compact_y_workarea_enabled_() && mem_info.free_bytes >= compact_required_bytes )
         {
-            ss << "Explicit compact native opt0 should fit this device memory, but it is slower on known 6-GPU "
-                  "2048^3 measurements; prefer opt1 unless opt0 was explicitly requested.";
+            ss << "Compact native opt0 should fit this device memory. If this message is reached, auto-compact "
+                  "was not applicable for the current init sequence; explicitly set "
+                  "FFTM_USE_NATIVE_OPT0_COMPACT_Y_WORKAREA=1 to force the compact layout.";
         }
         else
         {
@@ -1025,6 +1242,10 @@ private:
 
     static fftm_init_options normalize_init_options_( fftm_init_options options )
     {
+        if ( options.use_4d_slab_native_xw_native_spectral_layout )
+        {
+            options.spectral_layout_4d = fftm_4d_spectral_layout::native_xzwy;
+        }
         if ( native_opt0_diagnostic_variant_requested_( options ) &&
              !options.allow_native_opt0_diagnostic_variants )
         {
@@ -1040,6 +1261,13 @@ private:
                 "FFTM generic FFT exec no-sync is diagnostic-only. It can race later MPI/copy stages unless every "
                 "consumer has an explicit stage-boundary synchronization. Use the native opt0 Y no-sync path for "
                 "production, or set fftm_init_options::allow_native_opt0_diagnostic_variants=true for diagnostics."
+            );
+        }
+        if ( options.use_4d_slab_native_xw_layout_stage &&
+             options.spectral_layout_4d == fftm_4d_spectral_layout::native_xzwy )
+        {
+            throw std::logic_error(
+                "FFTM 4D slab native XW layout-stage and native-spectral-layout are mutually exclusive."
             );
         }
         if ( is_reference_parity_pencil_pipeline_( options.pencil_pipeline_3d ) )
@@ -1064,9 +1292,16 @@ private:
                options.use_native_opt0_reference_local_plan_context;
     }
 
+    static void native_4d_stage_timing_callback_( void *context, const char *stage, double ms )
+    {
+        static_cast<fftm *>( context )->record_native_4d_stage_timing_( stage, ms );
+    }
+
     void configure_profiling_( const fftm_init_options &options )
     {
         init_options_ = normalize_init_options_( options );
+        native_opt0_auto_compact_y_workarea_ = false;
+        native_opt0_default_z_scratch_aliased_ = false;
         if ( !init_options_.profiling_key.empty() )
         {
             profiler_.enable( init_options_.profiling_key );
@@ -1082,6 +1317,27 @@ private:
         same_xy_.set_profiler( profiler_.native_ptr() );
         same_xw_.set_profiler( profiler_.native_ptr() );
         same_zw_.set_profiler( profiler_.native_ptr() );
+        same_xy_.set_stage_timing_callback(
+            this, &fftm::native_4d_stage_timing_callback_, "4d/transpose/same_xy"
+        );
+        same_xw_.set_stage_timing_callback(
+            this, &fftm::native_4d_stage_timing_callback_, "4d/transpose/same_xw"
+        );
+        same_xw_.set_slab_native_batched_peer_kernels_enabled(
+            init_options_.use_4d_slab_native_xw_batched_peer_kernels
+        );
+        same_xw_.set_slab_native_tensor_coalesced_kernels_enabled(
+            init_options_.use_4d_slab_native_xw_tensor_coalesced_kernels
+        );
+        same_xw_.set_slab_native_vector4_kernels_enabled(
+            init_options_.use_4d_slab_native_xw_vector4_kernels
+        );
+        same_xw_.set_slab_native_tiled_kernels_enabled(
+            init_options_.use_4d_slab_native_xw_tiled_kernels
+        );
+        same_zw_.set_stage_timing_callback(
+            this, &fftm::native_4d_stage_timing_callback_, "4d/transpose/same_zw"
+        );
         same_x_.set_direct_transfer_options(
             init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
         );
@@ -1295,6 +1551,37 @@ private:
         }
     }
 
+    void record_native_4d_stage_timing_( const char *stage, double ms )
+    {
+        if ( !init_options_.enable_native_stage_timers || !native_4d_stage_timing_active_ )
+        {
+            return;
+        }
+
+        fftm_native_stage_timing row;
+        row.stage = stage;
+        row.ms    = ms;
+        native_4d_stage_timings_.push_back( row );
+    }
+
+    template <class Fn>
+    void time_native_4d_stage_( const char *stage, Fn fn )
+    {
+        if ( !init_options_.enable_native_stage_timers || !native_4d_stage_timing_active_ )
+        {
+            fn();
+            return;
+        }
+
+        runtime_api_t::device_synchronize();
+        scfd::utils::system_timer_event begin, end;
+        begin.record();
+        fn();
+        runtime_api_t::device_synchronize();
+        end.record();
+        record_native_4d_stage_timing_( stage, end.elapsed_time( begin ) );
+    }
+
     static double bytes_to_mib_( memory_profile_bytes_t bytes )
     {
         return static_cast<double>( bytes ) / ( 1024.0 * 1024.0 );
@@ -1401,6 +1688,18 @@ private:
         }
     }
 
+    void ensure_native_spectral_layout_supported_() const
+    {
+        if ( strategy_family_4d != transform_strategy_4d_mpi::slab_slab )
+        {
+            throw std::logic_error( "FFTM 4D native-xzwy spectral layout currently requires slab-slab strategy." );
+        }
+        if ( !slab_4d_native_xw_transpose_enabled_() )
+        {
+            throw std::logic_error( "FFTM 4D native-xzwy spectral layout requires native slab XW transpose." );
+        }
+    }
+
     void require_grid_p1_is_one_() const
     {
         if ( partitioning_.get_process_grid().p1 != 1 )
@@ -1453,10 +1752,31 @@ private:
         return native_opt0_reference_y_buffer_topology_enabled_();
     }
 
+    bool native_opt0_default_z_scratch_aliasing_enabled_() const
+    {
+        return native_opt0_reference_y_buffer_topology_enabled_();
+    }
+
+    bool slab_4d_native_xw_transpose_enabled_() const
+    {
+        return init_options_.use_4d_slab_native_xw_transpose;
+    }
+
+    bool slab_4d_native_xw_layout_stage_enabled_() const
+    {
+        return slab_4d_native_xw_transpose_enabled_() && init_options_.use_4d_slab_native_xw_layout_stage;
+    }
+
+    bool slab_4d_native_xw_native_spectral_layout_enabled_() const
+    {
+        return slab_4d_native_xw_transpose_enabled_() &&
+               init_options_.spectral_layout_4d == fftm_4d_spectral_layout::native_xzwy;
+    }
+
     bool native_opt0_compact_y_workarea_enabled_() const
     {
         return native_opt0_reference_y_buffer_topology_enabled_() &&
-               init_options_.use_native_opt0_compact_y_workarea;
+               ( init_options_.use_native_opt0_compact_y_workarea || native_opt0_auto_compact_y_workarea_ );
     }
 
     bool native_opt0_tight_y_plan_sequence_enabled_() const
@@ -1993,6 +2313,28 @@ private:
         );
     }
 
+    void add_plan_xy_c2c_4d_xzwy_native_(
+        const std::string &forward_name, const std::string &inverse_name, long long int x_size, long long int z_size,
+        long long int w_size
+    )
+    {
+        const long long int batch       = z_size * w_size;
+        const long long int y_stride    = x_size * z_size * w_size;
+        const long long int batch_dist  = x_size;
+
+        base_fft_.template add_plan_2D<::fftm::direction::C2CF>(
+            forward_name, static_cast<long long int>( ny_ ), x_size,
+            static_cast<long long int>( ny_ ), y_stride, 1, batch_dist,
+            static_cast<long long int>( ny_ ), y_stride, 1, batch_dist, batch
+        );
+
+        base_fft_.template add_plan_2D<::fftm::direction::C2CB>(
+            inverse_name, static_cast<long long int>( ny_ ), x_size,
+            static_cast<long long int>( ny_ ), y_stride, 1, batch_dist,
+            static_cast<long long int>( ny_ ), y_stride, 1, batch_dist, batch
+        );
+    }
+
     void init_strategy_( std::integral_constant<transform_strategy_3d, transform_strategy_3d::slab_pencil> )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_3d_slab_pencil" );
@@ -2365,6 +2707,13 @@ private:
         SCFD_SAFE_CALL(
             add_plan_xy_c2c_4d_( "forward_xy", "inverse_xy", output_dim_.size_z[myid_j_], output_dim_.size_w[myid_k_] )
         );
+        if ( slab_4d_native_xw_native_spectral_layout_enabled_() )
+        {
+            SCFD_SAFE_CALL( add_plan_xy_c2c_4d_xzwy_native_(
+                "forward_xy_xzwy_native", "inverse_xy_xzwy_native", transpose2_dim_.size_x[myid_i_],
+                transpose2_dim_.size_z[myid_j_], transpose2_dim_.size_w[myid_k_]
+            ) );
+        }
     }
 
     void forward_3d_(
@@ -2822,17 +3171,31 @@ private:
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::forward_4d_pencil_pencil" );
-        SCFD_SAFE_CALL( base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_w", in, stage0_4d_ ) );
-        SCFD_SAFE_CALL( same_xy_.transpose_xyzw_to_xywz( stage0_4d_, stage1_4d_, transpose_mode_4d ) );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "forward_z", stage1_4d_, stage1_4d_ )
-        );
-        SCFD_SAFE_CALL( same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d ) );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "forward_y", stage2_4d_, stage2_4d_ )
-        );
-        SCFD_SAFE_CALL( same_zw_.transpose_xzwy_to_yzwx( stage2_4d_, out, transpose_mode_4d ) );
-        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_x", out, out ) );
+        time_native_4d_stage_( "4d/pencil/forward_w_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_w", in, stage0_4d_ ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/forward_same_xy", [&]() {
+            SCFD_SAFE_CALL( same_xy_.transpose_xyzw_to_xywz( stage0_4d_, stage1_4d_, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/forward_z_fft", [&]() {
+            SCFD_SAFE_CALL(
+                base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "forward_z", stage1_4d_, stage1_4d_ )
+            );
+        } );
+        time_native_4d_stage_( "4d/pencil/forward_same_xw", [&]() {
+            SCFD_SAFE_CALL( same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/forward_y_fft", [&]() {
+            SCFD_SAFE_CALL(
+                base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "forward_y", stage2_4d_, stage2_4d_ )
+            );
+        } );
+        time_native_4d_stage_( "4d/pencil/forward_same_zw", [&]() {
+            SCFD_SAFE_CALL( same_zw_.transpose_xzwy_to_yzwx( stage2_4d_, out, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/forward_x_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_x", out, out ) );
+        } );
     }
 
     void backward_4d_(
@@ -2841,17 +3204,31 @@ private:
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_pencil_pencil" );
-        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_x", in, in ) );
-        SCFD_SAFE_CALL( same_zw_.transpose_yzwx_to_xzwy( in, stage2_4d_, transpose_mode_4d ) );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "inverse_y", stage2_4d_, stage2_4d_ )
-        );
-        SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d ) );
-        SCFD_SAFE_CALL(
-            base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "inverse_z", stage1_4d_, stage1_4d_ )
-        );
-        SCFD_SAFE_CALL( same_xy_.transpose_xywz_to_xyzw( stage1_4d_, stage0_4d_, transpose_mode_4d ) );
-        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_w", stage0_4d_, out ) );
+        time_native_4d_stage_( "4d/pencil/backward_x_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_x", in, in ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/backward_same_zw", [&]() {
+            SCFD_SAFE_CALL( same_zw_.transpose_yzwx_to_xzwy( in, stage2_4d_, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/backward_y_fft", [&]() {
+            SCFD_SAFE_CALL(
+                base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>( "inverse_y", stage2_4d_, stage2_4d_ )
+            );
+        } );
+        time_native_4d_stage_( "4d/pencil/backward_same_xw", [&]() {
+            SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/backward_z_fft", [&]() {
+            SCFD_SAFE_CALL(
+                base_fft_.template exec<stage1_complex4_t, stage1_complex4_t>( "inverse_z", stage1_4d_, stage1_4d_ )
+            );
+        } );
+        time_native_4d_stage_( "4d/pencil/backward_same_xy", [&]() {
+            SCFD_SAFE_CALL( same_xy_.transpose_xywz_to_xyzw( stage1_4d_, stage0_4d_, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/pencil/backward_w_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_w", stage0_4d_, out ) );
+        } );
     }
 
     void forward_4d_(
@@ -2860,11 +3237,52 @@ private:
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::forward_4d_slab_slab" );
-        SCFD_SAFE_CALL( base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_zw", in, stage0_4d_ ) );
-        SCFD_SAFE_CALL( transpose_local_4d_<0, 1, 3, 2>( stage0_4d_, stage1_4d_ ) );
-        SCFD_SAFE_CALL( same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d ) );
-        SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( stage2_4d_, out ) );
-        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_xy", out, out ) );
+        time_native_4d_stage_( "4d/slab/forward_zw_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_zw", in, stage0_4d_ ) );
+        } );
+        if ( slab_4d_native_xw_transpose_enabled_() )
+        {
+            if ( slab_4d_native_xw_native_spectral_layout_enabled_() )
+            {
+                stage2_complex4_t out_native = slab_4d_native_xw_native_spectral_view_( out );
+                SCFD_SAFE_CALL( forward_native_spectral_4d_from_stage0_( out_native ) );
+                return;
+            }
+            else if ( slab_4d_native_xw_layout_stage_enabled_() )
+            {
+                time_native_4d_stage_( "4d/slab/forward_same_xw_native_xzwy", [&]() {
+                    SCFD_SAFE_CALL(
+                        same_xw_.transpose_xyzw_to_xzwy_slab_native( stage0_4d_, stage2_4d_, transpose_mode_4d )
+                    );
+                } );
+                time_native_4d_stage_( "4d/slab/forward_local_yzwx_from_native_xzwy", [&]() {
+                    SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( stage2_4d_, out ) );
+                } );
+            }
+            else
+            {
+                time_native_4d_stage_( "4d/slab/forward_same_xw_native", [&]() {
+                    SCFD_SAFE_CALL(
+                        same_xw_.transpose_xyzw_to_yzwx_slab_native( stage0_4d_, out, transpose_mode_4d )
+                    );
+                } );
+            }
+        }
+        else
+        {
+            time_native_4d_stage_( "4d/slab/forward_local_xywz", [&]() {
+                SCFD_SAFE_CALL( transpose_local_4d_<0, 1, 3, 2>( stage0_4d_, stage1_4d_ ) );
+            } );
+            time_native_4d_stage_( "4d/slab/forward_same_xw", [&]() {
+                SCFD_SAFE_CALL( same_xw_.transpose_xywz_to_xzwy( stage1_4d_, stage2_4d_, transpose_mode_4d ) );
+            } );
+            time_native_4d_stage_( "4d/slab/forward_local_yzwx", [&]() {
+                SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( stage2_4d_, out ) );
+            } );
+        }
+        time_native_4d_stage_( "4d/slab/forward_xy_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "forward_xy", out, out ) );
+        } );
     }
 
     void backward_4d_(
@@ -2873,11 +3291,116 @@ private:
     )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_slab_slab" );
-        SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_xy", in, in ) );
-        SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( in, stage2_4d_ ) );
-        SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d ) );
-        SCFD_SAFE_CALL( transpose_local_4d_<0, 1, 3, 2>( stage1_4d_, stage0_4d_ ) );
-        SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_zw", stage0_4d_, out ) );
+        if ( slab_4d_native_xw_native_spectral_layout_enabled_() )
+        {
+            stage2_complex4_t in_native = slab_4d_native_xw_native_spectral_view_( in );
+            SCFD_SAFE_CALL( backward_native_spectral_4d_to_real_( in_native, out ) );
+            return;
+        }
+        time_native_4d_stage_( "4d/slab/backward_xy_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<complex_array4_t, complex_array4_t>( "inverse_xy", in, in ) );
+        } );
+        if ( slab_4d_native_xw_transpose_enabled_() )
+        {
+            if ( slab_4d_native_xw_layout_stage_enabled_() )
+            {
+                time_native_4d_stage_( "4d/slab/backward_local_xzwy_for_native", [&]() {
+                    SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( in, stage2_4d_ ) );
+                } );
+                time_native_4d_stage_( "4d/slab/backward_same_xw_native_xzwy", [&]() {
+                    SCFD_SAFE_CALL(
+                        same_xw_.transpose_xzwy_to_xyzw_slab_native( stage2_4d_, stage0_4d_, transpose_mode_4d )
+                    );
+                } );
+            }
+            else
+            {
+                time_native_4d_stage_( "4d/slab/backward_same_xw_native", [&]() {
+                    SCFD_SAFE_CALL(
+                        same_xw_.transpose_yzwx_to_xyzw_slab_native( in, stage0_4d_, transpose_mode_4d )
+                    );
+                } );
+            }
+        }
+        else
+        {
+            time_native_4d_stage_( "4d/slab/backward_local_xzwy", [&]() {
+                SCFD_SAFE_CALL( transpose_local_4d_<3, 1, 2, 0>( in, stage2_4d_ ) );
+            } );
+            time_native_4d_stage_( "4d/slab/backward_same_xw", [&]() {
+                SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xywz( stage2_4d_, stage1_4d_, transpose_mode_4d ) );
+            } );
+            time_native_4d_stage_( "4d/slab/backward_local_xyzw", [&]() {
+                SCFD_SAFE_CALL( transpose_local_4d_<0, 1, 3, 2>( stage1_4d_, stage0_4d_ ) );
+            } );
+        }
+        time_native_4d_stage_( "4d/slab/backward_zw_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_zw", stage0_4d_, out ) );
+        } );
+    }
+
+    void forward_native_spectral_4d_(
+        std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab>,
+        const real_array4_t &in, stage2_complex4_t &out
+    )
+    {
+        FFTM_PROFILE_SCOPED_TIC( "fftm::forward_4d_slab_slab_native_spectral" );
+        time_native_4d_stage_( "4d/slab/forward_zw_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<real_array4_t, stage0_complex4_t>( "forward_zw", in, stage0_4d_ ) );
+        } );
+        SCFD_SAFE_CALL( forward_native_spectral_4d_from_stage0_( out ) );
+    }
+
+    void forward_native_spectral_4d_(
+        std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil>,
+        const real_array4_t &, stage2_complex4_t &
+    )
+    {
+        throw std::logic_error( "FFTM 4D native-xzwy spectral transform currently requires slab-slab strategy." );
+    }
+
+    void backward_native_spectral_4d_(
+        std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::slab_slab>, stage2_complex4_t &in,
+        real_array4_t &out
+    )
+    {
+        FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_slab_slab_native_spectral" );
+        SCFD_SAFE_CALL( backward_native_spectral_4d_to_real_( in, out ) );
+    }
+
+    void backward_native_spectral_4d_(
+        std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil>,
+        stage2_complex4_t &, real_array4_t &
+    )
+    {
+        throw std::logic_error( "FFTM 4D native-xzwy spectral transform currently requires slab-slab strategy." );
+    }
+
+    void forward_native_spectral_4d_from_stage0_( stage2_complex4_t &out )
+    {
+        time_native_4d_stage_( "4d/slab/forward_same_xw_native_xzwy", [&]() {
+            SCFD_SAFE_CALL( same_xw_.transpose_xyzw_to_xzwy_slab_native( stage0_4d_, out, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/slab/forward_xy_fft_xzwy_native", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
+                "forward_xy_xzwy_native", out, out
+            ) );
+        } );
+    }
+
+    void backward_native_spectral_4d_to_real_( stage2_complex4_t &in, real_array4_t &out )
+    {
+        time_native_4d_stage_( "4d/slab/backward_xy_fft_xzwy_native", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
+                "inverse_xy_xzwy_native", in, in
+            ) );
+        } );
+        time_native_4d_stage_( "4d/slab/backward_same_xw_native_xzwy", [&]() {
+            SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xyzw_slab_native( in, stage0_4d_, transpose_mode_4d ) );
+        } );
+        time_native_4d_stage_( "4d/slab/backward_zw_fft", [&]() {
+            SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex4_t, real_array4_t>( "inverse_zw", stage0_4d_, out ) );
+        } );
     }
 
     template <class Array>
@@ -2949,6 +3472,20 @@ private:
         SCFD_SAFE_CALL( for_each_4d_.wait() );
     }
 
+    stage2_complex4_t slab_4d_native_xw_native_spectral_view_( complex_array4_t &array ) const
+    {
+        const std::size_t required_size = transpose2_dim_.size_x[myid_i_] * transpose2_dim_.size_z[myid_j_] *
+                                          transpose2_dim_.size_w[myid_k_] * transpose2_dim_.size_y[0];
+        if ( static_cast<std::size_t>( array.size() ) < required_size )
+        {
+            throw std::logic_error( "FFTM 4D native spectral buffer is too small for xzwy view" );
+        }
+        return stage2_complex4_t(
+            array.raw_ptr(), transpose2_dim_.size_x[myid_i_], transpose2_dim_.size_z[myid_j_],
+            transpose2_dim_.size_w[myid_k_], transpose2_dim_.size_y[0]
+        );
+    }
+
     void init_shared_stage0_xfft_3d_(
         std::size_t stage0_d0, std::size_t stage0_d1, std::size_t stage0_d2, std::size_t xfft_d0, std::size_t xfft_d1,
         std::size_t xfft_d2, std::size_t stage1_xfast_d0 = 0, std::size_t stage1_xfast_d1 = 0,
@@ -2977,8 +3514,29 @@ private:
     void init_stage0_default_z_3d_( std::size_t d0, std::size_t d1, std::size_t d2 )
     {
         SCFD_SAFE_CALL( scratch_stage0_default_z_3d_.init( d0 * d1 * d2 ) );
-        SCFD_SAFE_CALL( stage0_default_z_3d_.init_by_raw_data( scratch_stage0_default_z_3d_.raw_ptr(), d0, d1, d2 ) );
+        bind_native_opt0_stage0_default_z_view_( scratch_stage0_default_z_3d_.raw_ptr() );
         update_memory_profile_3d_();
+    }
+
+    void bind_native_opt0_stage0_default_z_view_( complex *ptr )
+    {
+        stage0_default_z_3d_ = zfast_complex3_t(
+            ptr, input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_
+        );
+    }
+
+    complex *native_opt0_forward_default_z_storage_ptr_() const
+    {
+        if ( native_opt0_default_z_scratch_aliasing_enabled_() )
+            return native_opt0_reference_backward_y_output_ptr_();
+        return scratch_stage0_default_z_3d_.raw_ptr();
+    }
+
+    complex *native_opt0_backward_default_z_storage_ptr_() const
+    {
+        if ( native_opt0_default_z_scratch_aliasing_enabled_() )
+            return native_opt0_reference_slot_ptr_( 0 );
+        return scratch_stage0_default_z_3d_.raw_ptr();
     }
 
     void bind_native_opt0_zfast_3d_views_()
@@ -3004,9 +3562,7 @@ private:
         {
             throw std::logic_error( "native opt0 reference forward output is too small for aliased Y/X stage" );
         }
-        stage0_default_z_3d_ = zfast_complex3_t(
-            scratch_stage0_default_z_3d_.raw_ptr(), input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_], nz_half_
-        );
+        bind_native_opt0_stage0_default_z_view_( native_opt0_forward_default_z_storage_ptr_() );
         stage1_zfast_3d_ = zfast_complex3_t(
             temp_slot, input_dim_.size_x[myid_i_], ny_, transpose1_dim_.size_z[myid_j_]
         );
@@ -3028,10 +3584,7 @@ private:
         {
             throw std::logic_error( "native opt0 reference backward input is too small for aliased Y stage" );
         }
-        stage0_default_z_3d_ = zfast_complex3_t(
-            scratch_stage0_default_z_3d_.raw_ptr(), input_dim_.size_x[myid_i_], input_dim_.size_y[myid_j_],
-            nz_half_
-        );
+        bind_native_opt0_stage0_default_z_view_( native_opt0_backward_default_z_storage_ptr_() );
         x_fft_zfast_3d_ = output_zfast_complex3_t(
             temp_slot, output_dim_.size_x[0], output_dim_.size_y[myid_i_],
             output_dim_.size_z[myid_j_]
@@ -3205,7 +3758,9 @@ private:
         );
         profiler->set_bytes(
             "fftm/scratch_stage0_default_z_3d",
-            bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_default_z_3d_.size() ), sizeof( complex ) )
+            scratch_stage0_default_z_3d_.is_free()
+                ? 0
+                : bytes_of_elems_( static_cast<std::size_t>( scratch_stage0_default_z_3d_.size() ), sizeof( complex ) )
         );
         profiler->set_bytes( "fftm/scratch_work_hat_3d", 0 );
         profiler->set_bytes( "fftm/stage0_4d", 0 );
@@ -3261,8 +3816,12 @@ private:
     shared_buffer_t            shared_work_buffer_;
     host_shared_buffer_t       shared_host_work_buffer_;
     std::size_t                shared_work_size_      = 0;
-    std::size_t                shared_host_work_size_ = 0;
-    same_x_t                   same_x_;
+	    std::size_t                shared_host_work_size_ = 0;
+	    bool                       native_opt0_auto_compact_y_workarea_ = false;
+	    bool                       native_opt0_default_z_scratch_aliased_ = false;
+    bool                       native_4d_stage_timing_active_ = false;
+    int                        native_4d_stage_timing_iteration_ = -1;
+	    same_x_t                   same_x_;
     same_z_t                   same_z_;
     pencil_pencil_pipeline_t   pencil_pencil_pipeline_;
     pencil_pencil_reference_owned_t pencil_pencil_reference_owned_;
@@ -3305,9 +3864,10 @@ private:
 	    stage1_complex3_t stage1_3d_;
     x_fft_complex3_t  x_fft_stage_3d_;
     x_fft_complex3_t  stage1_xfast_3d_;
-    std::vector<std::string> native_opt0_forward_y_plan_names_;
-    std::vector<std::string> native_opt0_inverse_y_plan_names_;
-    std::vector<std::size_t> native_opt0_y_plan_offsets_;
+	    std::vector<std::string> native_opt0_forward_y_plan_names_;
+	    std::vector<std::string> native_opt0_inverse_y_plan_names_;
+	    std::vector<std::size_t> native_opt0_y_plan_offsets_;
+    std::vector<fftm_native_stage_timing> native_4d_stage_timings_;
     typename base_fft_type::c2c_plan_array_id_t native_opt0_y_plan_array_bundle_ =
         base_fft_type::invalid_c2c_plan_array_id();
     std::size_t       stage1_3d_d0_             = 0;

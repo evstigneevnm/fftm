@@ -1191,6 +1191,8 @@ const char *stage_timer_strategy_name( strategy_kind strategy )
 
 void append_native_stage_timer_rows(
     const options_t &options, int num_procs, int rank, int iteration, double wall_ms,
+    bool native_opt0_compact_y_workarea_effective, bool native_opt0_auto_compact_y_workarea,
+    bool native_opt0_default_z_scratch_aliased,
     const std::vector<fftm::fftm_native_stage_timing> &rows
 )
 {
@@ -1201,7 +1203,9 @@ void append_native_stage_timer_rows(
         "source,rank,num_gpus,iteration,stage_index,stage,stage_ms,wall_ms,strategy,mode,pencil_layout,"
         "pencil_pipeline,large_count_p2p_transport,fft_exec_no_sync,native_backward_second_peer_loop,"
         "native_opt0_default_z_layout,"
-        "native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,native_opt0_tight_y_plan_sequence,"
+        "native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,"
+        "native_opt0_compact_y_workarea_effective,native_opt0_auto_compact_y_workarea,"
+        "native_opt0_default_z_scratch_aliased,native_opt0_tight_y_plan_sequence,"
         "native_opt0_shared_y_plan_handles,native_opt0_y_group_device_sync,"
         "native_opt0_y_no_sync_exec,"
         "native_opt0_raw_y_plan_array_executor,native_opt0_reference_y_plan_lifecycle,"
@@ -1227,6 +1231,9 @@ void append_native_stage_timer_rows(
             << ( options.use_native_opt0_default_z_layout ? 1 : 0 ) << ','
             << ( options.use_native_opt0_reference_y_buffer_topology ? 1 : 0 ) << ','
             << ( options.use_native_opt0_compact_y_workarea ? 1 : 0 ) << ','
+            << ( native_opt0_compact_y_workarea_effective ? 1 : 0 ) << ','
+            << ( native_opt0_auto_compact_y_workarea ? 1 : 0 ) << ','
+            << ( native_opt0_default_z_scratch_aliased ? 1 : 0 ) << ','
             << ( options.use_native_opt0_tight_y_plan_sequence ? 1 : 0 ) << ','
             << ( options.use_native_opt0_shared_y_plan_handles ? 1 : 0 ) << ','
             << ( options.use_native_opt0_y_group_device_sync ? 1 : 0 ) << ','
@@ -1456,6 +1463,9 @@ int run_benchmark_case(
             {
                 append_native_stage_timer_rows(
                     options, comm_info.num_procs, comm_info.myid, iter, static_cast<double>( wall_ms ),
+                    distributed_fft.native_opt0_compact_y_workarea_effective(),
+                    distributed_fft.native_opt0_auto_compact_y_workarea_effective(),
+                    distributed_fft.native_opt0_default_z_scratch_aliased(),
                     distributed_fft.native_stage_timings()
                 );
                 distributed_fft.end_native_stage_timing_iteration();
@@ -1503,6 +1513,13 @@ int run_benchmark_case(
 
     if ( comm_info.myid == 0 )
     {
+        const bool native_opt0_compact_y_workarea_effective =
+            distributed_fft.native_opt0_compact_y_workarea_effective();
+        const bool native_opt0_auto_compact_y_workarea =
+            distributed_fft.native_opt0_auto_compact_y_workarea_effective();
+        const bool native_opt0_default_z_scratch_aliased =
+            distributed_fft.native_opt0_default_z_scratch_aliased();
+
         log.info_f(
             "benchmark=fftm-3d, strategy=%s, mode=%s, grid=(%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, warmup=%d, times=%d, "
             "pencil_layout=%s, pencil_pipeline=%s, persistent_p2p=%d, ready_p2p_send=%d, "
@@ -1510,7 +1527,8 @@ int run_benchmark_case(
             "ready_stable_forward_byte_send_buffer=%d, contiguous_forward_byte_send=%d, "
             "physical_forward_peer_exchange=%d, native_backward_second_peer_loop=%d, "
             "native_opt0_default_z_layout=%d, native_opt0_reference_y_buffer_topology=%d, "
-            "native_opt0_compact_y_workarea=%d, "
+            "native_opt0_compact_y_workarea=%d, native_opt0_compact_y_workarea_effective=%d, "
+            "native_opt0_auto_compact_y_workarea=%d, native_opt0_default_z_scratch_aliased=%d, "
             "native_opt0_tight_y_plan_sequence=%d, native_opt0_shared_y_plan_handles=%d, "
             "native_opt0_y_group_device_sync=%d, native_opt0_y_no_sync_exec=%d, "
             "native_opt0_raw_y_plan_array_executor=%d, "
@@ -1535,6 +1553,9 @@ int run_benchmark_case(
             options.use_native_opt0_default_z_layout ? 1 : 0,
             options.use_native_opt0_reference_y_buffer_topology ? 1 : 0,
             options.use_native_opt0_compact_y_workarea ? 1 : 0,
+            native_opt0_compact_y_workarea_effective ? 1 : 0,
+            native_opt0_auto_compact_y_workarea ? 1 : 0,
+            native_opt0_default_z_scratch_aliased ? 1 : 0,
             options.use_native_opt0_tight_y_plan_sequence ? 1 : 0,
             options.use_native_opt0_shared_y_plan_handles ? 1 : 0,
             options.use_native_opt0_y_group_device_sync ? 1 : 0,
@@ -1570,6 +1591,9 @@ int run_benchmark_case(
             << ( options.use_native_opt0_default_z_layout ? 1 : 0 ) << ','
             << ( options.use_native_opt0_reference_y_buffer_topology ? 1 : 0 ) << ','
             << ( options.use_native_opt0_compact_y_workarea ? 1 : 0 ) << ','
+            << ( native_opt0_compact_y_workarea_effective ? 1 : 0 ) << ','
+            << ( native_opt0_auto_compact_y_workarea ? 1 : 0 ) << ','
+            << ( native_opt0_default_z_scratch_aliased ? 1 : 0 ) << ','
             << ( options.use_native_opt0_tight_y_plan_sequence ? 1 : 0 ) << ','
             << ( options.use_native_opt0_shared_y_plan_handles ? 1 : 0 ) << ','
             << ( options.use_native_opt0_y_group_device_sync ? 1 : 0 ) << ','
@@ -1594,7 +1618,7 @@ int run_benchmark_case(
 
         fftm::test::detail::append_csv_row(
             options.directory, "benchmark_fftm_3d.csv",
-            "benchmark,num_gpus,strategy,mode,pencil_layout,pencil_pipeline,persistent_p2p,ready_p2p_send,large_count_p2p_transport,fft_exec_no_sync,stable_forward_byte_send_buffer,ready_stable_forward_byte_send_buffer,contiguous_forward_byte_send,physical_forward_peer_exchange,native_backward_second_peer_loop,native_opt0_default_z_layout,native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,native_opt0_tight_y_plan_sequence,native_opt0_shared_y_plan_handles,native_opt0_y_group_device_sync,native_opt0_y_no_sync_exec,native_opt0_raw_y_plan_array_executor,native_opt0_reference_y_plan_lifecycle,native_opt0_reference_y_plan_bundle,native_opt0_raw_y_plan_bundle,native_opt0_y_plan_bundle_stream_first,native_opt0_raw_y_plan_bundle_reference_streams,native_opt0_reference_local_plan_context,contiguous_forward_send_mode,contiguous_forward_send_chunk_mib,contiguous_forward_send_registration_warmups,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
+            "benchmark,num_gpus,strategy,mode,pencil_layout,pencil_pipeline,persistent_p2p,ready_p2p_send,large_count_p2p_transport,fft_exec_no_sync,stable_forward_byte_send_buffer,ready_stable_forward_byte_send_buffer,contiguous_forward_byte_send,physical_forward_peer_exchange,native_backward_second_peer_loop,native_opt0_default_z_layout,native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,native_opt0_compact_y_workarea_effective,native_opt0_auto_compact_y_workarea,native_opt0_default_z_scratch_aliased,native_opt0_tight_y_plan_sequence,native_opt0_shared_y_plan_handles,native_opt0_y_group_device_sync,native_opt0_y_no_sync_exec,native_opt0_raw_y_plan_array_executor,native_opt0_reference_y_plan_lifecycle,native_opt0_reference_y_plan_bundle,native_opt0_raw_y_plan_bundle,native_opt0_y_plan_bundle_stream_first,native_opt0_raw_y_plan_bundle_reference_streams,native_opt0_reference_local_plan_context,contiguous_forward_send_mode,contiguous_forward_send_chunk_mib,contiguous_forward_send_registration_warmups,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
             "max_l2_diff,directory",
             row.str()
         );

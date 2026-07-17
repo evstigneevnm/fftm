@@ -15,6 +15,7 @@
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
 #include <scfd/utils/log_mpi.h>
+#include <scfd/utils/system_timer_event.h>
 
 #include "../fft_partitioning.h"
 #include "../profiling.h"
@@ -52,6 +53,56 @@ inline rect_4d_t<Idx> make_range_4d( std::size_t d0, std::size_t d1, std::size_t
         Idx( 0, 0, 0, 0 ),
         Idx( static_cast<int>( d0 ), static_cast<int>( d1 ), static_cast<int>( d2 ), static_cast<int>( d3 ) )
     );
+}
+
+struct mpi_transpose_4d_stage_timer
+{
+    using callback_t = void ( * )( void *, const char *, double );
+
+    void set( void *context_, callback_t callback_, const std::string &prefix_ )
+    {
+        context  = context_;
+        callback = callback_;
+        prefix   = prefix_;
+    }
+
+    bool enabled() const
+    {
+        return context != nullptr && callback != nullptr && !prefix.empty();
+    }
+
+    void record( const char *stage, double ms ) const
+    {
+        if ( !enabled() )
+            return;
+        const std::string full_stage = prefix + "/" + stage;
+        callback( context, full_stage.c_str(), ms );
+    }
+
+    void      *context  = nullptr;
+    callback_t callback = nullptr;
+    std::string prefix;
+};
+
+template <class RuntimeAPI, class Fn>
+void time_mpi_transpose_4d_substage(
+    const mpi_transpose_4d_stage_timer &timer, const char *direction, const char *phase, Fn fn
+)
+{
+    if ( !timer.enabled() )
+    {
+        fn();
+        return;
+    }
+
+    const std::string stage = std::string( direction ) + "/" + phase;
+    RuntimeAPI::device_synchronize();
+    scfd::utils::system_timer_event begin, end;
+    begin.record();
+    fn();
+    RuntimeAPI::device_synchronize();
+    end.record();
+    timer.record( stage.c_str(), end.elapsed_time( begin ) );
 }
 
 template <
@@ -95,6 +146,13 @@ public:
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
+    }
+
+    void set_stage_timing_callback(
+        void *context, mpi_transpose_4d_stage_timer::callback_t callback, const std::string &prefix
+    )
+    {
+        stage_timer_.set( context, callback, prefix );
     }
 
     void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
@@ -227,7 +285,10 @@ public:
         ensure_is_inited_();
         verify_forward_shapes_( in, out );
         reset_requests_();
-        pack_forward_all_( in );
+        stage_timing_direction_ = "forward";
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_forward_all_( in ); }
+        );
 
         switch ( mode )
         {
@@ -255,7 +316,10 @@ public:
         ensure_is_inited_();
         verify_backward_shapes_( in, out );
         reset_requests_();
-        pack_backward_all_( in );
+        stage_timing_direction_ = "backward";
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_backward_all_( in ); }
+        );
 
         switch ( mode )
         {
@@ -1006,16 +1070,24 @@ private:
         auto scope = profile_scope_( "forward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
-            line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
-                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
-                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                    line_comm_info_.alltoallv(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                        forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                        forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_forward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_forward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -1059,16 +1131,25 @@ private:
         }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
-            line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
-                forward_sdispls_w_.data(), forward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-                forward_recvcounts_w_.data(), forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                    line_comm_info_.alltoallw(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                        forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                        static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                        forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_forward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_forward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -1335,16 +1416,24 @@ private:
         auto scope = profile_scope_( "backward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
-            line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
-                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
-                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                    line_comm_info_.alltoallv(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                        backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                        backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_backward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_backward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -1388,16 +1477,25 @@ private:
         }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
-            line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
-                backward_sdispls_w_.data(), backward_sendtypes_w_.data(), static_cast<void *>( recv_buffer_.raw_ptr() ),
-                backward_recvcounts_w_.data(), backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                    line_comm_info_.alltoallw(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                        backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                        static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                        backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_backward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_backward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -1408,6 +1506,8 @@ private:
     profiler_t        *profiler_        = nullptr;
     memory_profiler_t *memory_profiler_ = nullptr;
     std::string        memory_profile_prefix_;
+    mpi_transpose_4d_stage_timer stage_timer_;
+    const char                  *stage_timing_direction_ = "unknown";
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
@@ -1498,6 +1598,17 @@ public:
     using profiler_scope_t  = ::fftm::profile_scope<profiler_t>;
     using memory_profiler_t = ::fftm::fftm_memory_profiler;
 
+private:
+    template <class ArrayOut>
+    void forward_alltoallv_slab_native_( ArrayOut &out );
+    template <class ArrayOut>
+    void forward_alltoallw_slab_native_( ArrayOut &out );
+    template <class ArrayOut>
+    void backward_alltoallv_slab_native_( ArrayOut &out );
+    template <class ArrayOut>
+    void backward_alltoallw_slab_native_( ArrayOut &out );
+
+public:
     mpi_transpose_4d_same_xw( const MPIComm &mpi, const Log &log = Log() ) : mpi_( mpi ), log_( log )
     {
         static_assert(
@@ -1516,6 +1627,33 @@ public:
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
+    }
+
+    void set_stage_timing_callback(
+        void *context, mpi_transpose_4d_stage_timer::callback_t callback, const std::string &prefix
+    )
+    {
+        stage_timer_.set( context, callback, prefix );
+    }
+
+    void set_slab_native_batched_peer_kernels_enabled( bool enabled )
+    {
+        slab_native_batched_peer_kernels_enabled_ = enabled;
+    }
+
+    void set_slab_native_tensor_coalesced_kernels_enabled( bool enabled )
+    {
+        slab_native_tensor_coalesced_kernels_enabled_ = enabled;
+    }
+
+    void set_slab_native_vector4_kernels_enabled( bool enabled )
+    {
+        slab_native_vector4_kernels_enabled_ = enabled;
+    }
+
+    void set_slab_native_tiled_kernels_enabled( bool enabled )
+    {
+        slab_native_tiled_kernels_enabled_ = enabled;
     }
 
     void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
@@ -1648,7 +1786,10 @@ public:
         ensure_is_inited_();
         verify_forward_shapes_( in, out );
         reset_requests_();
-        pack_forward_all_( in );
+        stage_timing_direction_ = "forward";
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_forward_all_( in ); }
+        );
 
         switch ( mode )
         {
@@ -1676,7 +1817,10 @@ public:
         ensure_is_inited_();
         verify_backward_shapes_( in, out );
         reset_requests_();
-        pack_backward_all_( in );
+        stage_timing_direction_ = "backward";
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_backward_all_( in ); }
+        );
 
         switch ( mode )
         {
@@ -1690,7 +1834,191 @@ public:
             backward_alltoallv_( out );
             break;
         case mpi_transpose_3d_mode::alltoallw:
-            backward_alltoallw_( out );
+                backward_alltoallw_( out );
+            break;
+        }
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void transpose_xyzw_to_yzwx_slab_native( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
+    {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_4d_same_xw::transpose_xyzw_to_yzwx_slab_native/" ) +
+            mpi_transpose_3d_mode_name( mode )
+        );
+        ensure_is_inited_();
+        verify_forward_slab_native_shapes_( in, out );
+        reset_requests_();
+        stage_timing_direction_ = "forward";
+        if ( mode == mpi_transpose_3d_mode::p2p_waitany )
+        {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            forward_p2p_waitany_peer_paired_(
+                out, [&]( int p ) { pack_forward_slab_native_chunk_( in, p ); }, true
+            );
+#else
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "pack", [&]() { pack_forward_slab_native_all_( in ); }
+            );
+            forward_p2p_waitany_slab_native_( out );
+#endif
+            return;
+        }
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_forward_slab_native_all_( in ); }
+        );
+
+        switch ( mode )
+        {
+        case mpi_transpose_3d_mode::p2p_waitall:
+            forward_p2p_waitall_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            forward_p2p_waitany_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            forward_alltoallv_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            forward_alltoallw_slab_native_( out );
+            break;
+        }
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void transpose_yzwx_to_xyzw_slab_native( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
+    {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_4d_same_xw::transpose_yzwx_to_xyzw_slab_native/" ) +
+            mpi_transpose_3d_mode_name( mode )
+        );
+        ensure_is_inited_();
+        verify_backward_slab_native_shapes_( in, out );
+        reset_requests_();
+        stage_timing_direction_ = "backward";
+        if ( mode == mpi_transpose_3d_mode::p2p_waitany )
+        {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            backward_p2p_waitany_peer_paired_(
+                out, [&]( int p ) { pack_backward_slab_native_chunk_( in, p ); }, true
+            );
+#else
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "pack", [&]() { pack_backward_slab_native_all_( in ); }
+            );
+            backward_p2p_waitany_slab_native_( out );
+#endif
+            return;
+        }
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_backward_slab_native_all_( in ); }
+        );
+
+        switch ( mode )
+        {
+        case mpi_transpose_3d_mode::p2p_waitall:
+            backward_p2p_waitall_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            backward_p2p_waitany_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            backward_alltoallv_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            backward_alltoallw_slab_native_( out );
+            break;
+        }
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void transpose_xyzw_to_xzwy_slab_native( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
+    {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_4d_same_xw::transpose_xyzw_to_xzwy_slab_native/" ) +
+            mpi_transpose_3d_mode_name( mode )
+        );
+        ensure_is_inited_();
+        verify_forward_slab_native_to_xzwy_shapes_( in, out );
+        reset_requests_();
+        stage_timing_direction_ = "forward";
+        if ( mode == mpi_transpose_3d_mode::p2p_waitany )
+        {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            forward_p2p_waitany_peer_paired_(
+                out, [&]( int p ) { pack_forward_slab_native_chunk_( in, p ); }, false
+            );
+#else
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "pack", [&]() { pack_forward_slab_native_all_( in ); }
+            );
+            forward_p2p_waitany_( out );
+#endif
+            return;
+        }
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_forward_slab_native_all_( in ); }
+        );
+
+        switch ( mode )
+        {
+        case mpi_transpose_3d_mode::p2p_waitall:
+            forward_p2p_waitall_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            forward_p2p_waitany_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            forward_alltoallv_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            forward_alltoallw_( out );
+            break;
+        }
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void transpose_xzwy_to_xyzw_slab_native( const ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode )
+    {
+        auto scope = profile_scope_(
+            std::string( "mpi_transpose_4d_same_xw::transpose_xzwy_to_xyzw_slab_native/" ) +
+            mpi_transpose_3d_mode_name( mode )
+        );
+        ensure_is_inited_();
+        verify_backward_xzwy_to_slab_native_shapes_( in, out );
+        reset_requests_();
+        stage_timing_direction_ = "backward";
+        if ( mode == mpi_transpose_3d_mode::p2p_waitany )
+        {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            backward_p2p_waitany_peer_paired_(
+                out, [&]( int p ) { pack_backward_chunk_( in, p ); }, true
+            );
+#else
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "pack", [&]() { pack_backward_all_( in ); }
+            );
+            backward_p2p_waitany_slab_native_( out );
+#endif
+            return;
+        }
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_backward_all_( in ); }
+        );
+
+        switch ( mode )
+        {
+        case mpi_transpose_3d_mode::p2p_waitall:
+            backward_p2p_waitall_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::p2p_waitany:
+            backward_p2p_waitany_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallv:
+            backward_alltoallv_slab_native_( out );
+            break;
+        case mpi_transpose_3d_mode::alltoallw:
+            backward_alltoallw_slab_native_( out );
             break;
         }
     }
@@ -1768,6 +2096,438 @@ public:
         }
     };
 
+    template <class Buffer, class ArrayIn>
+    struct pack_forward_xyzw_slab_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            buffer( offset + packed_index_4d( idx, nx, nz, nw ) ) =
+                in( idx[0], idx[3], static_cast<int>( z_offset ) + idx[1], idx[2] );
+        }
+    };
+
+    template <class Buffer, class ArrayOut>
+    struct unpack_forward_yzwx_slab_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            out( static_cast<int>( y_offset ) + idx[3], idx[1], idx[2], idx[0] ) =
+                buffer( offset + packed_index_4d( idx, nx, nz, nw ) );
+        }
+    };
+
+    template <class Buffer, class ArrayIn>
+    struct pack_backward_yzwx_slab_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            buffer( offset + packed_index_4d( idx, nx, nz, nw ) ) =
+                in( static_cast<int>( y_offset ) + idx[3], idx[1], idx[2], idx[0] );
+        }
+    };
+
+    template <class Buffer, class ArrayOut>
+    struct unpack_backward_xyzw_slab_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            out( idx[0], idx[3], static_cast<int>( z_offset ) + idx[1], idx[2] ) =
+                buffer( offset + packed_index_4d( idx, nx, nz, nw ) );
+        }
+    };
+
+    template <class Buffer, class ArrayIn>
+    struct pack_forward_xyzw_slab_tensor_coalesced_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int w = idx[0];
+            const int z = idx[1];
+            const int y = idx[2];
+            const int x = idx[3];
+            buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) ) =
+                in( x, y, static_cast<int>( z_offset ) + z, w );
+        }
+    };
+
+    template <class Buffer, class ArrayOut>
+    struct unpack_forward_yzwx_slab_tensor_coalesced_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int w = idx[0];
+            const int z = idx[1];
+            const int y = idx[2];
+            const int x = idx[3];
+            out( static_cast<int>( y_offset ) + y, z, w, x ) =
+                buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) );
+        }
+    };
+
+    template <class Buffer, class ArrayIn>
+    struct pack_backward_yzwx_slab_tensor_coalesced_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int w = idx[0];
+            const int z = idx[1];
+            const int y = idx[2];
+            const int x = idx[3];
+            buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) ) =
+                in( static_cast<int>( y_offset ) + y, z, w, x );
+        }
+    };
+
+    template <class Buffer, class ArrayOut>
+    struct unpack_backward_xyzw_slab_tensor_coalesced_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int w = idx[0];
+            const int z = idx[1];
+            const int y = idx[2];
+            const int x = idx[3];
+            out( x, y, static_cast<int>( z_offset ) + z, w ) =
+                buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) );
+        }
+    };
+
+    template <class Buffer, class ArrayIn, int VectorWidth>
+    struct pack_forward_xyzw_slab_vector_x_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * VectorWidth;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y  = idx[3];
+#pragma unroll
+            for ( int lane = 0; lane < VectorWidth; ++lane )
+            {
+                const int x = x0 + lane;
+                if ( x < static_cast<int>( nx ) )
+                {
+                    buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) ) =
+                        in( x, y, static_cast<int>( z_offset ) + z, w );
+                }
+            }
+        }
+    };
+
+    template <class Buffer, class ArrayOut, int VectorWidth>
+    struct unpack_forward_yzwx_slab_vector_x_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * VectorWidth;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y  = idx[3];
+#pragma unroll
+            for ( int lane = 0; lane < VectorWidth; ++lane )
+            {
+                const int x = x0 + lane;
+                if ( x < static_cast<int>( nx ) )
+                {
+                    out( static_cast<int>( y_offset ) + y, z, w, x ) =
+                        buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) );
+                }
+            }
+        }
+    };
+
+    template <class Buffer, class ArrayIn, int VectorWidth>
+    struct pack_backward_yzwx_slab_vector_x_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * VectorWidth;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y  = idx[3];
+#pragma unroll
+            for ( int lane = 0; lane < VectorWidth; ++lane )
+            {
+                const int x = x0 + lane;
+                if ( x < static_cast<int>( nx ) )
+                {
+                    buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) ) =
+                        in( static_cast<int>( y_offset ) + y, z, w, x );
+                }
+            }
+        }
+    };
+
+    template <class Buffer, class ArrayOut, int VectorWidth>
+    struct unpack_backward_xyzw_slab_vector_x_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * VectorWidth;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y  = idx[3];
+#pragma unroll
+            for ( int lane = 0; lane < VectorWidth; ++lane )
+            {
+                const int x = x0 + lane;
+                if ( x < static_cast<int>( nx ) )
+                {
+                    out( x, y, static_cast<int>( z_offset ) + z, w ) =
+                        buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) );
+                }
+            }
+        }
+    };
+
+    template <class Buffer, class ArrayIn, int TileX, int TileY>
+    struct pack_forward_xyzw_slab_tile_xy_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t ny;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * TileX;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y0 = idx[3] * TileY;
+#pragma unroll
+            for ( int yy = 0; yy < TileY; ++yy )
+            {
+                const int y = y0 + yy;
+                if ( y >= static_cast<int>( ny ) )
+                    continue;
+#pragma unroll
+                for ( int xx = 0; xx < TileX; ++xx )
+                {
+                    const int x = x0 + xx;
+                    if ( x < static_cast<int>( nx ) )
+                    {
+                        buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) ) =
+                            in( x, y, static_cast<int>( z_offset ) + z, w );
+                    }
+                }
+            }
+        }
+    };
+
+    template <class Buffer, class ArrayOut, int TileX, int TileY>
+    struct unpack_forward_yzwx_slab_tile_xy_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t ny;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * TileX;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y0 = idx[3] * TileY;
+#pragma unroll
+            for ( int yy = 0; yy < TileY; ++yy )
+            {
+                const int y = y0 + yy;
+                if ( y >= static_cast<int>( ny ) )
+                    continue;
+#pragma unroll
+                for ( int xx = 0; xx < TileX; ++xx )
+                {
+                    const int x = x0 + xx;
+                    if ( x < static_cast<int>( nx ) )
+                    {
+                        out( static_cast<int>( y_offset ) + y, z, w, x ) =
+                            buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) );
+                    }
+                }
+            }
+        }
+    };
+
+    template <class Buffer, class ArrayIn, int TileX, int TileY>
+    struct pack_backward_yzwx_slab_tile_xy_functor
+    {
+        Buffer      buffer;
+        ArrayIn     in;
+        std::size_t offset;
+        std::size_t y_offset;
+        std::size_t nx;
+        std::size_t ny;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * TileX;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y0 = idx[3] * TileY;
+#pragma unroll
+            for ( int yy = 0; yy < TileY; ++yy )
+            {
+                const int y = y0 + yy;
+                if ( y >= static_cast<int>( ny ) )
+                    continue;
+#pragma unroll
+                for ( int xx = 0; xx < TileX; ++xx )
+                {
+                    const int x = x0 + xx;
+                    if ( x < static_cast<int>( nx ) )
+                    {
+                        buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) ) =
+                            in( static_cast<int>( y_offset ) + y, z, w, x );
+                    }
+                }
+            }
+        }
+    };
+
+    template <class Buffer, class ArrayOut, int TileX, int TileY>
+    struct unpack_backward_xyzw_slab_tile_xy_functor
+    {
+        Buffer      buffer;
+        ArrayOut    out;
+        std::size_t offset;
+        std::size_t z_offset;
+        std::size_t nx;
+        std::size_t ny;
+        std::size_t nz;
+        std::size_t nw;
+
+        __DEVICE_TAG__ void operator()( const idx_t &idx ) const
+        {
+            const int x0 = idx[0] * TileX;
+            const int z  = idx[1];
+            const int w  = idx[2];
+            const int y0 = idx[3] * TileY;
+#pragma unroll
+            for ( int yy = 0; yy < TileY; ++yy )
+            {
+                const int y = y0 + yy;
+                if ( y >= static_cast<int>( ny ) )
+                    continue;
+#pragma unroll
+                for ( int xx = 0; xx < TileX; ++xx )
+                {
+                    const int x = x0 + xx;
+                    if ( x < static_cast<int>( nx ) )
+                    {
+                        out( x, y, static_cast<int>( z_offset ) + z, w ) =
+                            buffer( offset + packed_index_4d<idx_t>( x, z, w, y, nx, nz, nw ) );
+                    }
+                }
+            }
+        }
+    };
+
 private:
     profiler_scope_t profile_scope_( const std::string &name )
     {
@@ -1776,6 +2536,21 @@ private:
 
     void ensure_is_inited_() const
     {
+        if ( slab_native_tensor_coalesced_kernels_enabled_ && slab_native_vector4_kernels_enabled_ )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_xw: tensor-coalesced and vector4 native XW kernels are mutually exclusive"
+            );
+        }
+        const int native_kernel_variants = ( slab_native_tensor_coalesced_kernels_enabled_ ? 1 : 0 ) +
+                                           ( slab_native_vector4_kernels_enabled_ ? 1 : 0 ) +
+                                           ( slab_native_tiled_kernels_enabled_ ? 1 : 0 );
+        if ( native_kernel_variants > 1 )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_xw: tensor-coalesced, vector4, and tiled native XW kernels are mutually exclusive"
+            );
+        }
         if ( !is_inited_ )
             throw std::logic_error( "mpi_transpose_4d_same_xw::init must be "
                                     "called before transpose" );
@@ -1895,6 +2670,74 @@ private:
              static_cast<std::size_t>( out_size[2] ) != nw_local_ ||
              static_cast<std::size_t>( out_size[3] ) != nz_global_ )
             throw std::logic_error( "mpi_transpose_4d_same_xw backward output shape mismatch" );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void verify_forward_slab_native_shapes_( const ArrayIn &in, const ArrayOut &out ) const
+    {
+        const auto in_size  = in.size_nd();
+        const auto out_size = out.size_nd();
+        if ( static_cast<std::size_t>( in_size[0] ) != nx_local_ ||
+             static_cast<std::size_t>( in_size[1] ) != ny_local_ ||
+             static_cast<std::size_t>( in_size[2] ) != nz_global_ ||
+             static_cast<std::size_t>( in_size[3] ) != nw_local_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native forward input shape mismatch" );
+        if ( static_cast<std::size_t>( out_size[0] ) != ny_global_ ||
+             static_cast<std::size_t>( out_size[1] ) != nz_local_ ||
+             static_cast<std::size_t>( out_size[2] ) != nw_local_ ||
+             static_cast<std::size_t>( out_size[3] ) != nx_local_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native forward output shape mismatch" );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void verify_backward_slab_native_shapes_( const ArrayIn &in, const ArrayOut &out ) const
+    {
+        const auto in_size  = in.size_nd();
+        const auto out_size = out.size_nd();
+        if ( static_cast<std::size_t>( in_size[0] ) != ny_global_ ||
+             static_cast<std::size_t>( in_size[1] ) != nz_local_ ||
+             static_cast<std::size_t>( in_size[2] ) != nw_local_ ||
+             static_cast<std::size_t>( in_size[3] ) != nx_local_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native backward input shape mismatch" );
+        if ( static_cast<std::size_t>( out_size[0] ) != nx_local_ ||
+             static_cast<std::size_t>( out_size[1] ) != ny_local_ ||
+             static_cast<std::size_t>( out_size[2] ) != nz_global_ ||
+             static_cast<std::size_t>( out_size[3] ) != nw_local_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native backward output shape mismatch" );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void verify_forward_slab_native_to_xzwy_shapes_( const ArrayIn &in, const ArrayOut &out ) const
+    {
+        const auto in_size  = in.size_nd();
+        const auto out_size = out.size_nd();
+        if ( static_cast<std::size_t>( in_size[0] ) != nx_local_ ||
+             static_cast<std::size_t>( in_size[1] ) != ny_local_ ||
+             static_cast<std::size_t>( in_size[2] ) != nz_global_ ||
+             static_cast<std::size_t>( in_size[3] ) != nw_local_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native xzwy forward input shape mismatch" );
+        if ( static_cast<std::size_t>( out_size[0] ) != nx_local_ ||
+             static_cast<std::size_t>( out_size[1] ) != nz_local_ ||
+             static_cast<std::size_t>( out_size[2] ) != nw_local_ ||
+             static_cast<std::size_t>( out_size[3] ) != ny_global_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native xzwy forward output shape mismatch" );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void verify_backward_xzwy_to_slab_native_shapes_( const ArrayIn &in, const ArrayOut &out ) const
+    {
+        const auto in_size  = in.size_nd();
+        const auto out_size = out.size_nd();
+        if ( static_cast<std::size_t>( in_size[0] ) != nx_local_ ||
+             static_cast<std::size_t>( in_size[1] ) != nz_local_ ||
+             static_cast<std::size_t>( in_size[2] ) != nw_local_ ||
+             static_cast<std::size_t>( in_size[3] ) != ny_global_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native xzwy backward input shape mismatch" );
+        if ( static_cast<std::size_t>( out_size[0] ) != nx_local_ ||
+             static_cast<std::size_t>( out_size[1] ) != ny_local_ ||
+             static_cast<std::size_t>( out_size[2] ) != nz_global_ ||
+             static_cast<std::size_t>( out_size[3] ) != nw_local_ )
+            throw std::logic_error( "mpi_transpose_4d_same_xw slab-native xzwy backward output shape mismatch" );
     }
 
     void reset_requests_()
@@ -2108,19 +2951,30 @@ private:
     }
 
     template <class ArrayIn>
+    void launch_pack_forward_chunk_( const ArrayIn &in, int p )
+    {
+        for_each_(
+            pack_forward_functor<contiguous_buf_t, ArrayIn>{
+                send_buffer_, in, forward_send_offsets_[p], output_dim_.start_z[p], nx_local_,
+                output_dim_.size_z[p], nw_local_ },
+            make_range_4d<idx_t>( nx_local_, output_dim_.size_z[p], nw_local_, ny_local_ )
+        );
+    }
+
+    template <class ArrayIn>
+    void pack_forward_chunk_( const ArrayIn &in, int p )
+    {
+        auto scope = profile_scope_( "pack_forward_chunk" );
+        launch_pack_forward_chunk_( in, p );
+        for_each_.wait();
+    }
+
+    template <class ArrayIn>
     void pack_forward_all_( const ArrayIn &in )
     {
         auto scope = profile_scope_( "pack_forward_all" );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-        {
-            for_each_(
-                pack_forward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_z[p], nx_local_,
-                    output_dim_.size_z[p], nw_local_ },
-                make_range_4d<idx_t>( nx_local_, output_dim_.size_z[p], nw_local_, ny_local_ )
-            );
-            for_each_.wait();
-        }
+            pack_forward_chunk_( in, p );
     }
 
     template <class ArrayOut>
@@ -2137,19 +2991,30 @@ private:
     }
 
     template <class ArrayIn>
+    void launch_pack_backward_chunk_( const ArrayIn &in, int p )
+    {
+        for_each_(
+            pack_backward_functor<contiguous_buf_t, ArrayIn>{
+                send_buffer_, in, backward_send_offsets_[p], input_dim_.start_y[p], nx_local_, nz_local_,
+                nw_local_ },
+            make_range_4d<idx_t>( nx_local_, nz_local_, nw_local_, input_dim_.size_y[p] )
+        );
+    }
+
+    template <class ArrayIn>
+    void pack_backward_chunk_( const ArrayIn &in, int p )
+    {
+        auto scope = profile_scope_( "pack_backward_chunk" );
+        launch_pack_backward_chunk_( in, p );
+        for_each_.wait();
+    }
+
+    template <class ArrayIn>
     void pack_backward_all_( const ArrayIn &in )
     {
         auto scope = profile_scope_( "pack_backward_all" );
         for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-        {
-            for_each_(
-                pack_backward_functor<contiguous_buf_t, ArrayIn>{
-                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_y[p], nx_local_, nz_local_,
-                    nw_local_ },
-                make_range_4d<idx_t>( nx_local_, nz_local_, nw_local_, input_dim_.size_y[p] )
-            );
-            for_each_.wait();
-        }
+            pack_backward_chunk_( in, p );
     }
 
     template <class ArrayOut>
@@ -2163,6 +3028,563 @@ private:
             make_range_4d<idx_t>( nx_local_, output_dim_.size_z[source_j], nw_local_, ny_local_ )
         );
         for_each_.wait();
+    }
+
+    template <class ArrayIn>
+    void launch_pack_forward_slab_native_chunk_( const ArrayIn &in, int p )
+    {
+        constexpr int vector_width = 4;
+        constexpr int tile_x       = 4;
+        constexpr int tile_y       = 2;
+        if ( slab_native_vector4_kernels_enabled_ )
+        {
+            for_each_(
+                pack_forward_xyzw_slab_vector_x_functor<contiguous_buf_t, ArrayIn, vector_width>{
+                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_z[p], nx_local_,
+                    output_dim_.size_z[p], nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( vector_width ) - 1 ) /
+                        static_cast<std::size_t>( vector_width ),
+                    output_dim_.size_z[p], nw_local_, ny_local_
+                )
+            );
+        }
+        else if ( slab_native_tiled_kernels_enabled_ )
+        {
+            for_each_(
+                pack_forward_xyzw_slab_tile_xy_functor<contiguous_buf_t, ArrayIn, tile_x, tile_y>{
+                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_z[p], nx_local_, ny_local_,
+                    output_dim_.size_z[p], nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( tile_x ) - 1 ) /
+                        static_cast<std::size_t>( tile_x ),
+                    output_dim_.size_z[p], nw_local_,
+                    ( ny_local_ + static_cast<std::size_t>( tile_y ) - 1 ) / static_cast<std::size_t>( tile_y )
+                )
+            );
+        }
+        else if ( slab_native_tensor_coalesced_kernels_enabled_ )
+        {
+            for_each_(
+                pack_forward_xyzw_slab_tensor_coalesced_functor<contiguous_buf_t, ArrayIn>{
+                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_z[p], nx_local_,
+                    output_dim_.size_z[p], nw_local_ },
+                make_range_4d<idx_t>( nw_local_, output_dim_.size_z[p], ny_local_, nx_local_ )
+            );
+        }
+        else
+        {
+            for_each_(
+                pack_forward_xyzw_slab_functor<contiguous_buf_t, ArrayIn>{
+                    send_buffer_, in, forward_send_offsets_[p], output_dim_.start_z[p], nx_local_,
+                    output_dim_.size_z[p], nw_local_ },
+                make_range_4d<idx_t>( nx_local_, output_dim_.size_z[p], nw_local_, ny_local_ )
+            );
+        }
+    }
+
+    template <class ArrayIn>
+    void pack_forward_slab_native_chunk_( const ArrayIn &in, int p )
+    {
+        auto scope = profile_scope_( "pack_forward_slab_native_chunk" );
+        launch_pack_forward_slab_native_chunk_( in, p );
+        for_each_.wait();
+    }
+
+    template <class ArrayIn>
+    void pack_forward_slab_native_all_( const ArrayIn &in )
+    {
+        auto scope = profile_scope_( "pack_forward_slab_native_all" );
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            launch_pack_forward_slab_native_chunk_( in, p );
+            if ( !slab_native_batched_peer_kernels_enabled_ )
+                for_each_.wait();
+        }
+        if ( slab_native_batched_peer_kernels_enabled_ )
+            for_each_.wait();
+    }
+
+    template <class ArrayOut>
+    void launch_unpack_forward_slab_native_chunk_( int source_j, ArrayOut &out )
+    {
+        constexpr int vector_width = 4;
+        constexpr int tile_x       = 4;
+        constexpr int tile_y       = 2;
+        if ( slab_native_vector4_kernels_enabled_ )
+        {
+            for_each_(
+                unpack_forward_yzwx_slab_vector_x_functor<contiguous_buf_t, ArrayOut, vector_width>{
+                    recv_buffer_, out, forward_recv_offsets_[source_j], input_dim_.start_y[source_j], nx_local_,
+                    nz_local_, nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( vector_width ) - 1 ) /
+                        static_cast<std::size_t>( vector_width ),
+                    nz_local_, nw_local_, input_dim_.size_y[source_j]
+                )
+            );
+        }
+        else if ( slab_native_tiled_kernels_enabled_ )
+        {
+            for_each_(
+                unpack_forward_yzwx_slab_tile_xy_functor<contiguous_buf_t, ArrayOut, tile_x, tile_y>{
+                    recv_buffer_, out, forward_recv_offsets_[source_j], input_dim_.start_y[source_j], nx_local_,
+                    input_dim_.size_y[source_j], nz_local_, nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( tile_x ) - 1 ) /
+                        static_cast<std::size_t>( tile_x ),
+                    nz_local_, nw_local_,
+                    ( input_dim_.size_y[source_j] + static_cast<std::size_t>( tile_y ) - 1 ) /
+                        static_cast<std::size_t>( tile_y )
+                )
+            );
+        }
+        else if ( slab_native_tensor_coalesced_kernels_enabled_ )
+        {
+            for_each_(
+                unpack_forward_yzwx_slab_tensor_coalesced_functor<contiguous_buf_t, ArrayOut>{
+                    recv_buffer_, out, forward_recv_offsets_[source_j], input_dim_.start_y[source_j], nx_local_,
+                    nz_local_, nw_local_ },
+                make_range_4d<idx_t>( nw_local_, nz_local_, input_dim_.size_y[source_j], nx_local_ )
+            );
+        }
+        else
+        {
+            for_each_(
+                unpack_forward_yzwx_slab_functor<contiguous_buf_t, ArrayOut>{
+                    recv_buffer_, out, forward_recv_offsets_[source_j], input_dim_.start_y[source_j], nx_local_,
+                    nz_local_, nw_local_ },
+                make_range_4d<idx_t>( nx_local_, nz_local_, nw_local_, input_dim_.size_y[source_j] )
+            );
+        }
+    }
+
+    template <class ArrayOut>
+    void unpack_forward_slab_native_chunk_( int source_j, ArrayOut &out )
+    {
+        auto scope = profile_scope_( "unpack_forward_slab_native_chunk" );
+        launch_unpack_forward_slab_native_chunk_( source_j, out );
+        for_each_.wait();
+    }
+
+    template <class ArrayOut>
+    void unpack_forward_slab_native_all_( ArrayOut &out )
+    {
+        auto scope = profile_scope_( "unpack_forward_slab_native_all" );
+        if ( !slab_native_batched_peer_kernels_enabled_ )
+        {
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_forward_slab_native_chunk_( p, out );
+            return;
+        }
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            launch_unpack_forward_slab_native_chunk_( p, out );
+        for_each_.wait();
+    }
+
+    template <class ArrayIn>
+    void launch_pack_backward_slab_native_chunk_( const ArrayIn &in, int p )
+    {
+        constexpr int vector_width = 4;
+        constexpr int tile_x       = 4;
+        constexpr int tile_y       = 2;
+        if ( slab_native_vector4_kernels_enabled_ )
+        {
+            for_each_(
+                pack_backward_yzwx_slab_vector_x_functor<contiguous_buf_t, ArrayIn, vector_width>{
+                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_y[p], nx_local_, nz_local_,
+                    nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( vector_width ) - 1 ) /
+                        static_cast<std::size_t>( vector_width ),
+                    nz_local_, nw_local_, input_dim_.size_y[p]
+                )
+            );
+        }
+        else if ( slab_native_tiled_kernels_enabled_ )
+        {
+            for_each_(
+                pack_backward_yzwx_slab_tile_xy_functor<contiguous_buf_t, ArrayIn, tile_x, tile_y>{
+                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_y[p], nx_local_,
+                    input_dim_.size_y[p], nz_local_, nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( tile_x ) - 1 ) /
+                        static_cast<std::size_t>( tile_x ),
+                    nz_local_, nw_local_,
+                    ( input_dim_.size_y[p] + static_cast<std::size_t>( tile_y ) - 1 ) /
+                        static_cast<std::size_t>( tile_y )
+                )
+            );
+        }
+        else if ( slab_native_tensor_coalesced_kernels_enabled_ )
+        {
+            for_each_(
+                pack_backward_yzwx_slab_tensor_coalesced_functor<contiguous_buf_t, ArrayIn>{
+                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_y[p], nx_local_, nz_local_,
+                    nw_local_ },
+                make_range_4d<idx_t>( nw_local_, nz_local_, input_dim_.size_y[p], nx_local_ )
+            );
+        }
+        else
+        {
+            for_each_(
+                pack_backward_yzwx_slab_functor<contiguous_buf_t, ArrayIn>{
+                    send_buffer_, in, backward_send_offsets_[p], input_dim_.start_y[p], nx_local_, nz_local_,
+                    nw_local_ },
+                make_range_4d<idx_t>( nx_local_, nz_local_, nw_local_, input_dim_.size_y[p] )
+            );
+        }
+    }
+
+    template <class ArrayIn>
+    void pack_backward_slab_native_chunk_( const ArrayIn &in, int p )
+    {
+        auto scope = profile_scope_( "pack_backward_slab_native_chunk" );
+        launch_pack_backward_slab_native_chunk_( in, p );
+        for_each_.wait();
+    }
+
+    template <class ArrayIn>
+    void pack_backward_slab_native_all_( const ArrayIn &in )
+    {
+        auto scope = profile_scope_( "pack_backward_slab_native_all" );
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+        {
+            launch_pack_backward_slab_native_chunk_( in, p );
+            if ( !slab_native_batched_peer_kernels_enabled_ )
+                for_each_.wait();
+        }
+        if ( slab_native_batched_peer_kernels_enabled_ )
+            for_each_.wait();
+    }
+
+    template <class ArrayOut>
+    void launch_unpack_backward_slab_native_chunk_( int source_j, ArrayOut &out )
+    {
+        constexpr int vector_width = 4;
+        constexpr int tile_x       = 4;
+        constexpr int tile_y       = 2;
+        if ( slab_native_vector4_kernels_enabled_ )
+        {
+            for_each_(
+                unpack_backward_xyzw_slab_vector_x_functor<contiguous_buf_t, ArrayOut, vector_width>{
+                    recv_buffer_, out, backward_recv_offsets_[source_j], output_dim_.start_z[source_j], nx_local_,
+                    output_dim_.size_z[source_j], nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( vector_width ) - 1 ) /
+                        static_cast<std::size_t>( vector_width ),
+                    output_dim_.size_z[source_j], nw_local_, ny_local_
+                )
+            );
+        }
+        else if ( slab_native_tiled_kernels_enabled_ )
+        {
+            for_each_(
+                unpack_backward_xyzw_slab_tile_xy_functor<contiguous_buf_t, ArrayOut, tile_x, tile_y>{
+                    recv_buffer_, out, backward_recv_offsets_[source_j], output_dim_.start_z[source_j], nx_local_,
+                    ny_local_, output_dim_.size_z[source_j], nw_local_ },
+                make_range_4d<idx_t>(
+                    ( nx_local_ + static_cast<std::size_t>( tile_x ) - 1 ) /
+                        static_cast<std::size_t>( tile_x ),
+                    output_dim_.size_z[source_j], nw_local_,
+                    ( ny_local_ + static_cast<std::size_t>( tile_y ) - 1 ) /
+                        static_cast<std::size_t>( tile_y )
+                )
+            );
+        }
+        else if ( slab_native_tensor_coalesced_kernels_enabled_ )
+        {
+            for_each_(
+                unpack_backward_xyzw_slab_tensor_coalesced_functor<contiguous_buf_t, ArrayOut>{
+                    recv_buffer_, out, backward_recv_offsets_[source_j], output_dim_.start_z[source_j], nx_local_,
+                    output_dim_.size_z[source_j], nw_local_ },
+                make_range_4d<idx_t>( nw_local_, output_dim_.size_z[source_j], ny_local_, nx_local_ )
+            );
+        }
+        else
+        {
+            for_each_(
+                unpack_backward_xyzw_slab_functor<contiguous_buf_t, ArrayOut>{
+                    recv_buffer_, out, backward_recv_offsets_[source_j], output_dim_.start_z[source_j], nx_local_,
+                    output_dim_.size_z[source_j], nw_local_ },
+                make_range_4d<idx_t>( nx_local_, output_dim_.size_z[source_j], nw_local_, ny_local_ )
+            );
+        }
+    }
+
+    template <class ArrayOut>
+    void unpack_backward_slab_native_chunk_( int source_j, ArrayOut &out )
+    {
+        auto scope = profile_scope_( "unpack_backward_slab_native_chunk" );
+        launch_unpack_backward_slab_native_chunk_( source_j, out );
+        for_each_.wait();
+    }
+
+    template <class ArrayOut>
+    void unpack_backward_slab_native_all_( ArrayOut &out )
+    {
+        auto scope = profile_scope_( "unpack_backward_slab_native_all" );
+        if ( !slab_native_batched_peer_kernels_enabled_ )
+        {
+            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                unpack_backward_slab_native_chunk_( p, out );
+            return;
+        }
+        for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+            launch_unpack_backward_slab_native_chunk_( p, out );
+        for_each_.wait();
+    }
+
+    struct scoped_bool_flag_
+    {
+        bool &slot;
+        bool  previous;
+
+        scoped_bool_flag_( bool &slot_, bool value ) : slot( slot_ ), previous( slot_ )
+        {
+            slot = value;
+        }
+
+        ~scoped_bool_flag_()
+        {
+            slot = previous;
+        }
+    };
+
+    template <class ArrayOut>
+    void unpack_forward_p2p_chunk_( int source_j, ArrayOut &out )
+    {
+        if ( p2p_slab_native_unpack_ )
+            unpack_forward_slab_native_chunk_( source_j, out );
+        else
+            unpack_forward_chunk_( source_j, out );
+    }
+
+    template <class ArrayOut>
+    void unpack_backward_p2p_chunk_( int source_j, ArrayOut &out )
+    {
+        if ( p2p_slab_native_unpack_ )
+            unpack_backward_slab_native_chunk_( source_j, out );
+        else
+            unpack_backward_chunk_( source_j, out );
+    }
+
+    template <class ArrayOut>
+    void forward_p2p_waitall_slab_native_( ArrayOut &out )
+    {
+        scoped_bool_flag_ use_slab_native_unpack( p2p_slab_native_unpack_, true );
+        forward_p2p_waitall_( out );
+    }
+
+    template <class ArrayOut>
+    void forward_p2p_waitany_slab_native_( ArrayOut &out )
+    {
+        scoped_bool_flag_ use_slab_native_unpack( p2p_slab_native_unpack_, true );
+        forward_p2p_waitany_( out );
+    }
+
+    template <class ArrayOut>
+    void backward_p2p_waitall_slab_native_( ArrayOut &out )
+    {
+        scoped_bool_flag_ use_slab_native_unpack( p2p_slab_native_unpack_, true );
+        backward_p2p_waitall_( out );
+    }
+
+    template <class ArrayOut>
+    void backward_p2p_waitany_slab_native_( ArrayOut &out )
+    {
+        scoped_bool_flag_ use_slab_native_unpack( p2p_slab_native_unpack_, true );
+        backward_p2p_waitany_( out );
+    }
+
+    template <class ArrayOut, class PackChunk>
+    void forward_p2p_waitany_peer_paired_( ArrayOut &out, PackChunk pack_chunk, bool slab_native_unpack )
+    {
+        auto              scope = profile_scope_( "forward_p2p_waitany_peer_paired" );
+        scoped_bool_flag_ use_slab_native_unpack( p2p_slab_native_unpack_, slab_native_unpack );
+        const int         comm_size = line_comm_info_.num_procs;
+
+        {
+            auto phase = profile_scope_( "post_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + forward_recv_offsets_[p], forward_recvcounts_[p], mpi_value_type_, p,
+                    p, recv_requests_[p]
+                );
+            }
+        }
+
+        int completed_remote = 0;
+        auto drain_ready     = [&]() {
+            while ( completed_remote < comm_size - 1 )
+            {
+                int ready = 0;
+                int p     = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "test_recv_any" );
+                    p          = line_comm_info_.testany( comm_size, recv_requests_.data(), &ready );
+                }
+                if ( !ready || p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_forward_p2p_chunk_( p, out );
+                }
+                ++completed_remote;
+            }
+        };
+
+        {
+            auto phase = profile_scope_( "pack_send_peers" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                pack_chunk( p );
+                if ( p == myid_j_ )
+                {
+                    {
+                        auto self_phase = profile_scope_( "self_copy" );
+                        runtime_api_t::memcpy(
+                            recv_buffer_.raw_ptr() + forward_recv_offsets_[myid_j_],
+                            send_buffer_.raw_ptr() + forward_send_offsets_[myid_j_],
+                            bytes_from_elems_( forward_recv_chunk_elems_( myid_j_ ) ),
+                            runtime_api_t::device_to_device_kind()
+                        );
+                    }
+                    {
+                        auto self_phase = profile_scope_( "unpack_self" );
+                        unpack_forward_p2p_chunk_( myid_j_, out );
+                    }
+                }
+                else
+                {
+                    auto send_phase = profile_scope_( "post_send_peer" );
+                    line_comm_info_.isend(
+                        send_buffer_.raw_ptr() + forward_send_offsets_[p], forward_sendcounts_[p], mpi_value_type_,
+                        p, myid_j_, send_requests_[p]
+                    );
+                }
+                drain_ready();
+            }
+        }
+
+        while ( completed_remote < comm_size - 1 )
+        {
+            int p = MPI_UNDEFINED;
+            {
+                auto phase = profile_scope_( "wait_recv_any" );
+                p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+            }
+            if ( p == MPI_UNDEFINED )
+                break;
+            {
+                auto phase = profile_scope_( "unpack_recv_chunk" );
+                unpack_forward_p2p_chunk_( p, out );
+            }
+            ++completed_remote;
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
+    }
+
+    template <class ArrayOut, class PackChunk>
+    void backward_p2p_waitany_peer_paired_( ArrayOut &out, PackChunk pack_chunk, bool slab_native_unpack )
+    {
+        auto              scope = profile_scope_( "backward_p2p_waitany_peer_paired" );
+        scoped_bool_flag_ use_slab_native_unpack( p2p_slab_native_unpack_, slab_native_unpack );
+        const int         comm_size = line_comm_info_.num_procs;
+
+        {
+            auto phase = profile_scope_( "post_recv" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                if ( p == myid_j_ )
+                    continue;
+                line_comm_info_.irecv(
+                    recv_buffer_.raw_ptr() + backward_recv_offsets_[p], backward_recvcounts_[p], mpi_value_type_, p,
+                    myid_j_, recv_requests_[p]
+                );
+            }
+        }
+
+        int completed_remote = 0;
+        auto drain_ready     = [&]() {
+            while ( completed_remote < comm_size - 1 )
+            {
+                int ready = 0;
+                int p     = MPI_UNDEFINED;
+                {
+                    auto phase = profile_scope_( "test_recv_any" );
+                    p          = line_comm_info_.testany( comm_size, recv_requests_.data(), &ready );
+                }
+                if ( !ready || p == MPI_UNDEFINED )
+                    break;
+                {
+                    auto phase = profile_scope_( "unpack_recv_chunk" );
+                    unpack_backward_p2p_chunk_( p, out );
+                }
+                ++completed_remote;
+            }
+        };
+
+        {
+            auto phase = profile_scope_( "pack_send_peers" );
+            for ( int p = 0; p < comm_size; ++p )
+            {
+                pack_chunk( p );
+                if ( p == myid_j_ )
+                {
+                    {
+                        auto self_phase = profile_scope_( "self_copy" );
+                        runtime_api_t::memcpy(
+                            recv_buffer_.raw_ptr() + backward_recv_offsets_[myid_j_],
+                            send_buffer_.raw_ptr() + backward_send_offsets_[myid_j_],
+                            bytes_from_elems_( backward_recv_chunk_elems_( myid_j_ ) ),
+                            runtime_api_t::device_to_device_kind()
+                        );
+                    }
+                    {
+                        auto self_phase = profile_scope_( "unpack_self" );
+                        unpack_backward_p2p_chunk_( myid_j_, out );
+                    }
+                }
+                else
+                {
+                    auto send_phase = profile_scope_( "post_send_peer" );
+                    line_comm_info_.isend(
+                        send_buffer_.raw_ptr() + backward_send_offsets_[p], backward_sendcounts_[p],
+                        mpi_value_type_, p, p, send_requests_[p]
+                    );
+                }
+                drain_ready();
+            }
+        }
+
+        while ( completed_remote < comm_size - 1 )
+        {
+            int p = MPI_UNDEFINED;
+            {
+                auto phase = profile_scope_( "wait_recv_any" );
+                p          = line_comm_info_.waitany( comm_size, recv_requests_.data() );
+            }
+            if ( p == MPI_UNDEFINED )
+                break;
+            {
+                auto phase = profile_scope_( "unpack_recv_chunk" );
+                unpack_backward_p2p_chunk_( p, out );
+            }
+            ++completed_remote;
+        }
+
+        {
+            auto phase = profile_scope_( "wait_send" );
+            line_comm_info_.waitall( comm_size, send_requests_.data() );
+        }
     }
 
     template <class ArrayOut>
@@ -2218,7 +3640,7 @@ private:
         {
             auto phase = profile_scope_( "unpack_recv" );
             for ( int p = 0; p < comm_size; ++p )
-                unpack_forward_chunk_( p, out );
+                unpack_forward_p2p_chunk_( p, out );
         }
         {
             auto phase = profile_scope_( "wait_send" );
@@ -2260,7 +3682,7 @@ private:
         {
             auto phase = profile_scope_( "unpack_recv" );
             for ( int p = 0; p < comm_size; ++p )
-                unpack_forward_chunk_( p, out );
+                unpack_forward_p2p_chunk_( p, out );
         }
         {
             auto phase = profile_scope_( "wait_send" );
@@ -2306,7 +3728,7 @@ private:
         }
         {
             auto phase = profile_scope_( "unpack_self" );
-            unpack_forward_chunk_( myid_j_, out );
+            unpack_forward_p2p_chunk_( myid_j_, out );
         }
 
         {
@@ -2326,7 +3748,7 @@ private:
                 }
                 {
                     auto phase = profile_scope_( "unpack_recv_chunk" );
-                    unpack_forward_chunk_( p, out );
+                    unpack_forward_p2p_chunk_( p, out );
                 }
                 completed++;
             }
@@ -2366,7 +3788,7 @@ private:
         }
         {
             auto phase = profile_scope_( "unpack_self" );
-            unpack_forward_chunk_( myid_j_, out );
+            unpack_forward_p2p_chunk_( myid_j_, out );
         }
 
         {
@@ -2382,7 +3804,7 @@ private:
                     break;
                 {
                     auto phase = profile_scope_( "unpack_recv_chunk" );
-                    unpack_forward_chunk_( p, out );
+                    unpack_forward_p2p_chunk_( p, out );
                 }
                 completed++;
             }
@@ -2425,16 +3847,24 @@ private:
         auto scope = profile_scope_( "forward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
-            line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
-                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
-                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                    line_comm_info_.alltoallv(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                        forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                        forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_forward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_forward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -2478,17 +3908,25 @@ private:
         }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
-            line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
-                forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
-                forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                    line_comm_info_.alltoallw(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                        forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                        static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                        forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_forward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_forward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -2546,7 +3984,7 @@ private:
         {
             auto phase = profile_scope_( "unpack_recv" );
             for ( int p = 0; p < comm_size; ++p )
-                unpack_backward_chunk_( p, out );
+                unpack_backward_p2p_chunk_( p, out );
         }
         {
             auto phase = profile_scope_( "wait_send" );
@@ -2588,7 +4026,7 @@ private:
         {
             auto phase = profile_scope_( "unpack_recv" );
             for ( int p = 0; p < comm_size; ++p )
-                unpack_backward_chunk_( p, out );
+                unpack_backward_p2p_chunk_( p, out );
         }
         {
             auto phase = profile_scope_( "wait_send" );
@@ -2634,7 +4072,7 @@ private:
         }
         {
             auto phase = profile_scope_( "unpack_self" );
-            unpack_backward_chunk_( myid_j_, out );
+            unpack_backward_p2p_chunk_( myid_j_, out );
         }
 
         {
@@ -2654,7 +4092,7 @@ private:
                 }
                 {
                     auto phase = profile_scope_( "unpack_recv_chunk" );
-                    unpack_backward_chunk_( p, out );
+                    unpack_backward_p2p_chunk_( p, out );
                 }
                 completed++;
             }
@@ -2694,7 +4132,7 @@ private:
         }
         {
             auto phase = profile_scope_( "unpack_self" );
-            unpack_backward_chunk_( myid_j_, out );
+            unpack_backward_p2p_chunk_( myid_j_, out );
         }
 
         {
@@ -2710,7 +4148,7 @@ private:
                     break;
                 {
                     auto phase = profile_scope_( "unpack_recv_chunk" );
-                    unpack_backward_chunk_( p, out );
+                    unpack_backward_p2p_chunk_( p, out );
                 }
                 completed++;
             }
@@ -2753,16 +4191,24 @@ private:
         auto scope = profile_scope_( "backward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
-            line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
-                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
-                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                    line_comm_info_.alltoallv(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                        backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                        backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_backward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_backward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -2806,17 +4252,25 @@ private:
         }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
-            line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
-                backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
-                backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                    line_comm_info_.alltoallw(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                        backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                        static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                        backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_backward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_backward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -2827,6 +4281,8 @@ private:
     profiler_t        *profiler_        = nullptr;
     memory_profiler_t *memory_profiler_ = nullptr;
     std::string        memory_profile_prefix_;
+    mpi_transpose_4d_stage_timer stage_timer_;
+    const char                  *stage_timing_direction_ = "unknown";
 
     bool is_inited_ = false;
     int  myid_i_    = 0;
@@ -2845,6 +4301,11 @@ private:
 
     std::unique_ptr<mpi_comm_t>        line_comm_;
     scfd::communication::mpi_comm_info line_comm_info_;
+    bool                               slab_native_batched_peer_kernels_enabled_ = false;
+    bool                               slab_native_tensor_coalesced_kernels_enabled_ = false;
+    bool                               slab_native_vector4_kernels_enabled_ = false;
+    bool                               slab_native_tiled_kernels_enabled_ = false;
+    bool                               p2p_slab_native_unpack_ = false;
     contiguous_buf_t                   send_buffer_;
     contiguous_buf_t                   recv_buffer_;
     std::size_t                        send_buffer_elems_      = 0;
@@ -2894,6 +4355,238 @@ private:
     std::size_t max_buffer_elems_ = 0;
 };
 
+template <class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
+template <class ArrayOut>
+void mpi_transpose_4d_same_xw<ValueType, Backend, MPIComm, Log, RuntimeAPI>::forward_alltoallv_slab_native_(
+    ArrayOut &out
+)
+{
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+    auto scope = profile_scope_( "forward_alltoallv_slab_native" );
+    {
+        auto phase = profile_scope_( "stage_send_to_host" );
+        copy_send_buffer_to_host_();
+    }
+    {
+        auto phase = profile_scope_( "mpi_alltoallv" );
+        line_comm_info_.alltoallv(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+            forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+            forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+        );
+    }
+    {
+        auto phase = profile_scope_( "stage_recv_to_device" );
+        copy_recv_buffer_from_host_();
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        unpack_forward_slab_native_all_( out );
+    }
+#else
+    auto scope = profile_scope_( "forward_alltoallv_slab_native" );
+    {
+        auto phase = profile_scope_( "mpi_alltoallv" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                line_comm_info_.alltoallv(
+                    static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                    forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                    forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+                );
+            }
+        );
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                unpack_forward_slab_native_all_( out );
+            }
+        );
+    }
+#endif
+}
+
+template <class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
+template <class ArrayOut>
+void mpi_transpose_4d_same_xw<ValueType, Backend, MPIComm, Log, RuntimeAPI>::forward_alltoallw_slab_native_(
+    ArrayOut &out
+)
+{
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+    auto scope = profile_scope_( "forward_alltoallw_slab_native" );
+    {
+        auto phase = profile_scope_( "prepare_alltoallw_layout" );
+        ensure_forward_alltoallw_layout_();
+    }
+    {
+        auto phase = profile_scope_( "stage_send_to_host" );
+        copy_send_buffer_to_host_();
+    }
+    {
+        auto phase = profile_scope_( "mpi_alltoallw" );
+        line_comm_info_.alltoallw(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+            forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+            static_cast<void *>( host_recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+            forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+        );
+    }
+    {
+        auto phase = profile_scope_( "stage_recv_to_device" );
+        copy_recv_buffer_from_host_();
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        unpack_forward_slab_native_all_( out );
+    }
+#else
+    auto scope = profile_scope_( "forward_alltoallw_slab_native" );
+    {
+        auto phase = profile_scope_( "prepare_alltoallw_layout" );
+        ensure_forward_alltoallw_layout_();
+    }
+    {
+        auto phase = profile_scope_( "mpi_alltoallw" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                line_comm_info_.alltoallw(
+                    static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                    forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                    static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                    forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+                );
+            }
+        );
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                unpack_forward_slab_native_all_( out );
+            }
+        );
+    }
+#endif
+}
+
+template <class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
+template <class ArrayOut>
+void mpi_transpose_4d_same_xw<ValueType, Backend, MPIComm, Log, RuntimeAPI>::backward_alltoallv_slab_native_(
+    ArrayOut &out
+)
+{
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+    auto scope = profile_scope_( "backward_alltoallv_slab_native" );
+    {
+        auto phase = profile_scope_( "stage_send_to_host" );
+        copy_send_buffer_to_host_();
+    }
+    {
+        auto phase = profile_scope_( "mpi_alltoallv" );
+        line_comm_info_.alltoallv(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+            backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( host_recv_buffer_.raw_ptr() ),
+            backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+        );
+    }
+    {
+        auto phase = profile_scope_( "stage_recv_to_device" );
+        copy_recv_buffer_from_host_();
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        unpack_backward_slab_native_all_( out );
+    }
+#else
+    auto scope = profile_scope_( "backward_alltoallv_slab_native" );
+    {
+        auto phase = profile_scope_( "mpi_alltoallv" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                line_comm_info_.alltoallv(
+                    static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                    backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                    backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+                );
+            }
+        );
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                unpack_backward_slab_native_all_( out );
+            }
+        );
+    }
+#endif
+}
+
+template <class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
+template <class ArrayOut>
+void mpi_transpose_4d_same_xw<ValueType, Backend, MPIComm, Log, RuntimeAPI>::backward_alltoallw_slab_native_(
+    ArrayOut &out
+)
+{
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+    auto scope = profile_scope_( "backward_alltoallw_slab_native" );
+    {
+        auto phase = profile_scope_( "prepare_alltoallw_layout" );
+        ensure_backward_alltoallw_layout_();
+    }
+    {
+        auto phase = profile_scope_( "stage_send_to_host" );
+        copy_send_buffer_to_host_();
+    }
+    {
+        auto phase = profile_scope_( "mpi_alltoallw" );
+        line_comm_info_.alltoallw(
+            static_cast<const void *>( host_send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+            backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+            static_cast<void *>( host_recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+            backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+        );
+    }
+    {
+        auto phase = profile_scope_( "stage_recv_to_device" );
+        copy_recv_buffer_from_host_();
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        unpack_backward_slab_native_all_( out );
+    }
+#else
+    auto scope = profile_scope_( "backward_alltoallw_slab_native" );
+    {
+        auto phase = profile_scope_( "prepare_alltoallw_layout" );
+        ensure_backward_alltoallw_layout_();
+    }
+    {
+        auto phase = profile_scope_( "mpi_alltoallw" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                line_comm_info_.alltoallw(
+                    static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                    backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                    static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                    backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+                );
+            }
+        );
+    }
+    {
+        auto phase = profile_scope_( "unpack_recv" );
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                unpack_backward_slab_native_all_( out );
+            }
+        );
+    }
+#endif
+}
+
 template <
     class ValueType, class Backend, class MPIComm, class Log, class RuntimeAPI>
 class mpi_transpose_4d_same_zw
@@ -2935,6 +4628,13 @@ public:
     void set_profiler( profiler_t *profiler )
     {
         profiler_ = profiler;
+    }
+
+    void set_stage_timing_callback(
+        void *context, mpi_transpose_4d_stage_timer::callback_t callback, const std::string &prefix
+    )
+    {
+        stage_timer_.set( context, callback, prefix );
     }
 
     void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
@@ -3067,7 +4767,10 @@ public:
         ensure_is_inited_();
         verify_forward_shapes_( in, out );
         reset_requests_();
-        pack_forward_all_( in );
+        stage_timing_direction_ = "forward";
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_forward_all_( in ); }
+        );
 
         switch ( mode )
         {
@@ -3095,7 +4798,10 @@ public:
         ensure_is_inited_();
         verify_backward_shapes_( in, out );
         reset_requests_();
-        pack_backward_all_( in );
+        stage_timing_direction_ = "backward";
+        time_mpi_transpose_4d_substage<runtime_api_t>(
+            stage_timer_, stage_timing_direction_, "pack", [&]() { pack_backward_all_( in ); }
+        );
 
         switch ( mode )
         {
@@ -3844,16 +5550,24 @@ private:
         auto scope = profile_scope_( "forward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
-            line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
-                forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
-                forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                    line_comm_info_.alltoallv(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_.data(),
+                        forward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                        forward_recvcounts_.data(), forward_rdispls_.data(), mpi_value_type_
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_forward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_forward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -3897,17 +5611,25 @@ private:
         }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
-            line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
-                forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
-                forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                    line_comm_info_.alltoallw(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), forward_sendcounts_w_.data(),
+                        forward_sdispls_w_.data(), forward_sendtypes_w_.data(),
+                        static_cast<void *>( recv_buffer_.raw_ptr() ), forward_recvcounts_w_.data(),
+                        forward_rdispls_w_.data(), forward_recvtypes_w_.data()
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_forward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_forward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -4172,16 +5894,24 @@ private:
         auto scope = profile_scope_( "backward_alltoallv" );
         {
             auto phase = profile_scope_( "mpi_alltoallv" );
-            line_comm_info_.alltoallv(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
-                backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
-                backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallv", [&]() {
+                    line_comm_info_.alltoallv(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_.data(),
+                        backward_sdispls_.data(), mpi_value_type_, static_cast<void *>( recv_buffer_.raw_ptr() ),
+                        backward_recvcounts_.data(), backward_rdispls_.data(), mpi_value_type_
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_backward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_backward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -4225,17 +5955,25 @@ private:
         }
         {
             auto phase = profile_scope_( "mpi_alltoallw" );
-            line_comm_info_.alltoallw(
-                static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
-                backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
-                static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
-                backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "mpi_alltoallw", [&]() {
+                    line_comm_info_.alltoallw(
+                        static_cast<const void *>( send_buffer_.raw_ptr() ), backward_sendcounts_w_.data(),
+                        backward_sdispls_w_.data(), backward_sendtypes_w_.data(),
+                        static_cast<void *>( recv_buffer_.raw_ptr() ), backward_recvcounts_w_.data(),
+                        backward_rdispls_w_.data(), backward_recvtypes_w_.data()
+                    );
+                }
             );
         }
         {
             auto phase = profile_scope_( "unpack_recv" );
-            for ( int p = 0; p < line_comm_info_.num_procs; ++p )
-                unpack_backward_chunk_( p, out );
+            time_mpi_transpose_4d_substage<runtime_api_t>(
+                stage_timer_, stage_timing_direction_, "unpack", [&]() {
+                    for ( int p = 0; p < line_comm_info_.num_procs; ++p )
+                        unpack_backward_chunk_( p, out );
+                }
+            );
         }
 #endif
     }
@@ -4246,6 +5984,8 @@ private:
     profiler_t        *profiler_        = nullptr;
     memory_profiler_t *memory_profiler_ = nullptr;
     std::string        memory_profile_prefix_;
+    mpi_transpose_4d_stage_timer stage_timer_;
+    const char                  *stage_timing_direction_ = "unknown";
 
     bool is_inited_ = false;
     int  myid_i_    = 0;

@@ -35,12 +35,22 @@ struct fftm_4d_test_options
     std::size_t                   p2        = 0;
     std::size_t                   p3        = 0;
     double                        threshold = 1.0e-11;
+    double                        l2_threshold = -1.0;
+    double                        h1_threshold = -1.0;
     int                           times     = 1;
     int                           warmup    = 0;
     bool                          use_direct_backward_receive = false;
     bool                          direct_p2p_cuda_aware       = true;
     bool                          use_p2p_byte_transfer       = false;
     bool                          use_fft_exec_no_sync        = false;
+    bool                          enable_native_stage_timers  = false;
+    bool                          use_4d_slab_native_xw_transpose = true;
+    bool                          use_4d_slab_native_xw_batched_peer_kernels = false;
+    bool                          use_4d_slab_native_xw_tensor_coalesced_kernels = false;
+    bool                          use_4d_slab_native_xw_vector4_kernels = false;
+    bool                          use_4d_slab_native_xw_tiled_kernels = false;
+    bool                          use_4d_slab_native_xw_layout_stage = false;
+    bool                          use_4d_slab_native_xw_native_spectral_layout = false;
 };
 
 inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d( std::size_t num_procs )
@@ -99,13 +109,22 @@ usage_fftm_4d_test( const std::string &binary_name, bool allow_strategy_all, boo
         usage += "|all";
     usage += "] [--mode p2p-waitall|p2p-waitany|alltoallv|alltoallw] [--grid P1 P2 P3]";
     if ( allow_threshold )
-        usage += " [--threshold eps]";
+        usage += " [--threshold eps] [--l2-threshold eps] [--h1-threshold eps]";
     if ( allow_times )
         usage += " [--times repeats] [--warmup repeats]";
     usage += " [--use-direct-backward-receive|--no-direct-backward-receive]";
     usage += " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]";
     usage += " [--use-p2p-byte-transfer|--no-p2p-byte-transfer]";
     usage += " [--use-fft-exec-no-sync|--no-fft-exec-no-sync]";
+    usage += " [--enable-native-stage-timers|--disable-native-stage-timers]";
+    usage += " [--use-4d-slab-native-xw-transpose|--no-4d-slab-native-xw-transpose]";
+    usage += " [--use-4d-slab-native-xw-batched-peer-kernels|--no-4d-slab-native-xw-batched-peer-kernels]";
+    usage += " [--use-4d-slab-native-xw-tensor-coalesced-kernels|--no-4d-slab-native-xw-tensor-coalesced-kernels]";
+    usage += " [--use-4d-slab-native-xw-vector4-kernels|--no-4d-slab-native-xw-vector4-kernels]";
+    usage += " [--use-4d-slab-native-xw-tiled-kernels|--no-4d-slab-native-xw-tiled-kernels]";
+    usage += " [--use-4d-slab-native-xw-layout-stage|--no-4d-slab-native-xw-layout-stage]";
+    usage +=
+        " [--use-4d-slab-native-xw-native-spectral-layout|--no-4d-slab-native-xw-native-spectral-layout]";
     usage += " [Nx Ny Nz Nw]";
     return usage;
 }
@@ -178,6 +197,26 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.threshold = std::atof( argv[argi + 1] );
             argi += 2;
         }
+        else if ( arg == "--l2-threshold" )
+        {
+            if ( !allow_threshold )
+                throw std::logic_error( "Unknown option '--l2-threshold'" );
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --l2-threshold" );
+
+            options.l2_threshold = std::atof( argv[argi + 1] );
+            argi += 2;
+        }
+        else if ( arg == "--h1-threshold" )
+        {
+            if ( !allow_threshold )
+                throw std::logic_error( "Unknown option '--h1-threshold'" );
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --h1-threshold" );
+
+            options.h1_threshold = std::atof( argv[argi + 1] );
+            argi += 2;
+        }
         else if ( arg == "--times" )
         {
             if ( !allow_times )
@@ -242,6 +281,86 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.use_fft_exec_no_sync = false;
             argi += 1;
         }
+        else if ( arg == "--enable-native-stage-timers" )
+        {
+            options.enable_native_stage_timers = true;
+            argi += 1;
+        }
+        else if ( arg == "--disable-native-stage-timers" )
+        {
+            options.enable_native_stage_timers = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-xw-transpose" )
+        {
+            options.use_4d_slab_native_xw_transpose = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-xw-transpose" )
+        {
+            options.use_4d_slab_native_xw_transpose = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-xw-batched-peer-kernels" )
+        {
+            options.use_4d_slab_native_xw_batched_peer_kernels = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-xw-batched-peer-kernels" )
+        {
+            options.use_4d_slab_native_xw_batched_peer_kernels = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-xw-tensor-coalesced-kernels" )
+        {
+            options.use_4d_slab_native_xw_tensor_coalesced_kernels = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-xw-tensor-coalesced-kernels" )
+        {
+            options.use_4d_slab_native_xw_tensor_coalesced_kernels = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-xw-vector4-kernels" )
+        {
+            options.use_4d_slab_native_xw_vector4_kernels = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-xw-vector4-kernels" )
+        {
+            options.use_4d_slab_native_xw_vector4_kernels = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-xw-tiled-kernels" )
+        {
+            options.use_4d_slab_native_xw_tiled_kernels = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-xw-tiled-kernels" )
+        {
+            options.use_4d_slab_native_xw_tiled_kernels = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-xw-layout-stage" )
+        {
+            options.use_4d_slab_native_xw_layout_stage = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-xw-layout-stage" )
+        {
+            options.use_4d_slab_native_xw_layout_stage = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-xw-native-spectral-layout" )
+        {
+            options.use_4d_slab_native_xw_native_spectral_layout = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-xw-native-spectral-layout" )
+        {
+            options.use_4d_slab_native_xw_native_spectral_layout = false;
+            argi += 1;
+        }
         else
         {
             break;
@@ -273,6 +392,20 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_test_opti
     init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
     init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
     init_options.use_fft_exec_no_sync        = options.use_fft_exec_no_sync;
+    init_options.enable_native_stage_timers  = options.enable_native_stage_timers;
+    init_options.use_4d_slab_native_xw_transpose = options.use_4d_slab_native_xw_transpose;
+    init_options.use_4d_slab_native_xw_batched_peer_kernels =
+        options.use_4d_slab_native_xw_batched_peer_kernels;
+    init_options.use_4d_slab_native_xw_tensor_coalesced_kernels =
+        options.use_4d_slab_native_xw_tensor_coalesced_kernels;
+    init_options.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
+    init_options.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
+    init_options.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
+    init_options.spectral_layout_4d =
+        options.use_4d_slab_native_xw_native_spectral_layout ? ::fftm::fftm_4d_spectral_layout::native_xzwy
+                                                             : ::fftm::fftm_4d_spectral_layout::public_yzwx;
+    init_options.use_4d_slab_native_xw_native_spectral_layout =
+        options.use_4d_slab_native_xw_native_spectral_layout;
     return init_options;
 }
 
