@@ -62,6 +62,14 @@ private:
         bool                                                   owns_raw_handles = false;
         bool                                                   direct_raw_c_api = false;
     };
+    struct r2c_c2r_plan_bundle_t
+    {
+        std::vector<std::unique_ptr<r2c_wrap_t>>               forward_plans;
+        std::vector<std::unique_ptr<c2r_wrap_t>>               inverse_plans;
+        std::vector<typename wrap_t::runtime_api::stream_wrap> streams;
+        std::size_t                                            work_stride_bytes = 0;
+        std::size_t                                            bound_work_stride_bytes = 0;
+    };
 
 public:
     using real              = T;
@@ -71,6 +79,7 @@ public:
     using plan_descriptor_t = typename wrap_t::plan_descriptor;
     using plan_sequence_id_t = std::size_t;
     using c2c_plan_array_id_t = std::size_t;
+    using r2c_c2r_plan_bundle_id_t = std::size_t;
     using minimal_reference_c2c_plan_array_id_t = std::size_t;
 
     static plan_sequence_id_t invalid_plan_sequence_id()
@@ -81,6 +90,11 @@ public:
     static c2c_plan_array_id_t invalid_c2c_plan_array_id()
     {
         return std::numeric_limits<c2c_plan_array_id_t>::max();
+    }
+
+    static r2c_c2r_plan_bundle_id_t invalid_r2c_c2r_plan_bundle_id()
+    {
+        return std::numeric_limits<r2c_c2r_plan_bundle_id_t>::max();
     }
 
     static minimal_reference_c2c_plan_array_id_t invalid_minimal_reference_c2c_plan_array_id()
@@ -167,6 +181,57 @@ public:
         );
     }
 
+    r2c_c2r_plan_bundle_id_t make_r2c_c2r_plan_bundle_2D(
+        long long int n0, long long int n1,
+        long long int forward_inembed0, long long int forward_inembed1,
+        long long int forward_istride, long long int forward_idist,
+        long long int forward_onembed0, long long int forward_onembed1,
+        long long int forward_ostride, long long int forward_odist, long long int forward_batch,
+        long long int inverse_inembed0, long long int inverse_inembed1,
+        long long int inverse_istride, long long int inverse_idist,
+        long long int inverse_onembed0, long long int inverse_onembed1,
+        long long int inverse_ostride, long long int inverse_odist, long long int inverse_batch,
+        std::size_t lane_count
+    )
+    {
+        if ( activated_ || external_activated_ )
+        {
+            throw std::logic_error(
+                "fft_wrap_many::make_r2c_c2r_plan_bundle_2D: cannot add plan bundles after activation."
+            );
+        }
+        if ( lane_count == 0 )
+            throw std::invalid_argument( "fft_wrap_many::make_r2c_c2r_plan_bundle_2D: lane count must be positive" );
+
+        r2c_c2r_plan_bundle_t bundle;
+        bundle.forward_plans.reserve( lane_count );
+        bundle.inverse_plans.reserve( lane_count );
+        bundle.streams.reserve( lane_count );
+        for ( std::size_t lane = 0; lane < lane_count; ++lane )
+        {
+            bundle.streams.emplace_back( true );
+            auto forward_plan = std::make_unique<r2c_wrap_t>(
+                n0, n1, forward_inembed0, forward_inembed1, forward_istride, forward_idist,
+                forward_onembed0, forward_onembed1, forward_ostride, forward_odist, forward_batch
+            );
+            auto inverse_plan = std::make_unique<c2r_wrap_t>(
+                n0, n1, inverse_inembed0, inverse_inembed1, inverse_istride, inverse_idist,
+                inverse_onembed0, inverse_onembed1, inverse_ostride, inverse_odist, inverse_batch
+            );
+            forward_plan->set_stream( bundle.streams.back().stream() );
+            inverse_plan->set_stream( bundle.streams.back().stream() );
+            bundle.work_stride_bytes = std::max(
+                bundle.work_stride_bytes,
+                std::max( forward_plan->get_work_size(), inverse_plan->get_work_size() )
+            );
+            bundle.forward_plans.push_back( std::move( forward_plan ) );
+            bundle.inverse_plans.push_back( std::move( inverse_plan ) );
+        }
+
+        r2c_c2r_plan_bundles_.push_back( std::move( bundle ) );
+        return r2c_c2r_plan_bundles_.size() - 1;
+    }
+
     void activate()
     {
         if ( activated_ )
@@ -186,6 +251,7 @@ public:
             {
                 el.second->set_work_area( static_cast<void *>( work_area_.raw_ptr() ) );
             }
+            bind_r2c_c2r_plan_bundle_work_areas_( static_cast<void *>( work_area_.raw_ptr() ) );
         }
 
         update_memory_profile_();
@@ -196,6 +262,10 @@ public:
         for ( const auto &el : container_ )
         {
             work_area_size_ = std::max( work_area_size_, el.second->get_work_size() );
+        }
+        for ( const auto &bundle : r2c_c2r_plan_bundles_ )
+        {
+            work_area_size_ = std::max( work_area_size_, r2c_c2r_plan_bundle_work_size_( bundle ) );
         }
         return work_area_size_;
     }
@@ -212,6 +282,7 @@ public:
         {
             el.second->set_work_area( external_work_area );
         }
+        bind_r2c_c2r_plan_bundle_work_areas_( external_work_area );
         external_activated_ = true;
         update_memory_profile_();
     }
@@ -230,6 +301,71 @@ public:
     void set_hot_exec_no_sync_enabled( bool enabled )
     {
         hot_exec_no_sync_ = enabled;
+    }
+
+    std::size_t r2c_c2r_plan_bundle_lane_count( r2c_c2r_plan_bundle_id_t bundle_id ) const
+    {
+        return r2c_c2r_plan_bundle_( bundle_id ).streams.size();
+    }
+
+    std::size_t r2c_c2r_plan_bundle_work_size( r2c_c2r_plan_bundle_id_t bundle_id ) const
+    {
+        return r2c_c2r_plan_bundle_work_size_( r2c_c2r_plan_bundle_( bundle_id ) );
+    }
+
+    template <class InPtr, class OutPtr>
+    void exec_r2c_c2r_plan_bundle_forward_lane_no_sync(
+        r2c_c2r_plan_bundle_id_t bundle_id, std::size_t lane, std::size_t in_offset,
+        std::size_t out_offset, InPtr in, OutPtr out
+    )
+    {
+        auto &bundle = r2c_c2r_plan_bundle_( bundle_id );
+        if ( lane >= bundle.forward_plans.size() )
+            throw std::out_of_range( "fft_wrap_many: R2C/C2R plan-bundle forward lane is out of range" );
+        bundle.forward_plans[lane]->exec_no_sync(
+            const_cast<void *>( static_cast<const void *>( in + in_offset ) ),
+            static_cast<void *>( out + out_offset )
+        );
+    }
+
+    template <class InPtr, class OutPtr>
+    void exec_r2c_c2r_plan_bundle_inverse_lane_no_sync(
+        r2c_c2r_plan_bundle_id_t bundle_id, std::size_t lane, std::size_t in_offset,
+        std::size_t out_offset, InPtr in, OutPtr out
+    )
+    {
+        auto &bundle = r2c_c2r_plan_bundle_( bundle_id );
+        if ( lane >= bundle.inverse_plans.size() )
+            throw std::out_of_range( "fft_wrap_many: R2C/C2R plan-bundle inverse lane is out of range" );
+        bundle.inverse_plans[lane]->exec_no_sync(
+            const_cast<void *>( static_cast<const void *>( in + in_offset ) ),
+            static_cast<void *>( out + out_offset )
+        );
+    }
+
+    bool r2c_c2r_plan_bundle_lane_ready( r2c_c2r_plan_bundle_id_t bundle_id, std::size_t lane ) const
+    {
+        const auto &bundle = r2c_c2r_plan_bundle_( bundle_id );
+        if ( lane >= bundle.streams.size() )
+            throw std::out_of_range( "fft_wrap_many: R2C/C2R plan-bundle readiness lane is out of range" );
+        return runtime_api::stream_ready( bundle.streams[lane].stream() );
+    }
+
+    void synchronize_r2c_c2r_plan_bundle_lane(
+        r2c_c2r_plan_bundle_id_t bundle_id, std::size_t lane
+    ) const
+    {
+        const auto &bundle = r2c_c2r_plan_bundle_( bundle_id );
+        if ( lane >= bundle.streams.size() )
+            throw std::out_of_range( "fft_wrap_many: R2C/C2R plan-bundle synchronization lane is out of range" );
+        runtime_api::stream_synchronize( bundle.streams[lane].stream() );
+    }
+
+    void synchronize_r2c_c2r_plan_bundle( r2c_c2r_plan_bundle_id_t bundle_id ) const
+    {
+        const auto &bundle = r2c_c2r_plan_bundle_( bundle_id );
+        for ( const auto &stream : bundle.streams )
+            runtime_api::stream_synchronize( stream.stream() );
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -544,6 +680,27 @@ public:
         throw std::logic_error(
             "fft_wrap_many::exec_plan_sequence_offsets_no_sync: sequence has no typed C2C direction"
         );
+    }
+
+    template <class InPtr, class OutPtr>
+    void exec_plan_sequence_dual_offsets_no_sync(
+        plan_sequence_id_t sequence_id, const std::vector<std::size_t> &in_offsets,
+        const std::vector<std::size_t> &out_offsets, InPtr in, OutPtr out
+    )
+    {
+        const auto &sequence = plan_sequence_( sequence_id );
+        if ( sequence.size() != in_offsets.size() || sequence.size() != out_offsets.size() )
+        {
+            throw std::logic_error(
+                "fft_wrap_many::exec_plan_sequence_dual_offsets_no_sync: plan/offset count mismatch"
+            );
+        }
+        for ( std::size_t i = 0; i < sequence.size(); ++i )
+        {
+            sequence[i]->exec_no_sync(
+                static_cast<void *>( in + in_offsets[i] ), static_cast<void *>( out + out_offsets[i] )
+            );
+        }
     }
 
     template <class InPtr, class OutPtr>
@@ -1294,6 +1451,38 @@ public:
     }
 
     template <class InPtr, class OutPtr>
+    void exec_c2c_plan_array_direction_dual_offsets_no_sync(
+        c2c_plan_array_id_t bundle_id, ::fftm::direction exec_dir, const std::vector<std::size_t> &in_offsets,
+        const std::vector<std::size_t> &out_offsets, InPtr in, OutPtr out
+    )
+    {
+        const auto &bundle = c2c_plan_array_bundle_( bundle_id );
+        if ( bundle.handles.size() != in_offsets.size() || bundle.handles.size() != out_offsets.size() )
+        {
+            throw std::logic_error(
+                "fft_wrap_many::exec_c2c_plan_array_direction_dual_offsets_no_sync: offset count mismatch"
+            );
+        }
+        for ( std::size_t i = 0; i < bundle.handles.size(); ++i )
+        {
+            if ( bundle.direct_raw_c_api )
+            {
+                c2cf_wrap_t::exec_direct_raw_c2c_no_sync(
+                    bundle.handles[i], exec_dir, static_cast<void *>( in + in_offsets[i] ),
+                    static_cast<void *>( out + out_offsets[i] )
+                );
+            }
+            else
+            {
+                c2cf_wrap_t::exec_opaque_c2c_no_sync(
+                    bundle.handles[i], exec_dir, static_cast<void *>( in + in_offsets[i] ),
+                    static_cast<void *>( out + out_offsets[i] )
+                );
+            }
+        }
+    }
+
+    template <class InPtr, class OutPtr>
     void exec_c2c_plan_array_direction_repeated(
         c2c_plan_array_id_t bundle_id, ::fftm::direction exec_dir, InPtr in, OutPtr out, std::size_t repeats
     )
@@ -1507,6 +1696,54 @@ private:
         }
     }
 
+    static std::size_t aligned_plan_bundle_work_stride_( std::size_t bytes )
+    {
+        if ( bytes == 0 )
+            return 0;
+        const std::size_t alignment = 256;
+        if ( bytes > std::numeric_limits<std::size_t>::max() - ( alignment - 1 ) )
+            throw std::overflow_error( "fft_wrap_many: R2C/C2R plan-bundle work stride overflow" );
+        return ( ( bytes + alignment - 1 ) / alignment ) * alignment;
+    }
+
+    static std::size_t r2c_c2r_plan_bundle_work_size_( const r2c_c2r_plan_bundle_t &bundle )
+    {
+        const std::size_t stride = aligned_plan_bundle_work_stride_( bundle.work_stride_bytes );
+        if ( stride != 0 && bundle.streams.size() > std::numeric_limits<std::size_t>::max() / stride )
+            throw std::overflow_error( "fft_wrap_many: R2C/C2R plan-bundle total work size overflow" );
+        return stride * bundle.streams.size();
+    }
+
+    void bind_r2c_c2r_plan_bundle_work_areas_( void *base_work_area )
+    {
+        char *raw = static_cast<char *>( base_work_area );
+        for ( auto &bundle : r2c_c2r_plan_bundles_ )
+        {
+            const std::size_t stride = aligned_plan_bundle_work_stride_( bundle.work_stride_bytes );
+            for ( std::size_t lane = 0; lane < bundle.streams.size(); ++lane )
+            {
+                void *lane_work = raw == nullptr ? nullptr : static_cast<void *>( raw + lane * stride );
+                bundle.forward_plans[lane]->set_work_area( lane_work );
+                bundle.inverse_plans[lane]->set_work_area( lane_work );
+            }
+            bundle.bound_work_stride_bytes = stride;
+        }
+    }
+
+    r2c_c2r_plan_bundle_t &r2c_c2r_plan_bundle_( r2c_c2r_plan_bundle_id_t bundle_id )
+    {
+        if ( bundle_id == invalid_r2c_c2r_plan_bundle_id() || bundle_id >= r2c_c2r_plan_bundles_.size() )
+            throw std::out_of_range( "fft_wrap_many: invalid R2C/C2R plan-bundle id" );
+        return r2c_c2r_plan_bundles_[bundle_id];
+    }
+
+    const r2c_c2r_plan_bundle_t &r2c_c2r_plan_bundle_( r2c_c2r_plan_bundle_id_t bundle_id ) const
+    {
+        if ( bundle_id == invalid_r2c_c2r_plan_bundle_id() || bundle_id >= r2c_c2r_plan_bundles_.size() )
+            throw std::out_of_range( "fft_wrap_many: invalid R2C/C2R plan-bundle id" );
+        return r2c_c2r_plan_bundles_[bundle_id];
+    }
+
     const c2c_plan_array_bundle_t &c2c_plan_array_bundle_( c2c_plan_array_id_t bundle_id ) const
     {
         if ( bundle_id == invalid_c2c_plan_array_id() || bundle_id >= c2c_plan_array_bundles_.size() )
@@ -1563,6 +1800,7 @@ private:
     std::vector<typed_plan_sequence_t<::fftm::direction::C2CB>> c2cb_plan_sequences_;
     std::vector<opaque_c2c_plan_sequence_t>                    opaque_c2c_plan_sequences_;
     std::vector<c2c_plan_array_bundle_t>                        c2c_plan_array_bundles_;
+    std::vector<r2c_c2r_plan_bundle_t>                          r2c_c2r_plan_bundles_;
     std::vector<minimal_reference_c2c_plan_array_handle_t>       minimal_reference_c2c_plan_arrays_;
     std::vector<typed_plan_sequence_kind>                      plan_sequence_kinds_;
     std::vector<std::size_t>                                   plan_sequence_typed_indices_;

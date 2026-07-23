@@ -59,7 +59,8 @@ const char *stage_timer_4d_strategy_name( strategy_kind strategy )
 
 void append_4d_stage_timer_rows(
     const options_t &options, int num_procs, int rank, int iteration, std::size_t p1, std::size_t p2,
-    std::size_t p3, double wall_ms, const std::vector<fftm::fftm_native_stage_timing> &rows
+    std::size_t p3, double wall_ms, bool slab_native_work_area_alias_effective,
+    const std::vector<fftm::fftm_native_stage_timing> &rows
 )
 {
     if ( rows.empty() )
@@ -69,8 +70,13 @@ void append_4d_stage_timer_rows(
         "source,rank,num_gpus,iteration,stage_index,stage,stage_ms,wall_ms,strategy,mode,p1,p2,p3,"
         "nx,ny,nz,nw,fft_exec_no_sync,slab_native_xw,slab_native_xw_batched_peer_kernels,"
         "slab_native_xw_tensor_coalesced_kernels,slab_native_xw_vector4_kernels,"
-        "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,"
-        "slab_native_xw_native_spectral_layout,directory";
+        "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,native_xw_direct_layout,"
+        "native_xw_chunked_transport,native_xw_chunk_mib,native_xw_chunk_window,native_xw_compact_staging,"
+        "slab_native_work_area_alias,slab_native_work_area_alias_effective,slab_native_wz_communication_layout,"
+        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
+        "slab_native_xw_native_spectral_layout,pencil_same_zw_peer_paired,pencil_same_zw_native_layout,"
+        "pencil_degenerate_xw_slab_path,pencil_degenerate_local_transposes,"
+        "pencil_degenerate_same_xw_native,pencil_degenerate_wz_sliced_z_fft,directory";
 
     for ( std::size_t i = 0; i < rows.size(); ++i )
     {
@@ -88,7 +94,22 @@ void append_4d_stage_timer_rows(
             << ( options.use_4d_slab_native_xw_vector4_kernels ? 1 : 0 ) << ','
             << ( options.use_4d_slab_native_xw_tiled_kernels ? 1 : 0 ) << ','
             << ( options.use_4d_slab_native_xw_layout_stage ? 1 : 0 ) << ','
+            << ( options.use_4d_native_xw_direct_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_native_xw_chunked_transport ? 1 : 0 ) << ','
+            << options.native_xw_chunk_mib << ',' << options.native_xw_chunk_window << ','
+            << ( options.use_4d_native_xw_compact_staging ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_work_area_alias ? 1 : 0 ) << ','
+            << ( slab_native_work_area_alias_effective ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_communication_layout ? 1 : 0 ) << ','
+            << options.slab_native_wz_plan_concurrency << ','
+            << ( options.use_4d_slab_native_wz_ready_pipeline ? 1 : 0 ) << ','
             << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_same_zw_peer_paired ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_same_zw_native_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_xw_slab_path ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_local_transposes ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_same_xw_native ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_wz_sliced_z_fft ? 1 : 0 ) << ','
             << fftm::test::detail::csv_quote( options.directory );
 
         fftm::test::detail::append_csv_row(
@@ -132,6 +153,25 @@ int run_benchmark_case(
     base_options.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
     base_options.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
     base_options.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
+    base_options.use_4d_native_xw_direct_layout = options.use_4d_native_xw_direct_layout;
+    base_options.use_4d_native_xw_chunked_transport = options.use_4d_native_xw_chunked_transport;
+    base_options.native_xw_chunk_mib = options.native_xw_chunk_mib;
+    base_options.native_xw_chunk_window = options.native_xw_chunk_window;
+    base_options.use_4d_native_xw_compact_staging = options.use_4d_native_xw_compact_staging;
+    base_options.use_4d_slab_native_work_area_alias = options.use_4d_slab_native_work_area_alias;
+    base_options.use_4d_slab_native_wz_communication_layout =
+        options.use_4d_slab_native_wz_communication_layout;
+    base_options.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
+    base_options.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
+    base_options.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
+    base_options.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
+    base_options.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
+    base_options.use_4d_pencil_degenerate_local_transposes =
+        options.use_4d_pencil_degenerate_local_transposes;
+    base_options.use_4d_pencil_degenerate_same_xw_native =
+        options.use_4d_pencil_degenerate_same_xw_native;
+    base_options.use_4d_pencil_degenerate_wz_sliced_z_fft =
+        options.use_4d_pencil_degenerate_wz_sliced_z_fft;
     base_options.use_4d_slab_native_xw_native_spectral_layout =
         options.use_4d_slab_native_xw_native_spectral_layout;
     std::tie( p1, p2, p3 ) = fftm::test::detail::choose_grid_4d( base_options, strategy, comm_info.num_procs );
@@ -237,6 +277,7 @@ int run_benchmark_case(
         {
             append_4d_stage_timer_rows(
                 options, comm_info.num_procs, comm_info.myid, iter, p1, p2, p3, static_cast<double>( wall_ms ),
+                distributed_fft.slab_4d_native_work_area_alias_effective(),
                 distributed_fft.native_stage_timings()
             );
             distributed_fft.end_native_stage_timing_iteration();
@@ -304,7 +345,28 @@ int run_benchmark_case(
             << ( options.use_4d_slab_native_xw_vector4_kernels ? 1 : 0 ) << ','
             << ( options.use_4d_slab_native_xw_tiled_kernels ? 1 : 0 ) << ','
             << ( options.use_4d_slab_native_xw_layout_stage ? 1 : 0 ) << ','
+            << ( options.use_4d_native_xw_direct_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_native_xw_chunked_transport ? 1 : 0 ) << ','
+            << options.native_xw_chunk_mib << ',' << options.native_xw_chunk_window << ','
+            << ( options.use_4d_native_xw_compact_staging ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_work_area_alias ? 1 : 0 ) << ','
+            << ( distributed_fft.slab_4d_native_work_area_alias_effective() ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_communication_layout ? 1 : 0 ) << ','
+            << options.slab_native_wz_plan_concurrency << ','
+            << ( options.use_4d_slab_native_wz_ready_pipeline ? 1 : 0 ) << ','
+            << distributed_fft.shared_fft_work_size_bytes() << ','
+            << distributed_fft.shared_transpose_work_size_bytes() << ','
+            << distributed_fft.shared_same_xw_work_size_bytes() << ','
+            << distributed_fft.shared_native_4d_sliced_work_size_bytes() << ','
+            << distributed_fft.shared_stage1_alias_size_bytes() << ','
+            << distributed_fft.shared_work_size_bytes() << ','
             << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_same_zw_peer_paired ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_same_zw_native_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_xw_slab_path ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_local_transposes ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_same_xw_native ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_degenerate_wz_sliced_z_fft ? 1 : 0 ) << ','
             << p1 << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
             << options.nw << ',' << options.times << ',' << options.warmup << ',' << options.epsilon << ','
             << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
@@ -314,8 +376,16 @@ int run_benchmark_case(
             options.directory, "benchmark_fftm_4d.csv",
             "benchmark,num_gpus,strategy,mode,fft_exec_no_sync,native_stage_timers,slab_native_xw,slab_native_xw_batched_peer_kernels,"
             "slab_native_xw_tensor_coalesced_kernels,slab_native_xw_vector4_kernels,"
-            "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,"
-            "slab_native_xw_native_spectral_layout,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,"
+            "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,native_xw_direct_layout,"
+            "native_xw_chunked_transport,native_xw_chunk_mib,native_xw_chunk_window,native_xw_compact_staging,"
+            "slab_native_work_area_alias,slab_native_work_area_alias_effective,slab_native_wz_communication_layout,"
+            "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
+            "fft_work_bytes,"
+            "transpose_work_bytes,same_xw_work_bytes,sliced_z_work_bytes,stage1_alias_bytes,shared_work_bytes,"
+            "slab_native_xw_native_spectral_layout,pencil_same_zw_peer_paired,pencil_same_zw_native_layout,"
+            "pencil_degenerate_xw_slab_path,pencil_degenerate_local_transposes,"
+            "pencil_degenerate_same_xw_native,pencil_degenerate_wz_sliced_z_fft,"
+            "p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,"
             "avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
             row.str()
         );

@@ -44,6 +44,17 @@ FFTM_4D_SLAB_XW_VECTOR4_KERNELS = ("off", "on")
 FFTM_4D_SLAB_XW_TILED_KERNELS = ("off", "on")
 FFTM_4D_SLAB_XW_LAYOUT_STAGES = ("direct", "stage")
 FFTM_4D_SLAB_XW_NATIVE_SPECTRAL_LAYOUTS = ("public", "native")
+FFTM_4D_NATIVE_XW_DIRECT_LAYOUTS = ("off", "on")
+FFTM_4D_NATIVE_XW_PROTOCOLS = ("single", "chunked")
+FFTM_4D_NATIVE_XW_CHUNK_WINDOWS = (0, 1, 2, 4)
+FFTM_4D_NATIVE_XW_COMPACT_STAGINGS = ("off", "on")
+FFTM_4D_PENCIL_SAME_ZW_PEER_PAIRED = ("off", "on")
+FFTM_4D_PENCIL_SAME_ZW_NATIVE_LAYOUTS = ("base", "native")
+FFTM_4D_PENCIL_DEGENERATE_XW_SLAB_PATHS = ("off", "on")
+FFTM_4D_PENCIL_DEGENERATE_LOCAL_TRANSPOSES = ("off", "on")
+FFTM_4D_PENCIL_DEGENERATE_SAME_XW_NATIVE = ("off", "on")
+FFTM_4D_PENCIL_DEGENERATE_WZ_SLICED_Z_FFT = ("off", "on")
+FFTM_4D_PENCIL_GRID_ORIENTATIONS = ("configured", "default", "x-heavy", "y-heavy", "z-heavy", "all")
 FFTM_NATIVE_BACKWARD_SECOND_PEER_LOOP_MODES = ("off", "on")
 FFTM_3D_BACKENDS = ("native", "fftm3d-scfd-fft-facade")
 FFTM_NATIVE_OPT0_Y_CROSS_FACTORY_MODES = (
@@ -179,7 +190,8 @@ def parse_scalar(value: str) -> Any:
 
 
 def parse_int_list(value: str) -> List[int]:
-    if not value:
+    value = (value or "").strip().lower()
+    if not value or value in ("none", "off", "skip"):
         return []
     return [int(item.strip()) for item in value.split(",") if item.strip()]
 
@@ -1026,7 +1038,7 @@ def parse_fftm_4d_slab_xw_batched_peer_kernels(value: str) -> List[Optional[bool
     if value == "configured":
         return [None]
     if value == "production":
-        return [False]
+        return [True]
     if value in ("all", "both"):
         return [False, True]
 
@@ -1369,11 +1381,777 @@ def fftm_4d_slab_xw_native_spectral_layouts_for_spec(
     slab_xw_layout_stage: Optional[bool],
     selected: Sequence[Optional[bool]],
 ) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "pencil-pencil":
+        return list(selected)
     if dim == 4 and strategy == "slab-slab" and slab_native_xw is not False:
         if slab_xw_layout_stage:
             return [False]
         return list(selected)
     return [None]
+
+
+def parse_fftm_4d_pencil_same_zw_peer_paired(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "baseline": False,
+        "legacy": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "peer-paired": True,
+        "peerpaired": True,
+        "paired": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_PENCIL_SAME_ZW_PEER_PAIRED]
+        raise ValueError(
+            "unknown --fftm-4d-pencil-same-zw-peer-paired value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_pencil_same_zw_native_layouts(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "baseline": False,
+        "base": False,
+        "legacy": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "native": True,
+        "layout-native": True,
+        "native-layout": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_PENCIL_SAME_ZW_NATIVE_LAYOUTS]
+        raise ValueError(
+            "unknown --fftm-4d-pencil-same-zw-native-layouts value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_pencil_degenerate_xw_slab_paths(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "baseline": False,
+        "base": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "degen": True,
+        "degenerate": True,
+        "slab": True,
+        "slab-path": True,
+        "native-slab": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_PENCIL_DEGENERATE_XW_SLAB_PATHS]
+        raise ValueError(
+            "unknown --fftm-4d-pencil-degenerate-xw-slab-paths value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_pencil_degenerate_local_transposes(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "baseline": False,
+        "base": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "local": True,
+        "local-transpose": True,
+        "local-transposes": True,
+        "degen-local": True,
+        "degenerate-local": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_PENCIL_DEGENERATE_LOCAL_TRANSPOSES]
+        raise ValueError(
+            "unknown --fftm-4d-pencil-degenerate-local-transposes value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_pencil_degenerate_same_xw_native(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [False]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "baseline": False,
+        "base": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "native": True,
+        "same-xw": True,
+        "xw-native": True,
+        "degen-same-xw": True,
+        "degenerate-same-xw": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_PENCIL_DEGENERATE_SAME_XW_NATIVE]
+        raise ValueError(
+            "unknown --fftm-4d-pencil-degenerate-same-xw-native value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_pencil_degenerate_wz_sliced_z_fft(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [None]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "baseline": False,
+        "base": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "sliced": True,
+        "sliced-z": True,
+        "wz-sliced-z": True,
+        "fused": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_PENCIL_DEGENERATE_WZ_SLICED_Z_FFT]
+        raise ValueError(
+            "unknown --fftm-4d-pencil-degenerate-wz-sliced-z-fft value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_native_xw_direct_layouts(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "baseline": False,
+        "buffered": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "direct": True,
+        "direct-layout": True,
+        "native-direct": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_NATIVE_XW_DIRECT_LAYOUTS]
+        raise ValueError(
+            "unknown --fftm-4d-native-xw-direct-layouts value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_native_xw_protocols(value: str) -> List[Optional[str]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return ["chunked"]
+    if value in ("all", "both"):
+        return list(FFTM_4D_NATIVE_XW_PROTOCOLS)
+
+    selected: List[Optional[str]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "single": "single",
+        "one": "single",
+        "chunked": "chunked",
+        "chunks": "chunked",
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        allowed = ["configured", "production", "all", "both", *FFTM_4D_NATIVE_XW_PROTOCOLS]
+        raise ValueError(
+            "unknown --fftm-4d-native-xw-protocols value(s): "
+            + ", ".join(unknown)
+            + "; allowed: "
+            + ", ".join(allowed)
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_native_xw_chunk_windows(value: str) -> List[Optional[int]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [1]
+    if value == "matrix":
+        return list(FFTM_4D_NATIVE_XW_CHUNK_WINDOWS)
+
+    selected: List[Optional[int]] = []
+    unknown: List[str] = []
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in ("configured", "default"):
+            selected.append(None)
+        elif key in ("all", "full", "unbounded", "0"):
+            selected.append(0)
+        else:
+            try:
+                window = int(key)
+            except ValueError:
+                unknown.append(item.strip())
+                continue
+            if window <= 0:
+                unknown.append(item.strip())
+            else:
+                selected.append(window)
+    if unknown:
+        raise ValueError(
+            "unknown --fftm-4d-native-xw-chunk-windows value(s): "
+            + ", ".join(unknown)
+            + "; allowed: configured, production, matrix, all, or positive integers"
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_native_xw_compact_stagings(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "full": False,
+        "off": False,
+        "0": False,
+        "false": False,
+        "compact": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        raise ValueError(
+            "unknown --fftm-4d-native-xw-compact-stagings value(s): "
+            + ", ".join(unknown)
+            + "; allowed: configured, production, all, both, off, on"
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_slab_native_work_area_aliases(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    aliases = {
+        "configured": None,
+        "default": None,
+        "off": False,
+        "0": False,
+        "false": False,
+        "alias": True,
+        "on": True,
+        "1": True,
+        "true": True,
+    }
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        raise ValueError(
+            "unknown --fftm-4d-slab-native-work-area-aliases value(s): "
+            + ", ".join(unknown)
+            + "; allowed: configured, production, all, both, off, on"
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_slab_native_wz_communication_layouts(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value == "configured":
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("all", "both"):
+        return [False, True]
+
+    selected: List[Optional[bool]] = []
+    aliases = {
+        "configured": None, "default": None,
+        "off": False, "0": False, "false": False,
+        "on": True, "1": True, "true": True, "communication": True, "wz-communication": True,
+    }
+    unknown: List[str] = []
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        raise ValueError(
+            "unknown --fftm-4d-slab-native-wz-communication-layouts value(s): "
+            + ", ".join(unknown)
+            + "; allowed: configured, production, all, both, off, on"
+        )
+    return selected or [None]
+
+
+def parse_fftm_4d_slab_native_wz_plan_concurrencies(value: str) -> List[Optional[int]]:
+    value = (value or "configured").strip().lower()
+    if value in ("configured", "default"):
+        return [None]
+    if value == "production":
+        return [4]
+    if value in ("matrix", "all"):
+        return [1, 2, 4, 8]
+    selected: List[Optional[int]] = []
+    for item in value.split(","):
+        text = item.strip()
+        if not text:
+            continue
+        try:
+            concurrency = int(text)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid --fftm-4d-slab-native-wz-plan-concurrencies value: {text}"
+            ) from exc
+        if concurrency <= 0:
+            raise ValueError("4D slab WZ plan concurrency must be positive")
+        selected.append(concurrency)
+    return selected or [None]
+
+
+def parse_fftm_4d_slab_native_wz_ready_pipelines(value: str) -> List[Optional[bool]]:
+    value = (value or "configured").strip()
+    if value in ("configured", "default"):
+        return [None]
+    if value == "production":
+        return [True]
+    if value in ("matrix", "all", "both"):
+        return [False, True]
+    aliases = {
+        "off": False, "0": False, "false": False,
+        "on": True, "1": True, "true": True, "ready": True, "pipeline": True,
+    }
+    selected: List[Optional[bool]] = []
+    unknown: List[str] = []
+    for item in value.split(","):
+        key = item.strip().lower().replace("_", "-")
+        if not key:
+            continue
+        if key in aliases:
+            selected.append(aliases[key])
+        else:
+            unknown.append(item.strip())
+    if unknown:
+        raise ValueError(
+            "unknown --fftm-4d-slab-native-wz-ready-pipelines value(s): "
+            + ", ".join(unknown)
+            + "; allowed: configured, production, matrix, off, on"
+        )
+    return selected or [None]
+
+
+def fftm_4d_pencil_same_zw_peer_paired_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    mode: Optional[str],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "pencil-pencil" and mode == "p2p-waitany":
+        return list(selected)
+    return [None]
+
+
+def fftm_4d_pencil_same_zw_native_layouts_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    mode: Optional[str],
+    native_spectral_layout: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "pencil-pencil" and native_spectral_layout is True:
+        return list(selected)
+    return [None]
+
+
+def fftm_4d_pencil_degenerate_xw_slab_paths_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    native_spectral_layout: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "pencil-pencil" and native_spectral_layout is True:
+        return list(selected)
+    return [None]
+
+
+def fftm_4d_pencil_degenerate_local_transposes_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    native_spectral_layout: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "pencil-pencil" and native_spectral_layout is True:
+        return list(selected)
+    return [None]
+
+
+def fftm_4d_pencil_degenerate_same_xw_native_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    mode: Optional[str],
+    native_spectral_layout: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "pencil-pencil" and mode == "p2p-waitany" and native_spectral_layout is True:
+        return list(selected)
+    return [None]
+
+
+def fftm_4d_pencil_degenerate_wz_sliced_z_fft_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    native_spectral_layout: Optional[bool],
+    selected: Sequence[Optional[bool]],
+) -> List[Optional[bool]]:
+    if dim == 4 and strategy == "pencil-pencil" and native_spectral_layout is True:
+        return list(selected)
+    return [None]
+
+
+def fftm_4d_pencil_matrix_cases_for_spec(
+    dim: int,
+    strategy: Optional[str],
+    mode: Optional[str],
+    native_spectral_layout: Optional[bool],
+    fftm_4d_pencil_same_zw_peer_paired: Sequence[Optional[bool]],
+    fftm_4d_pencil_same_zw_native_layouts: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_xw_slab_paths: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_local_transposes: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_same_xw_native: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_wz_sliced_z_fft: Sequence[Optional[bool]],
+    fftm_4d_native_xw_direct_layouts: Sequence[Optional[bool]],
+    fftm_4d_native_xw_protocols: Sequence[Optional[str]],
+    fftm_4d_native_xw_chunk_windows: Sequence[Optional[int]],
+    fftm_4d_native_xw_compact_stagings: Sequence[Optional[bool]],
+    fftm_4d_slab_native_work_area_aliases: Sequence[Optional[bool]],
+    fftm_4d_slab_native_wz_communication_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_native_wz_plan_concurrencies: Sequence[Optional[int]],
+    fftm_4d_slab_native_wz_ready_pipelines: Sequence[Optional[bool]],
+) -> List[
+    Tuple[
+        Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool],
+        Optional[bool], Optional[str], Optional[int], Optional[bool], Optional[bool], Optional[bool],
+        Optional[int], Optional[bool]
+    ]
+]:
+    cases: List[
+        Tuple[
+            Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool], Optional[bool],
+            Optional[bool], Optional[str], Optional[int], Optional[bool], Optional[bool], Optional[bool],
+            Optional[int], Optional[bool]
+        ]
+    ] = []
+    same_zw_peer_values = fftm_4d_pencil_same_zw_peer_paired_for_spec(
+        dim, strategy, mode, fftm_4d_pencil_same_zw_peer_paired
+    )
+    same_zw_native_values = fftm_4d_pencil_same_zw_native_layouts_for_spec(
+        dim, strategy, mode, native_spectral_layout, fftm_4d_pencil_same_zw_native_layouts
+    )
+    degen_xw_values = fftm_4d_pencil_degenerate_xw_slab_paths_for_spec(
+        dim, strategy, native_spectral_layout, fftm_4d_pencil_degenerate_xw_slab_paths
+    )
+    degen_local_values = fftm_4d_pencil_degenerate_local_transposes_for_spec(
+        dim, strategy, native_spectral_layout, fftm_4d_pencil_degenerate_local_transposes
+    )
+    degen_same_xw_base_values = fftm_4d_pencil_degenerate_same_xw_native_for_spec(
+        dim, strategy, mode, native_spectral_layout, fftm_4d_pencil_degenerate_same_xw_native
+    )
+    degen_wz_base_values = fftm_4d_pencil_degenerate_wz_sliced_z_fft_for_spec(
+        dim, strategy, native_spectral_layout, fftm_4d_pencil_degenerate_wz_sliced_z_fft
+    )
+    for same_zw_peer in same_zw_peer_values:
+        for same_zw_native in same_zw_native_values:
+            for degen_xw in degen_xw_values:
+                for degen_local in degen_local_values:
+                    degen_same_xw_values = degen_same_xw_base_values if degen_local is True else [None]
+                    degen_wz_values = degen_wz_base_values if degen_local is True else [None]
+                    for degen_same_xw in degen_same_xw_values:
+                        for degen_wz in degen_wz_values:
+                            direct_values: Sequence[Optional[bool]] = [None]
+                            if (
+                                dim == 4
+                                and mode == "p2p-waitany"
+                                and native_spectral_layout is True
+                                and (
+                                    strategy == "slab-slab"
+                                    or (
+                                        strategy == "pencil-pencil"
+                                        and degen_local is True
+                                        and degen_same_xw is True
+                                    )
+                                )
+                            ):
+                                direct_values = fftm_4d_native_xw_direct_layouts
+                            for direct_layout in direct_values:
+                                protocol_values = fftm_4d_native_xw_protocols if direct_layout is True else [None]
+                                for protocol in protocol_values:
+                                    window_values = fftm_4d_native_xw_chunk_windows if protocol == "chunked" else [None]
+                                    for chunk_window in window_values:
+                                        compact_values = (
+                                            fftm_4d_native_xw_compact_stagings
+                                            if direct_layout is True
+                                            and protocol == "chunked"
+                                            and chunk_window is not None
+                                            and chunk_window > 0
+                                            else [None]
+                                        )
+                                        for compact_staging in compact_values:
+                                            work_alias_values = (
+                                                fftm_4d_slab_native_work_area_aliases
+                                                if strategy == "slab-slab"
+                                                and native_spectral_layout is True
+                                                and direct_layout is True
+                                                else [None]
+                                            )
+                                            for work_alias in work_alias_values:
+                                                wz_communication_values = (
+                                                    fftm_4d_slab_native_wz_communication_layouts
+                                                    if strategy == "slab-slab"
+                                                    and mode == "p2p-waitany"
+                                                    and native_spectral_layout is True
+                                                    and direct_layout is True
+                                                    and protocol == "chunked"
+                                                    and chunk_window is not None
+                                                    and chunk_window > 0
+                                                    else [None]
+                                                )
+                                                for wz_communication in wz_communication_values:
+                                                    concurrency_values = (
+                                                        fftm_4d_slab_native_wz_plan_concurrencies
+                                                        if wz_communication is True else [None]
+                                                    )
+                                                    pipeline_values = (
+                                                        fftm_4d_slab_native_wz_ready_pipelines
+                                                        if wz_communication is True else [None]
+                                                    )
+                                                    for wz_concurrency in concurrency_values:
+                                                        for wz_pipeline in pipeline_values:
+                                                            cases.append(
+                                                                (
+                                                                    same_zw_peer, same_zw_native, degen_xw, degen_local,
+                                                                    degen_same_xw, degen_wz, direct_layout, protocol,
+                                                                    chunk_window, compact_staging, work_alias, wz_communication,
+                                                                    wz_concurrency, wz_pipeline,
+                                                                )
+                                                            )
+    return cases
 
 
 def native_backward_second_peer_loop_modes_for_spec(
@@ -1743,6 +2521,20 @@ class RunSpec:
     fftm_4d_slab_xw_tiled_kernels: Optional[bool] = None
     fftm_4d_slab_xw_layout_stage: Optional[bool] = None
     fftm_4d_slab_xw_native_spectral_layout: Optional[bool] = None
+    fftm_4d_pencil_same_zw_peer_paired: Optional[bool] = None
+    fftm_4d_pencil_same_zw_native_layout: Optional[bool] = None
+    fftm_4d_pencil_degenerate_xw_slab_path: Optional[bool] = None
+    fftm_4d_pencil_degenerate_local_transposes: Optional[bool] = None
+    fftm_4d_pencil_degenerate_same_xw_native: Optional[bool] = None
+    fftm_4d_pencil_degenerate_wz_sliced_z_fft: Optional[bool] = None
+    fftm_4d_native_xw_direct_layout: Optional[bool] = None
+    fftm_4d_native_xw_protocol: Optional[str] = None
+    fftm_4d_native_xw_chunk_window: Optional[int] = None
+    fftm_4d_native_xw_compact_staging: Optional[bool] = None
+    fftm_4d_slab_native_work_area_alias: Optional[bool] = None
+    fftm_4d_slab_native_wz_communication_layout: Optional[bool] = None
+    fftm_4d_slab_native_wz_plan_concurrency: Optional[int] = None
+    fftm_4d_slab_native_wz_ready_pipeline: Optional[bool] = None
     fftm_3d_backend: Optional[str] = None
     native_opt0_y_executor_variant: Optional[str] = None
     native_opt0_y_cross_factory_mode: Optional[str] = None
@@ -1762,14 +2554,97 @@ def choose_pencil_grid_3d(num_gpus: int) -> Tuple[int, int]:
     return p1, num_gpus // p1
 
 
+def factor_grids_4d(num_gpus: int) -> List[Tuple[int, int, int]]:
+    grids: List[Tuple[int, int, int]] = []
+    for p1 in range(1, num_gpus + 1):
+        if num_gpus % p1 != 0:
+            continue
+        rem1 = num_gpus // p1
+        for p2 in range(1, rem1 + 1):
+            if rem1 % p2 != 0:
+                continue
+            grids.append((p1, p2, rem1 // p2))
+    return grids
+
+
+def choose_pencil_grid_4d(num_gpus: int) -> Tuple[int, int, int]:
+    best = (1, 1, num_gpus)
+    best_span = num_gpus - 1
+    for grid in factor_grids_4d(num_gpus):
+        max_dim = max(grid)
+        min_dim = min(grid)
+        span = max_dim - min_dim
+        if span < best_span:
+            best_span = span
+            best = grid
+    return best
+
+
+def _dedupe_grids(grids: Sequence[Tuple[int, ...]]) -> List[Tuple[int, ...]]:
+    seen = set()
+    result: List[Tuple[int, ...]] = []
+    for grid in grids:
+        if grid in seen:
+            continue
+        seen.add(grid)
+        result.append(grid)
+    return result
+
+
+def grid_orientations_4d_for_spec(num_gpus: int, orientation_mode: str) -> List[Optional[Tuple[int, ...]]]:
+    if orientation_mode in ("configured", "autotune"):
+        return [None]
+
+    default_grid = choose_pencil_grid_4d(num_gpus)
+    x_heavy = (num_gpus, 1, 1)
+    y_heavy = (1, num_gpus, 1)
+    z_heavy = (1, 1, num_gpus)
+
+    if orientation_mode == "production":
+        return [default_grid]
+    if orientation_mode == "default":
+        return [default_grid]
+    if orientation_mode == "x-heavy":
+        return [x_heavy]
+    if orientation_mode == "y-heavy":
+        return [y_heavy]
+    if orientation_mode == "z-heavy":
+        return [z_heavy]
+    if orientation_mode in ("axis", "axes"):
+        return _dedupe_grids([default_grid, y_heavy, x_heavy, z_heavy])
+
+    all_grids = factor_grids_4d(num_gpus)
+    ordered = [default_grid, y_heavy, x_heavy, z_heavy]
+    ordered.extend(
+        sorted(
+            all_grids,
+            key=lambda g: (
+                max(g) - min(g),
+                g[0] == 1,
+                g[1] == 1,
+                g[2] == 1,
+                g,
+            ),
+        )
+    )
+    return _dedupe_grids(ordered)
+
+
 def grid_orientations_for_spec(
     dim: int,
     strategy: Optional[str],
     num_gpus: int,
     orientation_mode: str = "both",
     pencil_layout: Optional[str] = None,
+    orientation_mode_4d: str = "configured",
 ) -> List[Optional[Tuple[int, ...]]]:
-    if dim != 3 or strategy != "pencil-pencil" or num_gpus < 2:
+    if strategy != "pencil-pencil" or num_gpus < 2:
+        return [None]
+
+    if dim == 4:
+        return grid_orientations_4d_for_spec(num_gpus, orientation_mode_4d)
+
+    if dim != 3:
         return [None]
 
     if orientation_mode in ("configured", "autotune"):
@@ -1828,6 +2703,49 @@ def parse_pencil_grid_orientations(value: str) -> str:
     if value not in aliases:
         raise ValueError(
             "--pencil-pencil-grid-orientations must be one of: configured, both, production, default, reversed"
+        )
+    return aliases[value]
+
+
+def parse_4d_pencil_grid_orientations(value: str) -> str:
+    value = (value or "configured").strip().lower().replace("_", "-")
+    aliases = {
+        "configured": "configured",
+        "config": "configured",
+        "autotune": "configured",
+        "tuned": "configured",
+        "auto": "configured",
+        "production": "production",
+        "prod": "production",
+        "known-best": "production",
+        "best-known": "production",
+        "default": "default",
+        "balanced": "default",
+        "primary": "default",
+        "x-heavy": "x-heavy",
+        "p1-heavy": "x-heavy",
+        "i-heavy": "x-heavy",
+        "first-heavy": "x-heavy",
+        "y-heavy": "y-heavy",
+        "p2-heavy": "y-heavy",
+        "j-heavy": "y-heavy",
+        "second-heavy": "y-heavy",
+        "z-heavy": "z-heavy",
+        "p3-heavy": "z-heavy",
+        "k-heavy": "z-heavy",
+        "third-heavy": "z-heavy",
+        "axis": "axis",
+        "axes": "axis",
+        "axis-heavy": "axis",
+        "all": "all",
+        "both": "all",
+        "matrix": "all",
+        "all-4d": "all",
+    }
+    if value not in aliases:
+        raise ValueError(
+            "--fftm-4d-pencil-grid-orientations must be one of: "
+            "configured, production, default, x-heavy, y-heavy, z-heavy, axis, all"
         )
     return aliases[value]
 
@@ -1950,10 +2868,25 @@ def add_fftm_specs(
     fftm_4d_slab_xw_tiled_kernels: Sequence[Optional[bool]],
     fftm_4d_slab_xw_layout_stages: Sequence[Optional[bool]],
     fftm_4d_slab_xw_native_spectral_layouts: Sequence[Optional[bool]],
+    fftm_4d_pencil_same_zw_peer_paired: Sequence[Optional[bool]],
+    fftm_4d_pencil_same_zw_native_layouts: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_xw_slab_paths: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_local_transposes: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_same_xw_native: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_wz_sliced_z_fft: Sequence[Optional[bool]],
+    fftm_4d_native_xw_direct_layouts: Sequence[Optional[bool]],
+    fftm_4d_native_xw_protocols: Sequence[Optional[str]],
+    fftm_4d_native_xw_chunk_windows: Sequence[Optional[int]],
+    fftm_4d_native_xw_compact_stagings: Sequence[Optional[bool]],
+    fftm_4d_slab_native_work_area_aliases: Sequence[Optional[bool]],
+    fftm_4d_slab_native_wz_communication_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_native_wz_plan_concurrencies: Sequence[Optional[int]],
+    fftm_4d_slab_native_wz_ready_pipelines: Sequence[Optional[bool]],
     native_backward_second_peer_loop_modes: Sequence[Optional[bool]],
     fftm_3d_backends: Sequence[Optional[str]],
     use_contiguous_forward_byte_send: bool,
     pencil_grid_orientations: str = "both",
+    pencil_grid_orientations_4d: str = "configured",
 ) -> None:
     transports: List[Tuple[str, str]] = [("cuda_aware", ".bin")]
     if include_nca:
@@ -1988,6 +2921,7 @@ def add_fftm_specs(
                                                     num_gpus,
                                                     pencil_grid_orientations,
                                                     pencil_layout,
+                                                    pencil_grid_orientations_4d,
                                                 ):
                                                     for fftm_3d_backend in fftm_3d_backends_for_spec(
                                                         3,
@@ -2059,38 +2993,111 @@ def add_fftm_specs(
                                                 for slab_xw_batched in fftm_4d_slab_xw_batched_peer_kernels_for_spec(
                                                     4, strategy, slab_native_xw, fftm_4d_slab_xw_batched_peer_kernels
                                                 ):
-                                                    specs.append(
-                                                        RunSpec(
-                                                            suite="fftm",
-                                                            dim=4,
-                                                            case_name="benchmark",
-                                                            binary_name=benchmark_4d,
-                                                            binary_path=str(binaries[benchmark_4d]),
-                                                            num_gpus=num_gpus,
-                                                            transport=transport_name,
-                                                            strategy=strategy,
-                                                            mode=mode,
-                                                            uses_mpi=True,
-                                                            supports_directory=True,
-                                                            memory_family=(
-                                                                f"fftm:4d:small:{num_gpus}:{strategy}:"
-                                                                f"{'native-xw' if slab_native_xw else 'staged-xw' if slab_native_xw is False else 'configured-xw'}:"
-                                                                f"{'tensor' if slab_xw_tensor else 'buffer' if slab_xw_tensor is False else 'kernel-configured'}:"
-                                                                f"{'vector4' if slab_xw_vector4 else 'scalar' if slab_xw_vector4 is False else 'vector-configured'}:"
-                                                                f"{'tiled' if slab_xw_tiled else 'untiled' if slab_xw_tiled is False else 'tile-configured'}:"
-                                                                f"{'layout-stage' if slab_xw_layout_stage else 'direct-layout' if slab_xw_layout_stage is False else 'layout-configured'}:"
-                                                                f"{'native-spectral' if slab_xw_native_spectral else 'public-spectral' if slab_xw_native_spectral is False else 'spectral-configured'}:"
-                                                                f"{'batched' if slab_xw_batched else 'legacy' if slab_xw_batched is False else 'batch-configured'}"
-                                                            ),
-                                                            fftm_4d_slab_native_xw=slab_native_xw,
-                                                            fftm_4d_slab_xw_batched_peer_kernels=slab_xw_batched,
-                                                            fftm_4d_slab_xw_tensor_coalesced_kernels=slab_xw_tensor,
-                                                            fftm_4d_slab_xw_vector4_kernels=slab_xw_vector4,
-                                                            fftm_4d_slab_xw_tiled_kernels=slab_xw_tiled,
-                                                            fftm_4d_slab_xw_layout_stage=slab_xw_layout_stage,
-                                                            fftm_4d_slab_xw_native_spectral_layout=slab_xw_native_spectral,
-                                                        )
-                                                    )
+                                                    for (
+                                                        pencil_same_zw_peer,
+                                                        pencil_same_zw_native,
+                                                        pencil_degenerate_xw_slab,
+                                                        pencil_degenerate_local,
+                                                        pencil_degenerate_same_xw,
+                                                        pencil_degenerate_wz_sliced_z,
+                                                        native_xw_direct_layout,
+                                                        native_xw_protocol,
+                                                        native_xw_chunk_window,
+                                                        native_xw_compact_staging,
+                                                        slab_native_work_area_alias,
+                                                        slab_native_wz_communication_layout,
+                                                        slab_native_wz_plan_concurrency,
+                                                        slab_native_wz_ready_pipeline,
+                                                    ) in fftm_4d_pencil_matrix_cases_for_spec(
+                                                        4,
+                                                        strategy,
+                                                        mode,
+                                                        slab_xw_native_spectral,
+                                                        fftm_4d_pencil_same_zw_peer_paired,
+                                                        fftm_4d_pencil_same_zw_native_layouts,
+                                                        fftm_4d_pencil_degenerate_xw_slab_paths,
+                                                        fftm_4d_pencil_degenerate_local_transposes,
+                                                        fftm_4d_pencil_degenerate_same_xw_native,
+                                                        fftm_4d_pencil_degenerate_wz_sliced_z_fft,
+                                                        fftm_4d_native_xw_direct_layouts,
+                                                        fftm_4d_native_xw_protocols,
+                                                        fftm_4d_native_xw_chunk_windows,
+                                                        fftm_4d_native_xw_compact_stagings,
+                                                        fftm_4d_slab_native_work_area_aliases,
+                                                        fftm_4d_slab_native_wz_communication_layouts,
+                                                        fftm_4d_slab_native_wz_plan_concurrencies,
+                                                        fftm_4d_slab_native_wz_ready_pipelines,
+                                                    ):
+                                                        for grid in grid_orientations_for_spec(
+                                                            4,
+                                                            strategy,
+                                                            num_gpus,
+                                                            pencil_grid_orientations,
+                                                            None,
+                                                            pencil_grid_orientations_4d,
+                                                        ):
+                                                            specs.append(
+                                                                RunSpec(
+                                                                    suite="fftm",
+                                                                    dim=4,
+                                                                    case_name="benchmark",
+                                                                    binary_name=benchmark_4d,
+                                                                    binary_path=str(binaries[benchmark_4d]),
+                                                                    num_gpus=num_gpus,
+                                                                    transport=transport_name,
+                                                                    strategy=strategy,
+                                                                    mode=mode,
+                                                                    uses_mpi=True,
+                                                                    supports_directory=True,
+                                                                    memory_family=(
+                                                                        f"fftm:4d:small:{num_gpus}:{strategy}:"
+                                                                        f"{'native-xw' if slab_native_xw else 'staged-xw' if slab_native_xw is False else 'configured-xw'}:"
+                                                                        f"{'tensor' if slab_xw_tensor else 'buffer' if slab_xw_tensor is False else 'kernel-configured'}:"
+                                                                        f"{'vector4' if slab_xw_vector4 else 'scalar' if slab_xw_vector4 is False else 'vector-configured'}:"
+                                                                        f"{'tiled' if slab_xw_tiled else 'untiled' if slab_xw_tiled is False else 'tile-configured'}:"
+                                                                        f"{'layout-stage' if slab_xw_layout_stage else 'direct-layout' if slab_xw_layout_stage is False else 'layout-configured'}:"
+                                                                        f"{'native-spectral' if slab_xw_native_spectral else 'public-spectral' if slab_xw_native_spectral is False else 'spectral-configured'}:"
+                                                                        f"{'batched' if slab_xw_batched else 'legacy' if slab_xw_batched is False else 'batch-configured'}:"
+                                                                        f"{'samezw-peer' if pencil_same_zw_peer else 'samezw-base' if pencil_same_zw_peer is False else 'samezw-configured'}:"
+                                                                        f"{'samezw-native-layout' if pencil_same_zw_native else 'samezw-base-layout' if pencil_same_zw_native is False else 'samezw-layout-configured'}:"
+                                                                        f"{'degen-xw-slab' if pencil_degenerate_xw_slab else 'degen-xw-off' if pencil_degenerate_xw_slab is False else 'degen-xw-configured'}:"
+                                                                        f"{'degen-local' if pencil_degenerate_local else 'degen-local-off' if pencil_degenerate_local is False else 'degen-local-configured'}:"
+                                                                        f"{'degen-samexw-native' if pencil_degenerate_same_xw else 'degen-samexw-base' if pencil_degenerate_same_xw is False else 'degen-samexw-configured'}:"
+                                                                        f"{'degen-wz-sliced-z' if pencil_degenerate_wz_sliced_z else 'degen-wz-base' if pencil_degenerate_wz_sliced_z is False else 'degen-wz-configured'}:"
+                                                                        f"{'xw-direct' if native_xw_direct_layout else 'xw-buffered' if native_xw_direct_layout is False else 'xw-direct-configured'}:"
+                                                                        f"xw-proto-{native_xw_protocol or 'configured'}:"
+                                                                        f"xw-window-{native_xw_chunk_window if native_xw_chunk_window is not None else 'configured'}:"
+                                                                        f"xw-compact-{'on' if native_xw_compact_staging else 'off' if native_xw_compact_staging is False else 'configured'}:"
+                                                                        f"work-alias-{'on' if slab_native_work_area_alias else 'off' if slab_native_work_area_alias is False else 'configured'}:"
+                                                                        f"wz-communication-{'on' if slab_native_wz_communication_layout else 'off' if slab_native_wz_communication_layout is False else 'configured'}:"
+                                                                        f"wz-concurrency-{slab_native_wz_plan_concurrency if slab_native_wz_plan_concurrency is not None else 'configured'}:"
+                                                                        f"wz-pipeline-{'on' if slab_native_wz_ready_pipeline else 'off' if slab_native_wz_ready_pipeline is False else 'configured'}:"
+                                                                        f"{grid_slug(grid)}"
+                                                                    ),
+                                                                    fftm_4d_slab_native_xw=slab_native_xw,
+                                                                    fftm_4d_slab_xw_batched_peer_kernels=slab_xw_batched,
+                                                                    fftm_4d_slab_xw_tensor_coalesced_kernels=slab_xw_tensor,
+                                                                    fftm_4d_slab_xw_vector4_kernels=slab_xw_vector4,
+                                                                    fftm_4d_slab_xw_tiled_kernels=slab_xw_tiled,
+                                                                    fftm_4d_slab_xw_layout_stage=slab_xw_layout_stage,
+                                                                    fftm_4d_slab_xw_native_spectral_layout=slab_xw_native_spectral,
+                                                                    fftm_4d_pencil_same_zw_peer_paired=pencil_same_zw_peer,
+                                                                    fftm_4d_pencil_same_zw_native_layout=pencil_same_zw_native,
+                                                                    fftm_4d_pencil_degenerate_xw_slab_path=pencil_degenerate_xw_slab,
+                                                                    fftm_4d_pencil_degenerate_local_transposes=pencil_degenerate_local,
+                                                                    fftm_4d_pencil_degenerate_same_xw_native=pencil_degenerate_same_xw,
+                                                                    fftm_4d_pencil_degenerate_wz_sliced_z_fft=pencil_degenerate_wz_sliced_z,
+                                                                    fftm_4d_native_xw_direct_layout=native_xw_direct_layout,
+                                                                    fftm_4d_native_xw_protocol=native_xw_protocol,
+                                                                    fftm_4d_native_xw_chunk_window=native_xw_chunk_window,
+                                                                    fftm_4d_native_xw_compact_staging=native_xw_compact_staging,
+                                                                    fftm_4d_slab_native_work_area_alias=slab_native_work_area_alias,
+                                                                    fftm_4d_slab_native_wz_communication_layout=slab_native_wz_communication_layout,
+                                                                    fftm_4d_slab_native_wz_plan_concurrency=slab_native_wz_plan_concurrency,
+                                                                    fftm_4d_slab_native_wz_ready_pipeline=slab_native_wz_ready_pipeline,
+                                                                    grid=grid,
+                                                                )
+                                                            )
 
             for testcase in range(5):
                 name_3d = f"test_fftm_v{testcase}_3D{suffix}"
@@ -2202,10 +3209,25 @@ def build_measurement_specs(
     fftm_4d_slab_xw_tiled_kernels: Sequence[Optional[bool]],
     fftm_4d_slab_xw_layout_stages: Sequence[Optional[bool]],
     fftm_4d_slab_xw_native_spectral_layouts: Sequence[Optional[bool]],
+    fftm_4d_pencil_same_zw_peer_paired: Sequence[Optional[bool]],
+    fftm_4d_pencil_same_zw_native_layouts: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_xw_slab_paths: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_local_transposes: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_same_xw_native: Sequence[Optional[bool]],
+    fftm_4d_pencil_degenerate_wz_sliced_z_fft: Sequence[Optional[bool]],
+    fftm_4d_native_xw_direct_layouts: Sequence[Optional[bool]],
+    fftm_4d_native_xw_protocols: Sequence[Optional[str]],
+    fftm_4d_native_xw_chunk_windows: Sequence[Optional[int]],
+    fftm_4d_native_xw_compact_stagings: Sequence[Optional[bool]],
+    fftm_4d_slab_native_work_area_aliases: Sequence[Optional[bool]],
+    fftm_4d_slab_native_wz_communication_layouts: Sequence[Optional[bool]],
+    fftm_4d_slab_native_wz_plan_concurrencies: Sequence[Optional[int]],
+    fftm_4d_slab_native_wz_ready_pipelines: Sequence[Optional[bool]],
     native_backward_second_peer_loop_modes: Sequence[Optional[bool]],
     fftm_3d_backends: Sequence[Optional[str]],
     use_contiguous_forward_byte_send: bool,
     pencil_grid_orientations: str = "both",
+    pencil_grid_orientations_4d: str = "configured",
 ) -> List[RunSpec]:
     specs: List[RunSpec] = []
     add_ffts_specs(specs, binaries)
@@ -2227,10 +3249,25 @@ def build_measurement_specs(
         fftm_4d_slab_xw_tiled_kernels=fftm_4d_slab_xw_tiled_kernels,
         fftm_4d_slab_xw_layout_stages=fftm_4d_slab_xw_layout_stages,
         fftm_4d_slab_xw_native_spectral_layouts=fftm_4d_slab_xw_native_spectral_layouts,
+        fftm_4d_pencil_same_zw_peer_paired=fftm_4d_pencil_same_zw_peer_paired,
+        fftm_4d_pencil_same_zw_native_layouts=fftm_4d_pencil_same_zw_native_layouts,
+        fftm_4d_pencil_degenerate_xw_slab_paths=fftm_4d_pencil_degenerate_xw_slab_paths,
+        fftm_4d_pencil_degenerate_local_transposes=fftm_4d_pencil_degenerate_local_transposes,
+        fftm_4d_pencil_degenerate_same_xw_native=fftm_4d_pencil_degenerate_same_xw_native,
+        fftm_4d_pencil_degenerate_wz_sliced_z_fft=fftm_4d_pencil_degenerate_wz_sliced_z_fft,
+        fftm_4d_native_xw_direct_layouts=fftm_4d_native_xw_direct_layouts,
+        fftm_4d_native_xw_protocols=fftm_4d_native_xw_protocols,
+        fftm_4d_native_xw_chunk_windows=fftm_4d_native_xw_chunk_windows,
+        fftm_4d_native_xw_compact_stagings=fftm_4d_native_xw_compact_stagings,
+        fftm_4d_slab_native_work_area_aliases=fftm_4d_slab_native_work_area_aliases,
+        fftm_4d_slab_native_wz_communication_layouts=fftm_4d_slab_native_wz_communication_layouts,
+        fftm_4d_slab_native_wz_plan_concurrencies=fftm_4d_slab_native_wz_plan_concurrencies,
+        fftm_4d_slab_native_wz_ready_pipelines=fftm_4d_slab_native_wz_ready_pipelines,
         native_backward_second_peer_loop_modes=native_backward_second_peer_loop_modes,
         fftm_3d_backends=fftm_3d_backends,
         use_contiguous_forward_byte_send=use_contiguous_forward_byte_send,
         pencil_grid_orientations=pencil_grid_orientations,
+        pencil_grid_orientations_4d=pencil_grid_orientations_4d,
     )
     return specs
 
@@ -2272,6 +3309,20 @@ def build_probe_families(specs: Sequence[RunSpec], probe_mode: str) -> List[Prob
                 fftm_4d_slab_native_xw=spec.fftm_4d_slab_native_xw,
                 fftm_4d_slab_xw_batched_peer_kernels=spec.fftm_4d_slab_xw_batched_peer_kernels,
                 fftm_4d_slab_xw_tensor_coalesced_kernels=spec.fftm_4d_slab_xw_tensor_coalesced_kernels,
+                fftm_4d_slab_xw_vector4_kernels=spec.fftm_4d_slab_xw_vector4_kernels,
+                fftm_4d_slab_xw_tiled_kernels=spec.fftm_4d_slab_xw_tiled_kernels,
+                fftm_4d_slab_xw_layout_stage=spec.fftm_4d_slab_xw_layout_stage,
+                fftm_4d_slab_xw_native_spectral_layout=spec.fftm_4d_slab_xw_native_spectral_layout,
+                fftm_4d_pencil_same_zw_peer_paired=spec.fftm_4d_pencil_same_zw_peer_paired,
+                fftm_4d_pencil_same_zw_native_layout=spec.fftm_4d_pencil_same_zw_native_layout,
+                fftm_4d_pencil_degenerate_xw_slab_path=spec.fftm_4d_pencil_degenerate_xw_slab_path,
+                fftm_4d_pencil_degenerate_local_transposes=spec.fftm_4d_pencil_degenerate_local_transposes,
+                fftm_4d_pencil_degenerate_same_xw_native=spec.fftm_4d_pencil_degenerate_same_xw_native,
+                fftm_4d_pencil_degenerate_wz_sliced_z_fft=spec.fftm_4d_pencil_degenerate_wz_sliced_z_fft,
+                fftm_4d_native_xw_direct_layout=spec.fftm_4d_native_xw_direct_layout,
+                fftm_4d_native_xw_protocol=spec.fftm_4d_native_xw_protocol,
+                fftm_4d_native_xw_chunk_window=spec.fftm_4d_native_xw_chunk_window,
+                fftm_4d_native_xw_compact_staging=spec.fftm_4d_native_xw_compact_staging,
                 fftm_3d_backend=spec.fftm_3d_backend,
                 grid=spec.grid,
             )
@@ -2345,11 +3396,117 @@ class LocalPaperBenchmarkRunner:
         self.fftm_4d_slab_xw_native_spectral_layouts = parse_fftm_4d_slab_xw_native_spectral_layouts(
             self.args.fftm_4d_slab_xw_native_spectral_layouts
         )
+        self.fftm_4d_pencil_same_zw_peer_paired = parse_fftm_4d_pencil_same_zw_peer_paired(
+            self.args.fftm_4d_pencil_same_zw_peer_paired
+        )
+        self.fftm_4d_pencil_same_zw_native_layouts = parse_fftm_4d_pencil_same_zw_native_layouts(
+            self.args.fftm_4d_pencil_same_zw_native_layouts
+        )
+        self.fftm_4d_pencil_degenerate_xw_slab_paths = parse_fftm_4d_pencil_degenerate_xw_slab_paths(
+            self.args.fftm_4d_pencil_degenerate_xw_slab_paths
+        )
+        self.fftm_4d_pencil_degenerate_local_transposes = parse_fftm_4d_pencil_degenerate_local_transposes(
+            self.args.fftm_4d_pencil_degenerate_local_transposes
+        )
+        self.fftm_4d_pencil_degenerate_same_xw_native = parse_fftm_4d_pencil_degenerate_same_xw_native(
+            self.args.fftm_4d_pencil_degenerate_same_xw_native
+        )
+        self.fftm_4d_pencil_degenerate_wz_sliced_z_fft = parse_fftm_4d_pencil_degenerate_wz_sliced_z_fft(
+            self.args.fftm_4d_pencil_degenerate_wz_sliced_z_fft
+        )
+        self.fftm_4d_native_xw_direct_layouts = parse_fftm_4d_native_xw_direct_layouts(
+            self.args.fftm_4d_native_xw_direct_layouts
+        )
+        self.fftm_4d_native_xw_protocols = parse_fftm_4d_native_xw_protocols(
+            self.args.fftm_4d_native_xw_protocols
+        )
+        self.fftm_4d_native_xw_chunk_windows = parse_fftm_4d_native_xw_chunk_windows(
+            self.args.fftm_4d_native_xw_chunk_windows
+        )
+        self.fftm_4d_native_xw_compact_stagings = parse_fftm_4d_native_xw_compact_stagings(
+            self.args.fftm_4d_native_xw_compact_stagings
+        )
+        self.fftm_4d_slab_native_work_area_aliases = parse_fftm_4d_slab_native_work_area_aliases(
+            self.args.fftm_4d_slab_native_work_area_aliases
+        )
+        self.fftm_4d_slab_native_wz_communication_layouts = (
+            parse_fftm_4d_slab_native_wz_communication_layouts(
+                self.args.fftm_4d_slab_native_wz_communication_layouts
+            )
+        )
+        self.fftm_4d_slab_native_wz_plan_concurrencies = (
+            parse_fftm_4d_slab_native_wz_plan_concurrencies(
+                self.args.fftm_4d_slab_native_wz_plan_concurrencies
+            )
+        )
+        self.fftm_4d_slab_native_wz_ready_pipelines = (
+            parse_fftm_4d_slab_native_wz_ready_pipelines(
+                self.args.fftm_4d_slab_native_wz_ready_pipelines
+            )
+        )
+        if any(protocol is not None for protocol in self.fftm_4d_native_xw_protocols) and True not in self.fftm_4d_native_xw_direct_layouts:
+            raise ValueError(
+                "--fftm-4d-native-xw-protocols requires --fftm-4d-native-xw-direct-layouts=on"
+            )
+        if any(window is not None for window in self.fftm_4d_native_xw_chunk_windows) and "chunked" not in self.fftm_4d_native_xw_protocols:
+            raise ValueError(
+                "--fftm-4d-native-xw-chunk-windows requires --fftm-4d-native-xw-protocols=chunked"
+            )
+        if True in self.fftm_4d_native_xw_compact_stagings:
+            if True not in self.fftm_4d_native_xw_direct_layouts:
+                raise ValueError(
+                    "--fftm-4d-native-xw-compact-stagings=on requires "
+                    "--fftm-4d-native-xw-direct-layouts=on"
+                )
+            if "chunked" not in self.fftm_4d_native_xw_protocols:
+                raise ValueError(
+                    "--fftm-4d-native-xw-compact-stagings=on requires "
+                    "--fftm-4d-native-xw-protocols=chunked"
+                )
+            if not any(window is not None and window > 0 for window in self.fftm_4d_native_xw_chunk_windows):
+                raise ValueError(
+                    "--fftm-4d-native-xw-compact-stagings=on requires a positive bounded chunk window"
+                )
+        if True in self.fftm_4d_slab_native_work_area_aliases:
+            if True not in self.fftm_4d_slab_xw_native_spectral_layouts:
+                raise ValueError(
+                    "--fftm-4d-slab-native-work-area-aliases=on requires "
+                    "--fftm-4d-slab-xw-native-spectral-layouts=on"
+                )
+            if True not in self.fftm_4d_native_xw_direct_layouts:
+                raise ValueError(
+                    "--fftm-4d-slab-native-work-area-aliases=on requires "
+                    "--fftm-4d-native-xw-direct-layouts=on"
+                )
+        if True in self.fftm_4d_slab_native_wz_communication_layouts:
+            if True not in self.fftm_4d_slab_xw_native_spectral_layouts:
+                raise ValueError(
+                    "--fftm-4d-slab-native-wz-communication-layouts=on requires native spectral layout"
+                )
+            if True not in self.fftm_4d_native_xw_direct_layouts or "chunked" not in self.fftm_4d_native_xw_protocols:
+                raise ValueError(
+                    "--fftm-4d-slab-native-wz-communication-layouts=on requires direct chunked XW transport"
+                )
+            if not any(window is not None and window > 0 for window in self.fftm_4d_native_xw_chunk_windows):
+                raise ValueError(
+                    "--fftm-4d-slab-native-wz-communication-layouts=on requires a positive bounded chunk window"
+                )
+        if (
+            any(value not in (None, 1) for value in self.fftm_4d_slab_native_wz_plan_concurrencies)
+            or True in self.fftm_4d_slab_native_wz_ready_pipelines
+        ) and True not in self.fftm_4d_slab_native_wz_communication_layouts:
+            raise ValueError(
+                "4D slab WZ concurrency/pipeline matrices require "
+                "--fftm-4d-slab-native-wz-communication-layouts=on"
+            )
         self.native_backward_second_peer_loop_modes = parse_native_backward_second_peer_loop_modes(
             self.args.native_backward_second_peer_loop_modes
         )
         self.fftm_3d_backends = parse_fftm_3d_backends(self.args.fftm_3d_backends)
         self.pencil_grid_orientations = parse_pencil_grid_orientations(self.args.pencil_pencil_grid_orientations)
+        self.pencil_grid_orientations_4d = parse_4d_pencil_grid_orientations(
+            self.args.fftm_4d_pencil_grid_orientations
+        )
         self.extra_sizes_3d = parse_int_list(self.args.extra_sizes_3d)
         self.extra_sizes_3d_by_gpu = parse_gpu_size_map(self.args.extra_sizes_3d_by_gpu)
         self.fixed_scaling_sizes_3d = parse_int_list(self.args.fixed_scaling_sizes_3d)
@@ -2371,10 +3528,26 @@ class LocalPaperBenchmarkRunner:
             fftm_4d_slab_xw_tiled_kernels=self.fftm_4d_slab_xw_tiled_kernels,
             fftm_4d_slab_xw_layout_stages=self.fftm_4d_slab_xw_layout_stages,
             fftm_4d_slab_xw_native_spectral_layouts=self.fftm_4d_slab_xw_native_spectral_layouts,
+            fftm_4d_pencil_same_zw_peer_paired=self.fftm_4d_pencil_same_zw_peer_paired,
+            fftm_4d_pencil_same_zw_native_layouts=self.fftm_4d_pencil_same_zw_native_layouts,
+            fftm_4d_pencil_degenerate_xw_slab_paths=self.fftm_4d_pencil_degenerate_xw_slab_paths,
+            fftm_4d_pencil_degenerate_local_transposes=self.fftm_4d_pencil_degenerate_local_transposes,
+            fftm_4d_pencil_degenerate_same_xw_native=self.fftm_4d_pencil_degenerate_same_xw_native,
+            fftm_4d_pencil_degenerate_wz_sliced_z_fft=self.fftm_4d_pencil_degenerate_wz_sliced_z_fft,
+            fftm_4d_native_xw_direct_layouts=self.fftm_4d_native_xw_direct_layouts,
+            fftm_4d_native_xw_protocols=self.fftm_4d_native_xw_protocols,
+            fftm_4d_native_xw_chunk_windows=self.fftm_4d_native_xw_chunk_windows,
+            fftm_4d_native_xw_compact_stagings=self.fftm_4d_native_xw_compact_stagings,
+            fftm_4d_slab_native_work_area_aliases=self.fftm_4d_slab_native_work_area_aliases,
+            fftm_4d_slab_native_wz_communication_layouts=
+                self.fftm_4d_slab_native_wz_communication_layouts,
+            fftm_4d_slab_native_wz_plan_concurrencies=self.fftm_4d_slab_native_wz_plan_concurrencies,
+            fftm_4d_slab_native_wz_ready_pipelines=self.fftm_4d_slab_native_wz_ready_pipelines,
             native_backward_second_peer_loop_modes=self.native_backward_second_peer_loop_modes,
             fftm_3d_backends=self.fftm_3d_backends,
             use_contiguous_forward_byte_send=self.args.use_contiguous_forward_byte_send,
             pencil_grid_orientations=self.pencil_grid_orientations,
+            pencil_grid_orientations_4d=self.pencil_grid_orientations_4d,
         )
         if not self.specs:
             raise RuntimeError(f"No runnable benchmark/test binaries were found under {self.tests_root}")
@@ -2759,6 +3932,93 @@ class LocalPaperBenchmarkRunner:
                         if spec.fftm_4d_slab_xw_native_spectral_layout
                         else "--no-4d-slab-native-xw-native-spectral-layout"
                     )
+                if spec.fftm_4d_native_xw_direct_layout is not None:
+                    command.append(
+                        "--use-4d-native-xw-direct-layout"
+                        if spec.fftm_4d_native_xw_direct_layout
+                        else "--no-4d-native-xw-direct-layout"
+                    )
+                if spec.fftm_4d_native_xw_protocol is not None:
+                    command.append(
+                        "--use-4d-native-xw-chunked-transport"
+                        if spec.fftm_4d_native_xw_protocol == "chunked"
+                        else "--no-4d-native-xw-chunked-transport"
+                    )
+                    if spec.fftm_4d_native_xw_protocol == "chunked":
+                        command.extend(["--4d-native-xw-chunk-mib", str(self.args.fftm_4d_native_xw_chunk_mib)])
+                        if spec.fftm_4d_native_xw_chunk_window is not None:
+                            command.extend(
+                                [
+                                    "--4d-native-xw-chunk-window",
+                                    "all"
+                                    if spec.fftm_4d_native_xw_chunk_window == 0
+                                    else str(spec.fftm_4d_native_xw_chunk_window),
+                                ]
+                            )
+                if spec.fftm_4d_native_xw_compact_staging is not None:
+                    command.append(
+                        "--use-4d-native-xw-compact-staging"
+                        if spec.fftm_4d_native_xw_compact_staging
+                        else "--no-4d-native-xw-compact-staging"
+                    )
+                if spec.fftm_4d_slab_native_work_area_alias is not None:
+                    command.append(
+                        "--use-4d-slab-native-work-area-alias"
+                        if spec.fftm_4d_slab_native_work_area_alias
+                        else "--no-4d-slab-native-work-area-alias"
+                    )
+                if spec.fftm_4d_slab_native_wz_communication_layout is not None:
+                    command.append(
+                        "--use-4d-slab-native-wz-communication-layout"
+                        if spec.fftm_4d_slab_native_wz_communication_layout
+                        else "--no-4d-slab-native-wz-communication-layout"
+                    )
+                if spec.fftm_4d_slab_native_wz_plan_concurrency is not None:
+                    command.extend(
+                        ["--4d-slab-native-wz-plan-concurrency", str(spec.fftm_4d_slab_native_wz_plan_concurrency)]
+                    )
+                if spec.fftm_4d_slab_native_wz_ready_pipeline is not None:
+                    command.append(
+                        "--use-4d-slab-native-wz-ready-pipeline"
+                        if spec.fftm_4d_slab_native_wz_ready_pipeline
+                        else "--no-4d-slab-native-wz-ready-pipeline"
+                    )
+                if spec.fftm_4d_pencil_same_zw_peer_paired is not None:
+                    command.append(
+                        "--use-4d-pencil-same-zw-peer-paired"
+                        if spec.fftm_4d_pencil_same_zw_peer_paired
+                        else "--no-4d-pencil-same-zw-peer-paired"
+                    )
+                if spec.fftm_4d_pencil_same_zw_native_layout is not None:
+                    command.append(
+                        "--use-4d-pencil-same-zw-native-layout"
+                        if spec.fftm_4d_pencil_same_zw_native_layout
+                        else "--no-4d-pencil-same-zw-native-layout"
+                    )
+                if spec.fftm_4d_pencil_degenerate_xw_slab_path is not None:
+                    command.append(
+                        "--use-4d-pencil-degenerate-xw-slab-path"
+                        if spec.fftm_4d_pencil_degenerate_xw_slab_path
+                        else "--no-4d-pencil-degenerate-xw-slab-path"
+                    )
+                if spec.fftm_4d_pencil_degenerate_local_transposes is not None:
+                    command.append(
+                        "--use-4d-pencil-degenerate-local-transposes"
+                        if spec.fftm_4d_pencil_degenerate_local_transposes
+                        else "--no-4d-pencil-degenerate-local-transposes"
+                    )
+                if spec.fftm_4d_pencil_degenerate_same_xw_native is not None:
+                    command.append(
+                        "--use-4d-pencil-degenerate-same-xw-native"
+                        if spec.fftm_4d_pencil_degenerate_same_xw_native
+                        else "--no-4d-pencil-degenerate-same-xw-native"
+                    )
+                if spec.fftm_4d_pencil_degenerate_wz_sliced_z_fft is not None:
+                    command.append(
+                        "--use-4d-pencil-degenerate-wz-sliced-z-fft"
+                        if spec.fftm_4d_pencil_degenerate_wz_sliced_z_fft
+                        else "--no-4d-pencil-degenerate-wz-sliced-z-fft"
+                    )
         command.extend(["--times", str(times)])
         if warmup > 0:
             command.extend(["--warmup", str(warmup)])
@@ -2787,7 +4047,21 @@ class LocalPaperBenchmarkRunner:
             f"xwtile-{('on' if spec.fftm_4d_slab_xw_tiled_kernels else 'off') if spec.fftm_4d_slab_xw_tiled_kernels is not None else 'configured'}_"
             f"xwstage-{('on' if spec.fftm_4d_slab_xw_layout_stage else 'off') if spec.fftm_4d_slab_xw_layout_stage is not None else 'configured'}_"
             f"xwspec-{('native' if spec.fftm_4d_slab_xw_native_spectral_layout else 'public') if spec.fftm_4d_slab_xw_native_spectral_layout is not None else 'configured'}_"
+            f"xwdirect-{('on' if spec.fftm_4d_native_xw_direct_layout else 'off') if spec.fftm_4d_native_xw_direct_layout is not None else 'configured'}_"
+            f"xwproto-{spec.fftm_4d_native_xw_protocol or 'configured'}_"
+            f"xwwindow-{spec.fftm_4d_native_xw_chunk_window if spec.fftm_4d_native_xw_chunk_window is not None else 'configured'}_"
+            f"xwcompact-{('on' if spec.fftm_4d_native_xw_compact_staging else 'off') if spec.fftm_4d_native_xw_compact_staging is not None else 'configured'}_"
+            f"workalias-{('on' if spec.fftm_4d_slab_native_work_area_alias else 'off') if spec.fftm_4d_slab_native_work_area_alias is not None else 'configured'}_"
+            f"wzcomm-{('on' if spec.fftm_4d_slab_native_wz_communication_layout else 'off') if spec.fftm_4d_slab_native_wz_communication_layout is not None else 'configured'}_"
+            f"wzconc-{spec.fftm_4d_slab_native_wz_plan_concurrency if spec.fftm_4d_slab_native_wz_plan_concurrency is not None else 'configured'}_"
+            f"wzpipe-{('on' if spec.fftm_4d_slab_native_wz_ready_pipeline else 'off') if spec.fftm_4d_slab_native_wz_ready_pipeline is not None else 'configured'}_"
             f"xwbatch-{('on' if spec.fftm_4d_slab_xw_batched_peer_kernels else 'off') if spec.fftm_4d_slab_xw_batched_peer_kernels is not None else 'configured'}_"
+            f"samezw-{('peer' if spec.fftm_4d_pencil_same_zw_peer_paired else 'base') if spec.fftm_4d_pencil_same_zw_peer_paired is not None else 'configured'}_"
+            f"samezwlayout-{('native' if spec.fftm_4d_pencil_same_zw_native_layout else 'base') if spec.fftm_4d_pencil_same_zw_native_layout is not None else 'configured'}_"
+            f"degenxw-{('on' if spec.fftm_4d_pencil_degenerate_xw_slab_path else 'off') if spec.fftm_4d_pencil_degenerate_xw_slab_path is not None else 'configured'}_"
+            f"degenlocal-{('on' if spec.fftm_4d_pencil_degenerate_local_transposes else 'off') if spec.fftm_4d_pencil_degenerate_local_transposes is not None else 'configured'}_"
+            f"degensamexw-{('native' if spec.fftm_4d_pencil_degenerate_same_xw_native else 'base') if spec.fftm_4d_pencil_degenerate_same_xw_native is not None else 'configured'}_"
+            f"degenwz-{('on' if spec.fftm_4d_pencil_degenerate_wz_sliced_z_fft else 'off') if spec.fftm_4d_pencil_degenerate_wz_sliced_z_fft is not None else 'configured'}_"
             f"bwd2peer-{('on' if spec.native_backward_second_peer_loop else 'off') if spec.native_backward_second_peer_loop is not None else 'configured'}_"
             f"{spec.fftm_3d_backend or 'backend-configured'}_"
             f"{grid_slug(spec.grid)}_{'x'.join(str(s) for s in sizes)}"
@@ -3664,6 +4938,125 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--fftm-4d-native-xw-direct-layouts",
+        default="configured",
+        help=(
+            "4D native-xzwy same_xw direct receive/send matrix for p2p-waitany: "
+            "configured, production, all/both, or comma-separated subset of off,on."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-native-xw-protocols",
+        default="configured",
+        help=(
+            "4D native-xzwy direct-transfer protocol matrix: configured, production, all/both, "
+            "or comma-separated subset of single,chunked. Requires direct layout."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-native-xw-chunk-mib",
+        type=int,
+        default=512,
+        help="Chunk size in MiB for the 4D native-XW chunked protocol. Default: 512.",
+    )
+    parser.add_argument(
+        "--fftm-4d-native-xw-chunk-windows",
+        default="configured",
+        help=(
+            "4D native-XW per-peer in-flight chunk window matrix: configured, production, matrix, "
+            "all, or comma-separated positive integers. 'all' preserves the unbounded baseline."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-native-xw-compact-stagings",
+        default="configured",
+        help=(
+            "4D native-XW bounded-window staging matrix: configured, production, all/both, "
+            "or comma-separated subset of off,on. Compact mode requires direct layout, chunked transport, "
+            "and a positive chunk window."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-native-work-area-aliases",
+        default="configured",
+        help=(
+            "4D native-spectral slab shared-work/stage-1 alias matrix: configured, production, all/both, "
+            "or comma-separated subset of off,on. The alias requires native XW direct layout."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-native-wz-communication-layouts",
+        default="configured",
+        help=(
+            "4D slab WZ communication-native layout matrix: configured, production, all/both, or off,on. "
+            "Requires native spectral layout and bounded chunked direct XW transport."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-native-wz-plan-concurrencies",
+        default="configured",
+        help=(
+            "4D slab WZ FFT plan/stream concurrency matrix: configured, production, matrix/all, "
+            "or comma-separated positive integers. Matrix selects 1,2,4,8."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-slab-native-wz-ready-pipelines",
+        default="configured",
+        help=(
+            "4D slab WZ FFT/plane-transfer readiness pipeline matrix: configured, production, "
+            "matrix/all/both, or off,on."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-pencil-same-zw-peer-paired",
+        default="configured",
+        help=(
+            "4D pencil-pencil same_zw p2p-waitany scheduling matrix: configured, production, all/both, "
+            "or comma-separated subset of off,on."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-pencil-same-zw-native-layouts",
+        default="configured",
+        help=(
+            "4D pencil-pencil same_zw native message-layout matrix for native spectral runs: "
+            "configured, production, all/both, or comma-separated subset of base,native."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-pencil-degenerate-xw-slab-paths",
+        default="configured",
+        help=(
+            "4D pencil-pencil native-spectral degenerate-grid path matrix for p1=1,p3=1 grids: "
+            "configured, production, all/both, or comma-separated subset of off,on."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-pencil-degenerate-local-transposes",
+        default="configured",
+        help=(
+            "4D pencil-pencil native-spectral degenerate-grid local transpose/alias matrix for p1=1,p3=1 "
+            "grids: configured, production, all/both, or comma-separated subset of off,on."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-pencil-degenerate-same-xw-native",
+        default="configured",
+        help=(
+            "4D pencil-pencil native-spectral degenerate-grid same_xw native p2p scheduling matrix for "
+            "p1=1,p3=1 grids: configured, production, all/both, or comma-separated subset of off,on."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-pencil-degenerate-wz-sliced-z-fft",
+        default="configured",
+        help=(
+            "4D pencil-pencil native-spectral degenerate-grid WZ sliced-Z FFT matrix for p1=1,p3=1 grids: "
+            "configured, production, all/both, or comma-separated subset of off,on."
+        ),
+    )
+    parser.add_argument(
         "--contiguous-forward-send-chunk-mib",
         type=int,
         default=1024,
@@ -3742,6 +5135,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "production uses known safe choices, currently 7G opt0/auto -> 7x1, "
             "8G opt0/auto -> 4x2, and 8G opt1 -> 2x4. "
             "Default: both, so e.g. 8 GPUs runs both 2x4 and 4x2."
+        ),
+    )
+    parser.add_argument(
+        "--fftm-4d-pencil-grid-orientations",
+        default="configured",
+        help=(
+            "4D pencil-pencil process-grid orientations to run: configured, production, default, "
+            "x-heavy, y-heavy, z-heavy, axis, or all. configured passes no --grid argument. "
+            "For 7 GPUs, all expands to 1x1x7, 1x7x1, and 7x1x1."
         ),
     )
     parser.add_argument(

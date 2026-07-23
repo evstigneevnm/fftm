@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -50,8 +51,38 @@ struct fftm_4d_test_options
     bool                          use_4d_slab_native_xw_vector4_kernels = false;
     bool                          use_4d_slab_native_xw_tiled_kernels = false;
     bool                          use_4d_slab_native_xw_layout_stage = false;
+    bool                          use_4d_native_xw_direct_layout = false;
+    bool                          use_4d_native_xw_chunked_transport = false;
+    std::size_t                   native_xw_chunk_mib = 512;
+    std::size_t                   native_xw_chunk_window = 0;
+    bool                          use_4d_native_xw_compact_staging = false;
+    bool                          use_4d_slab_native_work_area_alias = false;
+    bool                          use_4d_slab_native_wz_communication_layout = false;
+    std::size_t                   slab_native_wz_plan_concurrency = 1;
+    bool                          use_4d_slab_native_wz_ready_pipeline = false;
+    bool                          use_4d_pencil_same_zw_peer_paired = false;
+    bool                          use_4d_pencil_same_zw_native_layout = true;
+    bool                          use_4d_pencil_degenerate_xw_slab_path = false;
+    bool                          use_4d_pencil_degenerate_local_transposes = false;
+    bool                          use_4d_pencil_degenerate_same_xw_native = false;
+    bool                          use_4d_pencil_degenerate_wz_sliced_z_fft = true;
     bool                          use_4d_slab_native_xw_native_spectral_layout = false;
 };
+
+inline std::size_t parse_native_xw_chunk_window( const char *value )
+{
+    const std::string text = value == nullptr ? std::string() : std::string( value );
+    if ( text == "all" || text == "full" || text == "0" )
+        return 0;
+    char               *end    = nullptr;
+    const unsigned long long parsed = std::strtoull( text.c_str(), &end, 10 );
+    if ( text.empty() || end == text.c_str() || *end != '\0' || parsed == 0 ||
+         parsed > static_cast<unsigned long long>( std::numeric_limits<std::size_t>::max() ) )
+    {
+        throw std::logic_error( "--4d-native-xw-chunk-window must be 'all' or a positive integer" );
+    }
+    return static_cast<std::size_t>( parsed );
+}
 
 inline std::tuple<std::size_t, std::size_t, std::size_t> choose_balanced_grid_4d( std::size_t num_procs )
 {
@@ -123,6 +154,19 @@ usage_fftm_4d_test( const std::string &binary_name, bool allow_strategy_all, boo
     usage += " [--use-4d-slab-native-xw-vector4-kernels|--no-4d-slab-native-xw-vector4-kernels]";
     usage += " [--use-4d-slab-native-xw-tiled-kernels|--no-4d-slab-native-xw-tiled-kernels]";
     usage += " [--use-4d-slab-native-xw-layout-stage|--no-4d-slab-native-xw-layout-stage]";
+    usage += " [--use-4d-native-xw-direct-layout|--no-4d-native-xw-direct-layout]";
+    usage += " [--use-4d-native-xw-chunked-transport|--no-4d-native-xw-chunked-transport]";
+    usage += " [--4d-native-xw-chunk-mib MiB]";
+    usage += " [--4d-native-xw-chunk-window all|N]";
+    usage += " [--use-4d-native-xw-compact-staging|--no-4d-native-xw-compact-staging]";
+    usage += " [--use-4d-slab-native-work-area-alias|--no-4d-slab-native-work-area-alias]";
+    usage += " [--use-4d-slab-native-wz-communication-layout|--no-4d-slab-native-wz-communication-layout]";
+    usage += " [--use-4d-pencil-same-zw-peer-paired|--no-4d-pencil-same-zw-peer-paired]";
+    usage += " [--use-4d-pencil-same-zw-native-layout|--no-4d-pencil-same-zw-native-layout]";
+    usage += " [--use-4d-pencil-degenerate-xw-slab-path|--no-4d-pencil-degenerate-xw-slab-path]";
+    usage += " [--use-4d-pencil-degenerate-local-transposes|--no-4d-pencil-degenerate-local-transposes]";
+    usage += " [--use-4d-pencil-degenerate-same-xw-native|--no-4d-pencil-degenerate-same-xw-native]";
+    usage += " [--use-4d-pencil-degenerate-wz-sliced-z-fft|--no-4d-pencil-degenerate-wz-sliced-z-fft]";
     usage +=
         " [--use-4d-slab-native-xw-native-spectral-layout|--no-4d-slab-native-xw-native-spectral-layout]";
     usage += " [Nx Ny Nz Nw]";
@@ -351,6 +395,152 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.use_4d_slab_native_xw_layout_stage = false;
             argi += 1;
         }
+        else if ( arg == "--use-4d-native-xw-direct-layout" )
+        {
+            options.use_4d_native_xw_direct_layout = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-native-xw-direct-layout" )
+        {
+            options.use_4d_native_xw_direct_layout = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-native-xw-chunked-transport" )
+        {
+            options.use_4d_native_xw_chunked_transport = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-native-xw-chunked-transport" )
+        {
+            options.use_4d_native_xw_chunked_transport = false;
+            argi += 1;
+        }
+        else if ( arg == "--4d-native-xw-chunk-mib" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --4d-native-xw-chunk-mib" );
+            options.native_xw_chunk_mib = static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
+            if ( options.native_xw_chunk_mib == 0 )
+                throw std::logic_error( "--4d-native-xw-chunk-mib must be positive" );
+            argi += 2;
+        }
+        else if ( arg == "--4d-native-xw-chunk-window" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --4d-native-xw-chunk-window" );
+            options.native_xw_chunk_window = parse_native_xw_chunk_window( argv[argi + 1] );
+            argi += 2;
+        }
+        else if ( arg == "--use-4d-native-xw-compact-staging" )
+        {
+            options.use_4d_native_xw_compact_staging = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-native-xw-compact-staging" )
+        {
+            options.use_4d_native_xw_compact_staging = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-work-area-alias" )
+        {
+            options.use_4d_slab_native_work_area_alias = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-work-area-alias" )
+        {
+            options.use_4d_slab_native_work_area_alias = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-wz-communication-layout" )
+        {
+            options.use_4d_slab_native_wz_communication_layout = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-communication-layout" )
+        {
+            options.use_4d_slab_native_wz_communication_layout = false;
+            argi += 1;
+        }
+        else if ( arg == "--4d-slab-native-wz-plan-concurrency" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --4d-slab-native-wz-plan-concurrency" );
+            options.slab_native_wz_plan_concurrency =
+                static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
+            if ( options.slab_native_wz_plan_concurrency == 0 )
+                throw std::logic_error( "--4d-slab-native-wz-plan-concurrency must be positive" );
+            argi += 2;
+        }
+        else if ( arg == "--use-4d-slab-native-wz-ready-pipeline" )
+        {
+            options.use_4d_slab_native_wz_ready_pipeline = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-ready-pipeline" )
+        {
+            options.use_4d_slab_native_wz_ready_pipeline = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-pencil-same-zw-peer-paired" )
+        {
+            options.use_4d_pencil_same_zw_peer_paired = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-pencil-same-zw-peer-paired" )
+        {
+            options.use_4d_pencil_same_zw_peer_paired = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-pencil-same-zw-native-layout" )
+        {
+            options.use_4d_pencil_same_zw_native_layout = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-pencil-same-zw-native-layout" )
+        {
+            options.use_4d_pencil_same_zw_native_layout = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-pencil-degenerate-xw-slab-path" )
+        {
+            options.use_4d_pencil_degenerate_xw_slab_path = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-pencil-degenerate-xw-slab-path" )
+        {
+            options.use_4d_pencil_degenerate_xw_slab_path = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-pencil-degenerate-local-transposes" )
+        {
+            options.use_4d_pencil_degenerate_local_transposes = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-pencil-degenerate-local-transposes" )
+        {
+            options.use_4d_pencil_degenerate_local_transposes = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-pencil-degenerate-same-xw-native" )
+        {
+            options.use_4d_pencil_degenerate_same_xw_native = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-pencil-degenerate-same-xw-native" )
+        {
+            options.use_4d_pencil_degenerate_same_xw_native = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-pencil-degenerate-wz-sliced-z-fft" )
+        {
+            options.use_4d_pencil_degenerate_wz_sliced_z_fft = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-pencil-degenerate-wz-sliced-z-fft" )
+        {
+            options.use_4d_pencil_degenerate_wz_sliced_z_fft = false;
+            argi += 1;
+        }
         else if ( arg == "--use-4d-slab-native-xw-native-spectral-layout" )
         {
             options.use_4d_slab_native_xw_native_spectral_layout = true;
@@ -401,6 +591,26 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_test_opti
     init_options.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
     init_options.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
     init_options.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
+    init_options.use_4d_native_xw_direct_layout = options.use_4d_native_xw_direct_layout;
+    init_options.use_4d_native_xw_chunked_transport = options.use_4d_native_xw_chunked_transport;
+    init_options.native_xw_chunk_bytes =
+        options.native_xw_chunk_mib * static_cast<std::size_t>( 1024 ) * static_cast<std::size_t>( 1024 );
+    init_options.native_xw_chunk_window = options.native_xw_chunk_window;
+    init_options.use_4d_native_xw_compact_staging = options.use_4d_native_xw_compact_staging;
+    init_options.use_4d_slab_native_work_area_alias = options.use_4d_slab_native_work_area_alias;
+    init_options.use_4d_slab_native_wz_communication_layout =
+        options.use_4d_slab_native_wz_communication_layout;
+    init_options.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
+    init_options.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
+    init_options.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
+    init_options.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
+    init_options.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
+    init_options.use_4d_pencil_degenerate_local_transposes =
+        options.use_4d_pencil_degenerate_local_transposes;
+    init_options.use_4d_pencil_degenerate_same_xw_native =
+        options.use_4d_pencil_degenerate_same_xw_native;
+    init_options.use_4d_pencil_degenerate_wz_sliced_z_fft =
+        options.use_4d_pencil_degenerate_wz_sliced_z_fft;
     init_options.spectral_layout_4d =
         options.use_4d_slab_native_xw_native_spectral_layout ? ::fftm::fftm_4d_spectral_layout::native_xzwy
                                                              : ::fftm::fftm_4d_spectral_layout::public_yzwx;
