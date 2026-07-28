@@ -1175,6 +1175,11 @@ std::string native_stage_times_filename( int rank )
     return "native_stage_times_r" + std::to_string( rank ) + ".csv";
 }
 
+std::string wall_times_3d_filename( int rank )
+{
+    return "wall_times_3d_r" + std::to_string( rank ) + ".csv";
+}
+
 const char *stage_timer_strategy_name( strategy_kind strategy )
 {
     switch ( strategy )
@@ -1187,6 +1192,41 @@ const char *stage_timer_strategy_name( strategy_kind strategy )
         return "pencil-pencil";
     }
     return "unknown";
+}
+
+void append_3d_wall_time_rows(
+    const options_t &options, int num_procs, int rank, const std::vector<T> &local_wall_times,
+    const std::vector<T> &global_wall_times
+)
+{
+    if ( local_wall_times.size() != global_wall_times.size() )
+        throw std::logic_error( "3D local/global wall-time sample counts differ" );
+
+    const std::string header =
+        "source,rank,num_gpus,iteration,local_wall_ms,global_wall_ms,strategy,mode,pencil_layout,"
+        "pencil_pipeline,deferred_send_completion,p1,p2,nx,ny,nz,directory";
+    std::vector<std::string> rows;
+    rows.reserve( local_wall_times.size() );
+    for ( std::size_t i = 0; i < local_wall_times.size(); ++i )
+    {
+        std::ostringstream row;
+        row << fftm::test::detail::csv_quote( "fftm-3d-wall" ) << ',' << rank << ',' << num_procs << ',' << i
+            << ',' << local_wall_times[i] << ',' << global_wall_times[i] << ','
+            << fftm::test::detail::csv_quote( stage_timer_strategy_name( options.strategy ) ) << ','
+            << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( options.mode ) ) << ','
+            << fftm::test::detail::csv_quote( fftm::test::detail::pencil_layout_name( options.pencil_layout ) )
+            << ','
+            << fftm::test::detail::csv_quote(
+                   fftm::test::detail::pencil_pipeline_name( options.pencil_pipeline ) )
+            << ',' << ( options.use_3d_deferred_send_completion ? 1 : 0 ) << ',' << options.p1 << ','
+            << options.p2 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
+            << fftm::test::detail::csv_quote( options.directory );
+        rows.push_back( row.str() );
+    }
+
+    fftm::test::detail::append_csv_rows(
+        options.directory, wall_times_3d_filename( rank ), header, rows
+    );
 }
 
 void append_native_stage_timer_rows(
@@ -1202,6 +1242,7 @@ void append_native_stage_timer_rows(
     const std::string header =
         "source,rank,num_gpus,iteration,stage_index,stage,stage_ms,wall_ms,strategy,mode,pencil_layout,"
         "pencil_pipeline,large_count_p2p_transport,fft_exec_no_sync,native_backward_second_peer_loop,"
+        "deferred_send_completion,"
         "native_opt0_default_z_layout,"
         "native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,"
         "native_opt0_compact_y_workarea_effective,native_opt0_auto_compact_y_workarea,"
@@ -1228,6 +1269,7 @@ void append_native_stage_timer_rows(
                    fftm::fftm_3d_large_count_p2p_transport_name( options.large_count_p2p_transport ) )
             << ',' << ( options.use_fft_exec_no_sync ? 1 : 0 )
             << ',' << ( options.use_native_backward_second_peer_loop ? 1 : 0 ) << ','
+            << ( options.use_3d_deferred_send_completion ? 1 : 0 ) << ','
             << ( options.use_native_opt0_default_z_layout ? 1 : 0 ) << ','
             << ( options.use_native_opt0_reference_y_buffer_topology ? 1 : 0 ) << ','
             << ( options.use_native_opt0_compact_y_workarea ? 1 : 0 ) << ','
@@ -1402,7 +1444,9 @@ int run_benchmark_case(
     for_each.block_size = 128;
 
     const T        normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz );
+    std::vector<T> local_wall_times;
     std::vector<T> wall_times;
+    local_wall_times.reserve( static_cast<std::size_t>( options.times ) );
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T    max_norm          = T( 0 );
     bool validation_failed = false;
@@ -1457,12 +1501,14 @@ int run_benchmark_case(
 	        distributed_fft.backward( hat, work );
 	        runtime_api_t::device_synchronize();
 	        t1.record();
-	        const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
-	        wall_times.push_back( wall_ms );
+	        const T local_wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
+            const T global_wall_ms = comm_info.all_reduce_max( local_wall_ms );
+            local_wall_times.push_back( local_wall_ms );
+	        wall_times.push_back( global_wall_ms );
             if ( options.enable_native_stage_timers )
             {
                 append_native_stage_timer_rows(
-                    options, comm_info.num_procs, comm_info.myid, iter, static_cast<double>( wall_ms ),
+                    options, comm_info.num_procs, comm_info.myid, iter, static_cast<double>( global_wall_ms ),
                     distributed_fft.native_opt0_compact_y_workarea_effective(),
                     distributed_fft.native_opt0_auto_compact_y_workarea_effective(),
                     distributed_fft.native_opt0_default_z_scratch_aliased(),
@@ -1502,6 +1548,9 @@ int run_benchmark_case(
             validation_failed = true;
     }
 
+    append_3d_wall_time_rows(
+        options, comm_info.num_procs, comm_info.myid, local_wall_times, wall_times
+    );
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
     fftm::test::detail::log_tracked_memory_with_external_mpi(
         log, comm_info, distributed_fft, "benchmark=fftm-3d",
@@ -1526,6 +1575,7 @@ int run_benchmark_case(
             "large_count_p2p_transport=%s, fft_exec_no_sync=%d, stable_forward_byte_send_buffer=%d, "
             "ready_stable_forward_byte_send_buffer=%d, contiguous_forward_byte_send=%d, "
             "physical_forward_peer_exchange=%d, native_backward_second_peer_loop=%d, "
+            "deferred_send_completion=%d, "
             "native_opt0_default_z_layout=%d, native_opt0_reference_y_buffer_topology=%d, "
             "native_opt0_compact_y_workarea=%d, native_opt0_compact_y_workarea_effective=%d, "
             "native_opt0_auto_compact_y_workarea=%d, native_opt0_default_z_scratch_aliased=%d, "
@@ -1537,7 +1587,7 @@ int run_benchmark_case(
             "native_opt0_raw_y_plan_bundle_reference_streams=%d, native_opt0_reference_local_plan_context=%d, "
             "contiguous_forward_send_mode=%s, contiguous_forward_send_chunk_mib=%zu, "
             "contiguous_forward_send_registration_warmups=%d: "
-            "avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "wall_time_scope=mpi-rank-max, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_3d ), options.p1,
             options.p2, options.nx, options.ny, options.nz, options.warmup, options.times,
             fftm::test::detail::pencil_layout_name( options.pencil_layout ),
@@ -1550,6 +1600,7 @@ int run_benchmark_case(
             options.use_contiguous_forward_byte_send ? 1 : 0,
             options.use_physical_forward_peer_exchange ? 1 : 0,
             options.use_native_backward_second_peer_loop ? 1 : 0,
+            options.use_3d_deferred_send_completion ? 1 : 0,
             options.use_native_opt0_default_z_layout ? 1 : 0,
             options.use_native_opt0_reference_y_buffer_topology ? 1 : 0,
             options.use_native_opt0_compact_y_workarea ? 1 : 0,
@@ -1588,6 +1639,7 @@ int run_benchmark_case(
             << ( options.use_contiguous_forward_byte_send ? 1 : 0 ) << ','
             << ( options.use_physical_forward_peer_exchange ? 1 : 0 ) << ','
             << ( options.use_native_backward_second_peer_loop ? 1 : 0 ) << ','
+            << ( options.use_3d_deferred_send_completion ? 1 : 0 ) << ','
             << ( options.use_native_opt0_default_z_layout ? 1 : 0 ) << ','
             << ( options.use_native_opt0_reference_y_buffer_topology ? 1 : 0 ) << ','
             << ( options.use_native_opt0_compact_y_workarea ? 1 : 0 ) << ','
@@ -1613,12 +1665,13 @@ int run_benchmark_case(
             << ',' << options.contiguous_forward_send_registration_warmups << ','
             << options.p1 << ',' << options.p2 << ',' << 1 << ',' << options.nx << ',' << options.ny << ','
             << options.nz << ',' << 0 << ',' << options.times << ',' << options.warmup << ',' << options.epsilon
-            << ',' << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
+            << ',' << fftm::test::detail::csv_quote( "mpi-rank-max" ) << ',' << stats.mean << ','
+            << stats.stddev << ',' << max_norm << ','
             << fftm::test::detail::csv_quote( options.directory );
 
         fftm::test::detail::append_csv_row(
             options.directory, "benchmark_fftm_3d.csv",
-            "benchmark,num_gpus,strategy,mode,pencil_layout,pencil_pipeline,persistent_p2p,ready_p2p_send,large_count_p2p_transport,fft_exec_no_sync,stable_forward_byte_send_buffer,ready_stable_forward_byte_send_buffer,contiguous_forward_byte_send,physical_forward_peer_exchange,native_backward_second_peer_loop,native_opt0_default_z_layout,native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,native_opt0_compact_y_workarea_effective,native_opt0_auto_compact_y_workarea,native_opt0_default_z_scratch_aliased,native_opt0_tight_y_plan_sequence,native_opt0_shared_y_plan_handles,native_opt0_y_group_device_sync,native_opt0_y_no_sync_exec,native_opt0_raw_y_plan_array_executor,native_opt0_reference_y_plan_lifecycle,native_opt0_reference_y_plan_bundle,native_opt0_raw_y_plan_bundle,native_opt0_y_plan_bundle_stream_first,native_opt0_raw_y_plan_bundle_reference_streams,native_opt0_reference_local_plan_context,contiguous_forward_send_mode,contiguous_forward_send_chunk_mib,contiguous_forward_send_registration_warmups,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,avg_wall_ms,stddev_wall_ms,"
+            "benchmark,num_gpus,strategy,mode,pencil_layout,pencil_pipeline,persistent_p2p,ready_p2p_send,large_count_p2p_transport,fft_exec_no_sync,stable_forward_byte_send_buffer,ready_stable_forward_byte_send_buffer,contiguous_forward_byte_send,physical_forward_peer_exchange,native_backward_second_peer_loop,deferred_send_completion,native_opt0_default_z_layout,native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,native_opt0_compact_y_workarea_effective,native_opt0_auto_compact_y_workarea,native_opt0_default_z_scratch_aliased,native_opt0_tight_y_plan_sequence,native_opt0_shared_y_plan_handles,native_opt0_y_group_device_sync,native_opt0_y_no_sync_exec,native_opt0_raw_y_plan_array_executor,native_opt0_reference_y_plan_lifecycle,native_opt0_reference_y_plan_bundle,native_opt0_raw_y_plan_bundle,native_opt0_y_plan_bundle_stream_first,native_opt0_raw_y_plan_bundle_reference_streams,native_opt0_reference_local_plan_context,contiguous_forward_send_mode,contiguous_forward_send_chunk_mib,contiguous_forward_send_registration_warmups,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,wall_time_scope,avg_wall_ms,stddev_wall_ms,"
             "max_l2_diff,directory",
             row.str()
         );

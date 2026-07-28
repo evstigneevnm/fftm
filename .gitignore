@@ -40,6 +40,7 @@ data_*/
 *.tgz
 *.tar.xz
 *.zip
+/enroot_workdir/
 
 # Python/editor/local agent state
 __pycache__/

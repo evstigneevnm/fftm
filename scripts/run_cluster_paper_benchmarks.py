@@ -85,6 +85,7 @@ from run_local_paper_benchmarks import (  # noqa: E402
     fftm_4d_slab_xw_tiled_kernels_for_spec,
     fftm_4d_slab_xw_layout_stages_for_spec,
     fftm_4d_slab_xw_native_spectral_layouts_for_spec,
+    fftm_4d_native_xw_direct_layouts_for_transport,
     fftm_4d_pencil_same_zw_peer_paired_for_spec,
     fftm_4d_pencil_same_zw_native_layouts_for_spec,
     fftm_4d_pencil_degenerate_xw_slab_paths_for_spec,
@@ -442,7 +443,7 @@ def build_specs(
                                         ):
                                             for pencil_layout in pencil_layouts_for_spec(dim, strategy, pencil_layouts):
                                                 for pencil_pipeline in pencil_pipelines_for_spec(
-                                                    dim, strategy, mode, pencil_pipelines
+                                                    dim, strategy, mode, pencil_pipelines, transport
                                                 ):
                                                     for large_count_transport in large_count_p2p_transports_for_spec(
                                                         dim,
@@ -554,7 +555,10 @@ def build_specs(
                                                                                 fftm_4d_pencil_degenerate_local_transposes,
                                                                                 fftm_4d_pencil_degenerate_same_xw_native,
                                                                                 fftm_4d_pencil_degenerate_wz_sliced_z_fft,
-                                                                                fftm_4d_native_xw_direct_layouts,
+                                                                                fftm_4d_native_xw_direct_layouts_for_transport(
+                                                                                    transport,
+                                                                                    fftm_4d_native_xw_direct_layouts,
+                                                                                ),
                                                                                 fftm_4d_native_xw_protocols,
                                                                                 fftm_4d_native_xw_chunk_windows,
                                                                                 fftm_4d_native_xw_compact_stagings,
@@ -651,7 +655,7 @@ def build_specs(
                                         for scheduler in p2p_schedulers_for_spec(dim, transport, mode, p2p_schedulers):
                                             for pencil_layout in pencil_layouts_for_spec(dim, strategy, pencil_layouts):
                                                 for pencil_pipeline in pencil_pipelines_for_spec(
-                                                    dim, strategy, mode, pencil_pipelines
+                                                    dim, strategy, mode, pencil_pipelines, transport
                                                 ):
                                                     for large_count_transport in large_count_p2p_transports_for_spec(
                                                         dim,
@@ -704,6 +708,19 @@ class PaperClusterRunner:
         self.container_data_dir = Path(args.container_data_directory)
         self.container_cpp_csv = self.container_data_dir / "cpp_csv"
         self.run_index = 0
+        self.mpi_rank_affinity_mode = getattr(args, "mpi_rank_affinity_mode", "auto")
+        self.mpi_rank_affinity_wrapper = getattr(args, "mpi_rank_affinity_wrapper", "")
+        if self.mpi_rank_affinity_mode != "auto":
+            if self.executor != "slurm-pyxis":
+                raise ValueError("MPI rank affinity is supported only by the Slurm/Pyxis executor")
+            if args.gpus_per_node != 8:
+                raise ValueError(
+                    "GPU-local HCA affinity currently requires --gpus-per-node=8"
+                )
+            if not self.mpi_rank_affinity_wrapper.startswith("/"):
+                raise ValueError(
+                    "--mpi-rank-affinity-wrapper must be an absolute container path"
+                )
 
         if self.executor == "local":
             self.tests_root = Path(args.tests_root).resolve()
@@ -1291,6 +1308,11 @@ class PaperClusterRunner:
                         if spec.native_backward_second_peer_loop
                         else "--no-native-backward-second-peer-loop"
                     )
+                args.append(
+                    "--use-3d-deferred-send-completion"
+                    if self.args.use_3d_deferred_send_completion
+                    else "--no-3d-deferred-send-completion"
+                )
                 native_opt0_y_flags = native_opt0_y_executor_variant_flags(
                     spec.native_opt0_y_executor_variant,
                     default_tight=self.args.use_native_opt0_tight_y_plan_sequence,
@@ -1635,16 +1657,28 @@ class PaperClusterRunner:
     def slurm_command(self, spec: RunSpec, sizes: Tuple[int, ...], times: int) -> List[str]:
         nodes = self.slurm_nodes_for_spec(spec)
         tasks = 1 if spec.suite == "ffts" else spec.num_gpus
+        tasks_per_node = max(1, int(math.ceil(float(tasks) / float(nodes))))
         total_gpus = nodes * self.args.gpus_per_node
         mounts = list(self.args.container_mounts)
         data_mount = f"{self.data_dir}:{self.container_data_dir}"
         if not any(mount.split(":", 1)[0] == str(self.data_dir) for mount in mounts):
             mounts.append(data_mount)
 
+        srun_extra_args = shlex.split(self.args.srun_extra_args)
         command = ["srun"]
-        command.extend(shlex.split(self.args.srun_extra_args))
+        command.extend(srun_extra_args)
         command.extend(["-N", str(nodes), "-n", str(tasks), "-G", str(total_gpus)])
+        if not any(
+            arg == "--ntasks-per-node" or arg.startswith("--ntasks-per-node=")
+            for arg in srun_extra_args
+        ):
+            command.append(f"--ntasks-per-node={tasks_per_node}")
         command.append(f"--gpus-per-node={self.args.gpus_per_node}")
+        if not any(
+            arg == "--kill-on-bad-exit" or arg.startswith("--kill-on-bad-exit=")
+            for arg in srun_extra_args
+        ):
+            command.append("--kill-on-bad-exit=1")
         if self.args.srun_time:
             command.append(f"--time={self.args.srun_time}")
         command.extend(["--container-image", self.args.container_image])
@@ -1655,6 +1689,15 @@ class PaperClusterRunner:
         if self.args.container_writable:
             command.append("--container-writable")
         command.append("--container-entrypoint")
+        if self.mpi_rank_affinity_mode != "auto" and spec.uses_mpi:
+            command.extend(
+                [
+                    self.mpi_rank_affinity_wrapper,
+                    "--mode",
+                    self.mpi_rank_affinity_mode,
+                    "--",
+                ]
+            )
         command.append(spec.binary_path)
         command.extend(self.binary_args(spec, sizes, times))
         return command
@@ -1763,6 +1806,7 @@ class PaperClusterRunner:
             "sizes": list(sizes),
             "times": times,
             "warmup": self.warmup_for_spec(spec),
+            "mpi_rank_affinity_mode": self.mpi_rank_affinity_mode,
             "parsed": parsed,
             "used_device_peak_max_bytes": used_device_peak_max_bytes,
             "used_device_peak_max_mib": bytes_to_mib(used_device_peak_max_bytes)
@@ -1773,6 +1817,7 @@ class PaperClusterRunner:
         print(
             f"[{self.run_index:05d}] rc={returncode} g={spec.num_gpus} {spec.suite} {spec.case_name} "
             f"{spec.dim}D {spec.transport} {spec.strategy or '-'} {spec.mode or '-'} "
+            f"affinity={self.mpi_rank_affinity_mode} "
             f"{spec.p2p_variant or 'configured'} {spec.p2p_scheduler or 'sched-configured'} "
             f"{spec.pencil_layout or 'layout-configured'} {spec.pencil_pipeline or 'pipe-configured'} "
             f"{spec.fftm_3d_backend or 'backend-configured'} "
@@ -1829,6 +1874,7 @@ class PaperClusterRunner:
             "planned_runs": planned_runs,
             "failed_measurement_runs": failed_runs,
             "data_directory": str(self.data_dir),
+            "mpi_rank_affinity_mode": self.mpi_rank_affinity_mode,
         }
         (self.data_dir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -1850,6 +1896,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--container-writable", action="store_true")
     parser.add_argument("--srun-extra-args", default="")
     parser.add_argument("--srun-time", default="00:20:00")
+    parser.add_argument(
+        "--mpi-rank-affinity-mode",
+        choices=("auto", "hca"),
+        default="auto",
+        help=(
+            "Optional per-rank launch affinity applied before MPI_Init. "
+            "'hca' selects the configured GPU-local UCX HCA pair."
+        ),
+    )
+    parser.add_argument(
+        "--mpi-rank-affinity-wrapper",
+        default="",
+        help=(
+            "Absolute container path to the mounted rank-affinity wrapper. "
+            "Required when --mpi-rank-affinity-mode is not auto."
+        ),
+    )
     parser.add_argument("--gpus-per-node", type=int, default=8)
     parser.add_argument("--node-counts", default="1")
     parser.add_argument(
@@ -2187,6 +2250,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Native backward-second peer-loop matrix for 3D CUDA-aware native pencil-pencil P2P runs: "
             "configured, both, or comma-separated off,on."
         ),
+    )
+    parser.add_argument(
+        "--use-3d-deferred-send-completion",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: defer CUDA-aware 3D pencil send completion across the following local FFT. "
+            "Restricted to native reference-parity p2p-waitany byte transfers."
+        ),
+    )
+    parser.add_argument(
+        "--no-3d-deferred-send-completion",
+        action="store_false",
+        dest="use_3d_deferred_send_completion",
+        help="Disable deferred 3D pencil send completion.",
     )
     parser.add_argument(
         "--use-native-opt0-default-z-layout",
@@ -2821,7 +2899,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--pencil-pencil-grid-orientations",
         default="both",
         help=(
-            "Grid orientations scheduled for 3D pencil-pencil FFTM runs: configured, both, production, default, or reversed. "
+            "Grid orientations scheduled for 3D pencil-pencil FFTM runs: configured, both, production, default, reversed, "
+            "or an explicit comma-separated grid list such as 2x8,4x4. "
             "configured passes no --grid argument so an autotune config can choose the grid. "
             "production uses known safe choices, currently 7G opt0/auto -> 7x1, "
             "8G opt0/auto -> 4x2, and 8G opt1 -> 2x4. "

@@ -136,6 +136,7 @@ struct fftm_init_options
     bool        use_large_count_datatype_cache = false;
     bool        use_fft_exec_no_sync = false;
     bool        use_native_backward_second_peer_loop = false;
+    bool        use_3d_deferred_send_completion = false;
     bool        use_native_opt0_default_z_layout = false;
     bool        use_native_opt0_reference_y_buffer_topology = false;
     bool        use_native_opt0_compact_y_workarea = false;
@@ -1511,6 +1512,18 @@ private:
                 "production, or set fftm_init_options::allow_native_opt0_diagnostic_variants=true for diagnostics."
             );
         }
+        if ( options.use_3d_deferred_send_completion &&
+             ( strategy_family_3d != transform_strategy_3d::pencil_pencil ||
+               transpose_mode_3d != mpi_transpose_3d_mode::p2p_waitany ||
+               !strategy_3d_optimized_layout ||
+               !options.use_optimized ||
+               !is_reference_parity_pencil_pipeline_( options.pencil_pipeline_3d ) ) )
+        {
+            throw std::logic_error(
+                "FFTM deferred 3D send completion requires the optimized native pencil-pencil strategy, "
+                "p2p-waitany, and reference-parity."
+            );
+        }
         if ( options.use_4d_slab_native_xw_layout_stage &&
              options.spectral_layout_4d == fftm_4d_spectral_layout::native_xzwy )
         {
@@ -1667,7 +1680,7 @@ private:
             init_options_.use_4d_native_xw_compact_staging
         );
         same_xw_.set_slab_native_wz_communication_layout_enabled(
-            init_options_.use_4d_slab_native_wz_communication_layout
+            slab_4d_native_wz_communication_layout_enabled_()
         );
         same_zw_.set_peer_paired_p2p_enabled( init_options_.use_4d_pencil_same_zw_peer_paired );
         same_zw_.set_native_message_layout_enabled( pencil_4d_native_zw_message_layout_enabled_() );
@@ -1721,6 +1734,9 @@ private:
         );
         pencil_pencil_reference_owned_.set_native_backward_second_peer_loop_enabled(
             init_options_.use_native_backward_second_peer_loop
+        );
+        pencil_pencil_reference_owned_.set_deferred_send_completion_enabled(
+            init_options_.use_3d_deferred_send_completion
         );
         pencil_pencil_reference_owned_.set_local_fft_diagnostics(
             init_options_.enable_local_fft_diagnostics, init_options_.local_fft_diagnostics_directory,
@@ -3741,9 +3757,9 @@ private:
                         in, x_fft_zfast_3d_, stage1_yfft_zfast_3d_, stage1_zfast_3d_, stage0_default_z_3d_,
                         native_opt0_inverse_y_plan_names_, native_opt0_y_plan_offsets_, transpose_mode_3d
                     ) );
-                    SCFD_SAFE_CALL( pencil_pencil_reference_owned_.exec_local_fft(
-                        "reference_owned/backward_z_fft", "inverse_z", stage0_default_z_3d_, out
-                    ) );
+                    SCFD_SAFE_CALL(
+                        pencil_pencil_reference_owned_.exec_backward_z_with_deferred_send( stage0_default_z_3d_, out )
+                    );
                     return;
                 }
                 SCFD_SAFE_CALL( bind_stage1_3d_to_io_buffer_( in, "backward pencil-pencil spectral input" ) );

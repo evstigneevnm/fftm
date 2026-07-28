@@ -4207,6 +4207,16 @@ private:
         native_xzwy_compact_peer_offsets_.assign(
             static_cast<std::size_t>( line_comm_info_.num_procs ), std::numeric_limits<std::size_t>::max()
         );
+        // The WZ communication path sends and receives directly from the active
+        // spectral tensors. Its plane scheduler never packs through the generic
+        // native-XW staging buffers, so reserving one compact slot per peer only
+        // adds O(comm_size) device memory without serving an execution path.
+        if ( slab_native_wz_communication_layout_enabled_ )
+        {
+            send_buffer_elems_ = 0;
+            recv_buffer_elems_ = 0;
+            return;
+        }
         if ( !native_xzwy_compact_staging_enabled_ )
         {
             send_buffer_elems_ = max_buffer_elems_;

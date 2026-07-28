@@ -45,6 +45,11 @@ std::string stage_times_4d_filename( int rank )
     return "fftm_4d_stage_times_r" + std::to_string( rank ) + ".csv";
 }
 
+std::string wall_times_4d_filename( int rank )
+{
+    return "wall_times_4d_r" + std::to_string( rank ) + ".csv";
+}
+
 const char *stage_timer_4d_strategy_name( strategy_kind strategy )
 {
     switch ( strategy )
@@ -55,6 +60,45 @@ const char *stage_timer_4d_strategy_name( strategy_kind strategy )
         return "slab-slab";
     }
     return "unknown";
+}
+
+void append_4d_wall_time_rows(
+    const options_t &options, int num_procs, int rank, std::size_t p1, std::size_t p2, std::size_t p3,
+    const std::vector<T> &local_wall_times, const std::vector<T> &global_wall_times
+)
+{
+    if ( local_wall_times.size() != global_wall_times.size() )
+        throw std::logic_error( "4D local/global wall-time sample counts differ" );
+
+    const std::string header =
+        "source,rank,num_gpus,iteration,local_wall_ms,global_wall_ms,strategy,mode,p1,p2,p3,nx,ny,nz,nw,"
+        "native_spectral_layout,native_xw_direct_layout,native_xw_chunk_mib,native_xw_chunk_window,"
+        "native_xw_compact_staging,slab_native_work_area_alias,slab_native_wz_communication_layout,"
+        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,directory";
+    std::vector<std::string> rows;
+    rows.reserve( local_wall_times.size() );
+    for ( std::size_t i = 0; i < local_wall_times.size(); ++i )
+    {
+        std::ostringstream row;
+        row << fftm::test::detail::csv_quote( "fftm-4d-wall" ) << ',' << rank << ',' << num_procs << ',' << i
+            << ',' << local_wall_times[i] << ',' << global_wall_times[i] << ','
+            << fftm::test::detail::csv_quote( stage_timer_4d_strategy_name( options.strategy ) ) << ','
+            << fftm::test::detail::csv_quote( fftm::mpi_transpose_3d_mode_name( options.mode ) ) << ',' << p1
+            << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
+            << options.nw << ',' << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_native_xw_direct_layout ? 1 : 0 ) << ',' << options.native_xw_chunk_mib << ','
+            << options.native_xw_chunk_window << ',' << ( options.use_4d_native_xw_compact_staging ? 1 : 0 )
+            << ',' << ( options.use_4d_slab_native_work_area_alias ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_communication_layout ? 1 : 0 ) << ','
+            << options.slab_native_wz_plan_concurrency << ','
+            << ( options.use_4d_slab_native_wz_ready_pipeline ? 1 : 0 ) << ','
+            << fftm::test::detail::csv_quote( options.directory );
+        rows.push_back( row.str() );
+    }
+
+    fftm::test::detail::append_csv_rows(
+        options.directory, wall_times_4d_filename( rank ), header, rows
+    );
 }
 
 void append_4d_stage_timer_rows(
@@ -207,7 +251,9 @@ int run_benchmark_case(
     for_each.block_size = 128;
 
     const T        normalization = T( 1 ) / static_cast<T>( options.nx * options.ny * options.nz * options.nw );
+    std::vector<T> local_wall_times;
     std::vector<T> wall_times;
+    local_wall_times.reserve( static_cast<std::size_t>( options.times ) );
     wall_times.reserve( static_cast<std::size_t>( options.times ) );
     T    max_norm          = T( 0 );
     bool validation_failed = false;
@@ -271,12 +317,15 @@ int run_benchmark_case(
         }
         runtime_api_t::device_synchronize();
         t1.record();
-        const T wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
-        wall_times.push_back( wall_ms );
+        const T local_wall_ms  = static_cast<T>( t1.elapsed_time( t0 ) );
+        const T global_wall_ms = comm_info.all_reduce_max( local_wall_ms );
+        local_wall_times.push_back( local_wall_ms );
+        wall_times.push_back( global_wall_ms );
         if ( options.enable_native_stage_timers )
         {
             append_4d_stage_timer_rows(
-                options, comm_info.num_procs, comm_info.myid, iter, p1, p2, p3, static_cast<double>( wall_ms ),
+                options, comm_info.num_procs, comm_info.myid, iter, p1, p2, p3,
+                static_cast<double>( global_wall_ms ),
                 distributed_fft.slab_4d_native_work_area_alias_effective(),
                 distributed_fft.native_stage_timings()
             );
@@ -315,6 +364,9 @@ int run_benchmark_case(
             validation_failed = true;
     }
 
+    append_4d_wall_time_rows(
+        options, comm_info.num_procs, comm_info.myid, p1, p2, p3, local_wall_times, wall_times
+    );
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
     fftm::test::detail::log_tracked_memory_with_external_mpi(
         log, comm_info, distributed_fft, "benchmark=fftm-4d",
@@ -328,7 +380,7 @@ int run_benchmark_case(
     {
         log.info_f(
             "benchmark=fftm-4d, strategy=%s, mode=%s, grid=(%zu,%zu,%zu), Nx=%zu, Ny=%zu, Nz=%zu, Nw=%zu, "
-            "warmup=%d, times=%d: avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
+            "warmup=%d, times=%d: wall_time_scope=mpi-rank-max, avg_wall_ms=%.8e, stddev_wall_ms=%.8e",
             fftm_t::strategy_name_4d(), fftm::mpi_transpose_3d_mode_name( fftm_t::transpose_mode_4d ), p1, p2, p3,
             options.nx, options.ny, options.nz, options.nw, options.warmup, options.times, stats.mean, stats.stddev
         );
@@ -369,7 +421,8 @@ int run_benchmark_case(
             << ( options.use_4d_pencil_degenerate_wz_sliced_z_fft ? 1 : 0 ) << ','
             << p1 << ',' << p2 << ',' << p3 << ',' << options.nx << ',' << options.ny << ',' << options.nz << ','
             << options.nw << ',' << options.times << ',' << options.warmup << ',' << options.epsilon << ','
-            << stats.mean << ',' << stats.stddev << ',' << max_norm << ','
+            << fftm::test::detail::csv_quote( "mpi-rank-max" ) << ',' << stats.mean << ',' << stats.stddev << ','
+            << max_norm << ','
             << fftm::test::detail::csv_quote( options.directory );
 
         fftm::test::detail::append_csv_row(
@@ -386,7 +439,7 @@ int run_benchmark_case(
             "pencil_degenerate_xw_slab_path,pencil_degenerate_local_transposes,"
             "pencil_degenerate_same_xw_native,pencil_degenerate_wz_sliced_z_fft,"
             "p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,"
-            "avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
+            "wall_time_scope,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
             row.str()
         );
     }

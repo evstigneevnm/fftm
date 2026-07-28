@@ -146,6 +146,28 @@ inline void append_csv_row(
     out << row << '\n';
 }
 
+inline void append_csv_rows(
+    const std::string &directory, const std::string &filename, const std::string &header,
+    const std::vector<std::string> &rows
+)
+{
+    if ( rows.empty() )
+        return;
+
+    ensure_directory_exists( directory );
+    const std::string path         = join_path( directory, filename );
+    const bool        write_header = !path_exists( path );
+
+    std::ofstream out( path.c_str(), std::ios::out | std::ios::app );
+    if ( !out )
+        throw std::runtime_error( "Failed to open CSV output file '" + path + "'" );
+
+    if ( write_header )
+        out << header << '\n';
+    for ( const auto &row : rows )
+        out << row << '\n';
+}
+
 __DEVICE_TAG__ inline unsigned long long splitmix64( unsigned long long x )
 {
     x += 0x9E3779B97F4A7C15ull;

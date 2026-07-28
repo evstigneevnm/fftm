@@ -936,12 +936,23 @@ def pencil_layouts_for_spec(dim: int, strategy: str, selected: Sequence[Optional
 
 
 def pencil_pipelines_for_spec(
-    dim: int, strategy: str, mode: Optional[str], selected: Sequence[Optional[str]]
+    dim: int,
+    strategy: str,
+    mode: Optional[str],
+    selected: Sequence[Optional[str]],
+    transport: Optional[str] = None,
 ) -> List[Optional[str]]:
     if dim == 3 and strategy == "pencil-pencil":
         if mode is not None and not mode.startswith("p2p-"):
             return [None]
-        return list(selected)
+        pipelines = list(selected)
+        if transport == "non_cuda_aware":
+            # reference-parity is the device-aware byte path.  Use the
+            # host-staging-capable reference implementation for NCA
+            # matrices and remove duplicates when both were requested.
+            pipelines = ["reference" if item == "reference-parity" else item for item in pipelines]
+            pipelines = list(dict.fromkeys(pipelines))
+        return pipelines
     return [None]
 
 
@@ -1711,6 +1722,17 @@ def parse_fftm_4d_native_xw_direct_layouts(value: str) -> List[Optional[bool]]:
             + ", ".join(allowed)
         )
     return selected or [None]
+
+
+def fftm_4d_native_xw_direct_layouts_for_transport(
+    transport: str, selected: Sequence[Optional[bool]]
+) -> List[Optional[bool]]:
+    if transport == "non_cuda_aware":
+        # The direct XW and WZ-ready paths pass device pointers to MPI. Keep
+        # native XW/native spectral layout for NCA runs, but force the
+        # host-staged transpose implementation.
+        return [False]
+    return list(selected)
 
 
 def parse_fftm_4d_native_xw_protocols(value: str) -> List[Optional[str]]:
@@ -2647,6 +2669,20 @@ def grid_orientations_for_spec(
     if dim != 3:
         return [None]
 
+    if orientation_mode.startswith("explicit:"):
+        grids = []
+        for item in orientation_mode.removeprefix("explicit:").split(","):
+            p1_text, p2_text = item.split("x", 1)
+            grid = (int(p1_text), int(p2_text))
+            if grid[0] * grid[1] == num_gpus:
+                grids.append(grid)
+        if not grids:
+            raise ValueError(
+                "No explicit 3D pencil grid in "
+                f"{orientation_mode.removeprefix('explicit:')!r} has product {num_gpus}"
+            )
+        return _dedupe_grids(grids)
+
     if orientation_mode in ("configured", "autotune"):
         return [None]
 
@@ -2682,7 +2718,15 @@ def grid_slug(grid: Optional[Tuple[int, ...]]) -> str:
 
 
 def parse_pencil_grid_orientations(value: str) -> str:
-    value = (value or "both").strip().lower()
+    value = re.sub(r"\s+", "", (value or "both").strip().lower())
+    if "x" in value:
+        items = value.split(",")
+        if not items or any(not re.fullmatch(r"[1-9][0-9]*x[1-9][0-9]*", item) for item in items):
+            raise ValueError(
+                "Explicit 3D pencil grids must be a comma-separated list such as 2x8,4x4"
+            )
+        return "explicit:" + ",".join(items)
+
     aliases = {
         "configured": "configured",
         "config": "configured",
@@ -2702,7 +2746,8 @@ def parse_pencil_grid_orientations(value: str) -> str:
     }
     if value not in aliases:
         raise ValueError(
-            "--pencil-pencil-grid-orientations must be one of: configured, both, production, default, reversed"
+            "--pencil-pencil-grid-orientations must be one of: configured, both, production, "
+            "default, reversed, or an explicit comma-separated grid list such as 2x8,4x4"
         )
     return aliases[value]
 
@@ -2903,7 +2948,9 @@ def add_fftm_specs(
                         for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
                             for scheduler in p2p_schedulers_for_spec(3, transport_name, mode, p2p_schedulers):
                                 for pencil_layout in pencil_layouts_for_spec(3, strategy, pencil_layouts):
-                                    for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, mode, pencil_pipelines):
+                                    for pencil_pipeline in pencil_pipelines_for_spec(
+                                        3, strategy, mode, pencil_pipelines, transport_name
+                                    ):
                                         for large_count_transport in large_count_p2p_transports_for_spec(
                                             3, transport_name, strategy, mode, pencil_pipeline, large_count_p2p_transports
                                         ):
@@ -3019,7 +3066,9 @@ def add_fftm_specs(
                                                         fftm_4d_pencil_degenerate_local_transposes,
                                                         fftm_4d_pencil_degenerate_same_xw_native,
                                                         fftm_4d_pencil_degenerate_wz_sliced_z_fft,
-                                                        fftm_4d_native_xw_direct_layouts,
+                                                        fftm_4d_native_xw_direct_layouts_for_transport(
+                                                            transport_name, fftm_4d_native_xw_direct_layouts
+                                                        ),
                                                         fftm_4d_native_xw_protocols,
                                                         fftm_4d_native_xw_chunk_windows,
                                                         fftm_4d_native_xw_compact_stagings,
@@ -3108,7 +3157,9 @@ def add_fftm_specs(
                             for variant in p2p_variants_for_spec(3, transport_name, strategy, mode, p2p_variants):
                                 for scheduler in p2p_schedulers_for_spec(3, transport_name, mode, p2p_schedulers):
                                     for pencil_layout in pencil_layouts_for_spec(3, strategy, pencil_layouts):
-                                        for pencil_pipeline in pencil_pipelines_for_spec(3, strategy, mode, pencil_pipelines):
+                                        for pencil_pipeline in pencil_pipelines_for_spec(
+                                            3, strategy, mode, pencil_pipelines, transport_name
+                                        ):
                                             for large_count_transport in large_count_p2p_transports_for_spec(
                                                 3,
                                                 transport_name,
@@ -3737,6 +3788,11 @@ class LocalPaperBenchmarkRunner:
                         if spec.native_backward_second_peer_loop
                         else "--no-native-backward-second-peer-loop"
                     )
+                command.append(
+                    "--use-3d-deferred-send-completion"
+                    if self.args.use_3d_deferred_send_completion
+                    else "--no-3d-deferred-send-completion"
+                )
                 command.append(
                     "--use-native-opt0-default-z-layout"
                     if self.args.use_native_opt0_default_z_layout
@@ -4554,6 +4610,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Native backward-second peer-loop matrix for 3D CUDA-aware native pencil-pencil P2P runs: "
             "configured, both, or comma-separated off,on."
         ),
+    )
+    parser.add_argument(
+        "--use-3d-deferred-send-completion",
+        action="store_true",
+        default=False,
+        help=(
+            "Experimental: defer CUDA-aware 3D pencil send completion across the following local FFT. "
+            "Restricted to native reference-parity p2p-waitany byte transfers."
+        ),
+    )
+    parser.add_argument(
+        "--no-3d-deferred-send-completion",
+        action="store_false",
+        dest="use_3d_deferred_send_completion",
+        help="Disable deferred 3D pencil send completion.",
     )
     parser.add_argument(
         "--use-native-opt0-default-z-layout",

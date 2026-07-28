@@ -62,6 +62,7 @@ ALL_BINS = \
 	test_fft_3D.bin \
 	test_mpi_transpose_3D.bin \
 	test_mpi_transpose_3D_nca.bin \
+	test_scfd_mpi_transport.bin \
 	test_egger_pencil_comm_pattern_3D.bin \
 	test_mpi_transpose_4D.bin \
 	test_mpi_transpose_4D_nca.bin \
@@ -150,6 +151,8 @@ $(eval $(call BUILD_CUDA_TEST,test_cudaMemcpy3DAsync.bin,test_cudaMemcpy3DAsync.
 
 $(eval $(call BUILD_MPI_TEST,test_mpi_transpose_3D.bin,test_mpi_transpose_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_mpi_transpose_3D.o,-lcudart -lmpi))
 $(eval $(call BUILD_MPI_TEST,test_mpi_transpose_3D_nca.bin,test_mpi_transpose_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_NCA),test_mpi_transpose_3D_nca.o,-lcudart -lmpi))
+
+$(eval $(call BUILD_MPI_TEST,test_scfd_mpi_transport.bin,test_scfd_mpi_transport.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS) -DPLATFORM_CUDA -DSCFD_BACKEND_ENABLE_MPI,test_scfd_mpi_transport.o,-lcudart -lmpi))
 
 $(eval $(call BUILD_MPI_TEST,test_egger_pencil_comm_pattern_3D.bin,test_egger_pencil_comm_pattern_3D.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_egger_pencil_comm_pattern_3D.o,-lcudart -lmpi))
 

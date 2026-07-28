@@ -54,6 +54,7 @@ class ResultRow:
     fftm_3d_backend: str
     native_opt0_y_executor_variant: str
     native_opt0_y_no_sync_exec: str
+    fftm_4d_slab_native_wz_plan_concurrency: str
     grid: str
     large_count_p2p_transport: str
     fft_exec_no_sync: str
@@ -475,6 +476,10 @@ def repair_rows_from_cpp_csv(data_dir: Path, rows: List[ResultRow]) -> None:
         )
         repair = repairs.get(key)
         if not repair:
+            candidates = [candidate for repair_key, candidate in repairs.items() if repair_key[:-1] == key[:-1]]
+            if len(candidates) == 1:
+                repair = candidates[0]
+        if not repair:
             continue
         csv_avg_wall_ms = as_float(repair.get("avg_wall_ms"))
         csv_stddev_wall_ms = as_float(repair.get("stddev_wall_ms"))
@@ -487,10 +492,60 @@ def repair_rows_from_cpp_csv(data_dir: Path, rows: List[ResultRow]) -> None:
             row.max_l2 = csv_max_l2
         if "native_opt0_y_no_sync_exec" in repair:
             row.native_opt0_y_no_sync_exec = str(repair.get("native_opt0_y_no_sync_exec"))
+        if native_opt0_y_variant_relevant(
+            row.fftm_3d_backend, row.strategy, row.pencil_layout, row.pencil_pipeline
+        ):
+            row.native_opt0_y_executor_variant = native_opt0_y_executor_variant_from_cpp_row(repair)
         if row.contiguous_forward_send_registration_warmups.endswith(":"):
             row.contiguous_forward_send_registration_warmups = repair.get(
                 "contiguous_forward_send_registration_warmups", row.contiguous_forward_send_registration_warmups
             )
+
+    fftm_4d_csv = data_dir / "cpp_csv" / "benchmark_fftm_4d.csv"
+    if not fftm_4d_csv.exists():
+        fftm_4d_csv = data_dir / "benchmark_fftm_4d.csv"
+    if not fftm_4d_csv.exists():
+        return
+
+    repairs_4d: Dict[Tuple[object, ...], dict] = {}
+    with fftm_4d_csv.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+        for repair in csv.DictReader(handle):
+            if repair.get("benchmark") != "fftm-4d":
+                continue
+            sizes = tuple(int(repair.get(name) or 0) for name in ("nx", "ny", "nz", "nw"))
+            key = (
+                int(repair.get("num_gpus") or 0),
+                sizes,
+                repair.get("strategy") or "-",
+                repair.get("mode") or "-",
+                grid_label([repair.get("p1") or 0, repair.get("p2") or 0, repair.get("p3") or 0]),
+                str(repair.get("slab_native_wz_plan_concurrency") or "configured"),
+            )
+            repairs_4d[key] = repair
+
+    for row in rows:
+        if row.dim != 4:
+            continue
+        key = (
+            row.num_gpus,
+            row.sizes,
+            row.strategy,
+            row.mode,
+            row.grid,
+            row.fftm_4d_slab_native_wz_plan_concurrency,
+        )
+        repair = repairs_4d.get(key)
+        if not repair:
+            continue
+        csv_avg_wall_ms = as_float(repair.get("avg_wall_ms"))
+        csv_stddev_wall_ms = as_float(repair.get("stddev_wall_ms"))
+        csv_max_l2 = max_numeric(repair, ["max_l2_diff", "rel_l2_diff"])
+        if csv_avg_wall_ms is not None:
+            row.avg_wall_ms = csv_avg_wall_ms
+        if csv_stddev_wall_ms is not None:
+            row.stddev_wall_ms = csv_stddev_wall_ms
+        if csv_max_l2 is not None:
+            row.max_l2 = csv_max_l2
 
 
 def entries_from_parsed(parsed: dict, key: str) -> Dict[str, dict]:
@@ -531,6 +586,11 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
                 summary.get("native_opt0_y_no_sync_exec")
                 if summary.get("native_opt0_y_no_sync_exec") is not None
                 else "configured"
+            )
+            fftm_4d_slab_native_wz_plan_concurrency = str(
+                spec.get("fftm_4d_slab_native_wz_plan_concurrency")
+                if spec.get("fftm_4d_slab_native_wz_plan_concurrency") is not None
+                else summary.get("slab_native_wz_plan_concurrency", "configured")
             )
             if (
                 native_opt0_y_executor_variant == "configured"
@@ -701,6 +761,7 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
                     fftm_3d_backend=str(fftm_3d_backend),
                     native_opt0_y_executor_variant=str(native_opt0_y_executor_variant),
                     native_opt0_y_no_sync_exec=native_opt0_y_no_sync_exec,
+                    fftm_4d_slab_native_wz_plan_concurrency=fftm_4d_slab_native_wz_plan_concurrency,
                     grid=grid,
                     large_count_p2p_transport=large_count_p2p_transport,
                     fft_exec_no_sync=fft_exec_no_sync,
@@ -733,6 +794,7 @@ def parse_rows(data_dir: Path, phases: Sequence[str] = ("measure",)) -> List[Res
                             "max_l2",
                             "forward_rel_l2",
                             "backward_rel_l2",
+                            "max_l2_diff",
                         ],
                     ),
                     max_h1=max_numeric(summary, ["H1", "h1", "max_h1"]),
@@ -851,6 +913,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                 "fftm_3d_backend",
                 "native_opt0_y_executor_variant",
                 "native_opt0_y_no_sync_exec",
+                "fftm_4d_slab_native_wz_plan_concurrency",
                 "grid",
                 "large_count_p2p_transport",
                 "fft_exec_no_sync",
@@ -895,6 +958,7 @@ def write_csv_outputs(rows: List[ResultRow], csv_dir: Path) -> List[Path]:
                     r.fftm_3d_backend,
                     r.native_opt0_y_executor_variant,
                     r.native_opt0_y_no_sync_exec,
+                    r.fftm_4d_slab_native_wz_plan_concurrency,
                     r.grid,
                     r.large_count_p2p_transport,
                     r.fft_exec_no_sync,

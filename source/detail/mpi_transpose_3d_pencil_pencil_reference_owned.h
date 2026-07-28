@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <scfd/arrays/array_nd.h>
@@ -98,6 +99,44 @@ public:
     using profiler_t        = ::fftm::fftm_profiler;
     using profiler_scope_t  = ::fftm::profile_scope<profiler_t>;
     using memory_profiler_t = ::fftm::fftm_memory_profiler;
+
+private:
+    enum class deferred_send_stage
+    {
+        none,
+        forward_first,
+        forward_second,
+        backward_second,
+        backward_first
+    };
+
+    enum class deferred_send_communicator
+    {
+        row,
+        line
+    };
+
+    struct deferred_send_state
+    {
+        deferred_send_stage        stage = deferred_send_stage::none;
+        deferred_send_communicator communicator = deferred_send_communicator::row;
+        std::vector<mpi_request_t> requests;
+        int                        remaining = 0;
+
+        bool active() const
+        {
+            return stage != deferred_send_stage::none;
+        }
+
+        void reset()
+        {
+            stage     = deferred_send_stage::none;
+            remaining = 0;
+            requests.clear();
+        }
+    };
+
+public:
     using plan_sequence_id_t = typename base_fft_t::plan_sequence_id_t;
     using c2c_plan_array_id_t = typename base_fft_t::c2c_plan_array_id_t;
 
@@ -132,6 +171,7 @@ public:
 
     ~mpi_transpose_3d_pencil_pencil_reference_owned()
     {
+        drain_deferred_send_noexcept_();
         free_persistent_send_states_();
         free_large_byte_datatype_caches_();
         free_forward_direct_recvtypes_();
@@ -243,6 +283,11 @@ public:
     void set_native_backward_second_peer_loop_enabled( bool enabled )
     {
         use_native_backward_second_peer_loop_ = enabled;
+    }
+
+    void set_deferred_send_completion_enabled( bool enabled )
+    {
+        use_deferred_send_completion_ = enabled;
     }
 
     void set_native_opt0_default_z_layout_enabled( bool enabled )
@@ -507,6 +552,7 @@ private:
     )
     {
         auto scope = profile_scope_( "mpi_transpose_3d_pencil_pencil_reference_owned::init" );
+        ensure_no_deferred_send_( "initialization" );
         if ( mode != mpi_transpose_3d_mode::p2p_waitall && mode != mpi_transpose_3d_mode::p2p_waitany )
         {
             throw std::logic_error( "owned reference pencil-pencil pipeline currently supports only p2p modes" );
@@ -629,6 +675,14 @@ public:
     void exec_local_fft( const char *profile_name, const char *plan_name, const ArrayIn &in, ArrayOut &out )
     {
         exec_local_fft_( profile_name, plan_name, in, out );
+    }
+
+    template <class ArrayIn, class ArrayOut>
+    void exec_backward_z_with_deferred_send( const ArrayIn &in, ArrayOut &out )
+    {
+        execute_with_deferred_send_overlap_( deferred_send_stage::backward_first, [&]() {
+            exec_local_fft_( "reference_owned/backward_z_fft", "inverse_z", in, out );
+        } );
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -1753,7 +1807,9 @@ public:
 		            auto phase = profile_scope_( "reference_owned/forward_first_redistribution" );
 		            SCFD_SAFE_CALL( forward_first_( stage0, stage1 ) );
 		        } );
-	        exec_local_fft_( "reference_owned/forward_y_fft", "forward_y", stage1, stage1_xfast );
+        execute_with_deferred_send_overlap_( deferred_send_stage::forward_first, [&]() {
+            exec_local_fft_( "reference_owned/forward_y_fft", "forward_y", stage1, stage1_xfast );
+        } );
 		        time_native_stage_( "reference_owned/forward_second_redistribution", [&]() {
 		            auto phase = profile_scope_( "reference_owned/forward_second_redistribution" );
 		            if ( native_forward_second_facade_active_() )
@@ -1765,7 +1821,9 @@ public:
 		                SCFD_SAFE_CALL( forward_second_xfast_( stage1_xfast, x_fft_stage ) );
 		            }
 		        } );
-	        exec_local_fft_( "reference_owned/forward_x_fft", "forward_x", x_fft_stage, out );
+        execute_with_deferred_send_overlap_( deferred_send_stage::forward_second, [&]() {
+            exec_local_fft_( "reference_owned/forward_x_fft", "forward_x", x_fft_stage, out );
+        } );
 	    }
 
     template <
@@ -1785,7 +1843,9 @@ public:
 	        SCFD_SAFE_CALL( backward_to_stage0(
 	            in, x_fft_stage, stage1_xfast, stage1, stage0, mode
 	        ) );
-	        exec_local_fft_( "reference_owned/backward_z_fft", "inverse_z", stage0, out );
+        execute_with_deferred_send_overlap_( deferred_send_stage::backward_first, [&]() {
+            exec_local_fft_( "reference_owned/backward_z_fft", "inverse_z", stage0, out );
+        } );
 	    }
 
     template <class ComplexArray3, class XFFTComplex3, class XFastComplex3, class Stage1Complex3, class Stage0Complex3>
@@ -1806,7 +1866,9 @@ public:
 		                SCFD_SAFE_CALL( backward_second_xfast_( x_fft_stage, stage1_xfast ) );
 		            }
 		        } );
-	        exec_local_fft_( "reference_owned/backward_y_fft", "inverse_y", stage1_xfast, stage1 );
+        execute_with_deferred_send_overlap_( deferred_send_stage::backward_second, [&]() {
+            exec_local_fft_( "reference_owned/backward_y_fft", "inverse_y", stage1_xfast, stage1 );
+        } );
 		        time_native_stage_( "reference_owned/backward_first_redistribution", [&]() {
 		            auto phase = profile_scope_( "reference_owned/backward_first_redistribution" );
 		            SCFD_SAFE_CALL( backward_first_( stage1, stage0 ) );
@@ -1828,25 +1890,30 @@ public:
             auto phase = profile_scope_( "reference_owned/forward_first_redistribution" );
             SCFD_SAFE_CALL( forward_first_( stage0, stage1 ) );
         } );
-        if ( native_opt0_y_plan_array_bundle_active_() )
-        {
-            exec_local_fft_plan_array_bundle_(
-                "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", stage1, stage1_yfft, direction::C2CF
-            );
-        }
-        else
-        {
-            exec_local_fft_many_offsets_(
-                "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", forward_y_plan_names, y_plan_offsets,
-                stage1, stage1_yfft, native_opt0_forward_y_plan_sequence_, use_native_opt0_shared_y_plan_handles_,
-                direction::C2CF
-            );
-        }
+        execute_with_deferred_send_overlap_( deferred_send_stage::forward_first, [&]() {
+            if ( native_opt0_y_plan_array_bundle_active_() )
+            {
+                exec_local_fft_plan_array_bundle_(
+                    "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", stage1, stage1_yfft,
+                    direction::C2CF
+                );
+            }
+            else
+            {
+                exec_local_fft_many_offsets_(
+                    "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", forward_y_plan_names,
+                    y_plan_offsets, stage1, stage1_yfft, native_opt0_forward_y_plan_sequence_,
+                    use_native_opt0_shared_y_plan_handles_, direction::C2CF
+                );
+            }
+        } );
 	        time_native_stage_( "reference_owned/forward_second_redistribution", [&]() {
 	            auto phase = profile_scope_( "reference_owned/forward_second_redistribution" );
 	            SCFD_SAFE_CALL( forward_second_xfast_( stage1_yfft, out ) );
 	        } );
-        exec_local_fft_( "reference_owned/forward_x_fft", "forward_x", out, out );
+        execute_with_deferred_send_overlap_( deferred_send_stage::forward_second, [&]() {
+            exec_local_fft_( "reference_owned/forward_x_fft", "forward_x", out, out );
+        } );
     }
 
     template <class Stage0ZFast3, class Stage1ZFast3, class Stage1YFast3, class XStage3, class ComplexArray3>
@@ -1875,20 +1942,23 @@ public:
 	            debug_native_opt0_topology_marker_( "forward:first_transpose:end" );
         } );
         debug_native_opt0_topology_marker_( "forward:y_fft:begin" );
-        if ( native_opt0_y_plan_array_bundle_active_() )
-        {
-            exec_local_fft_plan_array_bundle_(
-                "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", stage1, stage1_yfft, direction::C2CF
-            );
-        }
-        else
-        {
-            exec_local_fft_many_offsets_(
-                "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", forward_y_plan_names, y_plan_offsets,
-                stage1, stage1_yfft, native_opt0_forward_y_plan_sequence_, use_native_opt0_shared_y_plan_handles_,
-                direction::C2CF
-            );
-        }
+        execute_with_deferred_send_overlap_( deferred_send_stage::forward_first, [&]() {
+            if ( native_opt0_y_plan_array_bundle_active_() )
+            {
+                exec_local_fft_plan_array_bundle_(
+                    "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", stage1, stage1_yfft,
+                    direction::C2CF
+                );
+            }
+            else
+            {
+                exec_local_fft_many_offsets_(
+                    "reference_owned/forward_y_fft", "forward_y_native_opt0_zfast", forward_y_plan_names,
+                    y_plan_offsets, stage1, stage1_yfft, native_opt0_forward_y_plan_sequence_,
+                    use_native_opt0_shared_y_plan_handles_, direction::C2CF
+                );
+            }
+        } );
         debug_native_opt0_topology_marker_( "forward:y_fft:end" );
 	        time_native_stage_( "reference_owned/forward_second_redistribution", [&]() {
 	            debug_native_opt0_topology_marker_( "forward:second_transpose:begin" );
@@ -1897,7 +1967,9 @@ public:
 	            debug_native_opt0_topology_marker_( "forward:second_transpose:end" );
 	        } );
         debug_native_opt0_topology_marker_( "forward:x_fft:begin" );
-        exec_local_fft_( "reference_owned/forward_x_fft", "forward_x", x_stage, out );
+        execute_with_deferred_send_overlap_( deferred_send_stage::forward_second, [&]() {
+            exec_local_fft_( "reference_owned/forward_x_fft", "forward_x", x_stage, out );
+        } );
         debug_native_opt0_topology_marker_( "forward:x_fft:end" );
     }
 
@@ -1920,20 +1992,23 @@ public:
 	            auto phase = profile_scope_( "reference_owned/backward_second_redistribution" );
 	            SCFD_SAFE_CALL( backward_second_xfast_( x_fft_stage, stage1_yfft ) );
 	        } );
-        if ( native_opt0_y_plan_array_bundle_active_() )
-        {
-            exec_local_fft_plan_array_bundle_(
-                "reference_owned/backward_y_fft", "inverse_y_native_opt0_zfast", stage1_yfft, stage1, direction::C2CB
-            );
-        }
-        else
-        {
-            exec_local_fft_many_offsets_(
-                "reference_owned/backward_y_fft", "inverse_y_native_opt0_zfast", inverse_y_plan_names, y_plan_offsets,
-                stage1_yfft, stage1, native_opt0_inverse_y_plan_sequence_, use_native_opt0_shared_y_plan_handles_,
-                direction::C2CB
-            );
-        }
+        execute_with_deferred_send_overlap_( deferred_send_stage::backward_second, [&]() {
+            if ( native_opt0_y_plan_array_bundle_active_() )
+            {
+                exec_local_fft_plan_array_bundle_(
+                    "reference_owned/backward_y_fft", "inverse_y_native_opt0_zfast", stage1_yfft, stage1,
+                    direction::C2CB
+                );
+            }
+            else
+            {
+                exec_local_fft_many_offsets_(
+                    "reference_owned/backward_y_fft", "inverse_y_native_opt0_zfast", inverse_y_plan_names,
+                    y_plan_offsets, stage1_yfft, stage1, native_opt0_inverse_y_plan_sequence_,
+                    use_native_opt0_shared_y_plan_handles_, direction::C2CB
+                );
+            }
+        } );
 	        time_native_stage_( "reference_owned/backward_first_redistribution", [&]() {
 	            auto phase = profile_scope_( "reference_owned/backward_first_redistribution" );
 	            SCFD_SAFE_CALL( backward_first_( stage1, stage0 ) );
@@ -3682,6 +3757,21 @@ public:
 
     void validate_reference_parity_() const
     {
+        if ( use_deferred_send_completion_ )
+        {
+#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+            throw std::logic_error( "owned deferred send completion requires CUDA-aware MPI" );
+#else
+            if ( !reference_parity_enabled_ || mode_ != mpi_transpose_3d_mode::p2p_waitany ||
+                 !use_p2p_byte_transfer_ || use_persistent_p2p_ )
+            {
+                throw std::logic_error(
+                    "owned deferred send completion requires reference-parity, p2p-waitany, CUDA-aware byte "
+                    "transfers, and nonpersistent requests"
+                );
+            }
+#endif
+        }
         if ( !reference_parity_enabled_ )
             return;
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
@@ -4362,10 +4452,11 @@ public:
 	                                             mode_ == mpi_transpose_3d_mode::p2p_waitall
 	                                         ? "waitall"
 	                                         : "waitany" )
-	           << " backward_send=" << ( reference_parity_backward_ready_post_send_enabled_() ? "pack_ready_post"
-	                                    : reference_byte_sync_enabled_()                    ? "pack_sync"
-	                                                                                   : "configured" )
-	           << " row_peers=" << row_comm_order_.size() << " line_peers=" << line_comm_order_.size()
+		           << " backward_send=" << ( reference_parity_backward_ready_post_send_enabled_() ? "pack_ready_post"
+		                                    : reference_byte_sync_enabled_()                    ? "pack_sync"
+		                                                                                   : "configured" )
+                   << " deferred_send_completion=" << ( deferred_send_completion_active_() ? 1 : 0 )
+		           << " row_peers=" << row_comm_order_.size() << " line_peers=" << line_comm_order_.size()
                << " native_plan_state=" << ( native_plan_state_bound_ ? 1 : 0 )
                << " native_first_schedule=" << ( native_first_schedule_active_() ? 1 : 0 )
                << " native_second_schedule=" << ( native_second_schedule_active_() ? 1 : 0 )
@@ -4937,6 +5028,200 @@ public:
         comm_info.waitall( detail::mpi_int_cast( requests.size(), what ), requests.data() );
     }
 
+    static const char *deferred_send_stage_name_( deferred_send_stage stage )
+    {
+        switch ( stage )
+        {
+        case deferred_send_stage::forward_first:
+            return "forward_first";
+        case deferred_send_stage::forward_second:
+            return "forward_second";
+        case deferred_send_stage::backward_second:
+            return "backward_second";
+        case deferred_send_stage::backward_first:
+            return "backward_first";
+        case deferred_send_stage::none:
+            return "none";
+        }
+        return "unknown";
+    }
+
+    bool deferred_send_completion_active_() const
+    {
+#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+        return use_deferred_send_completion_ && reference_parity_enabled_ &&
+               mode_ == mpi_transpose_3d_mode::p2p_waitany && cuda_aware_byte_p2p_enabled_() &&
+               !use_persistent_p2p_;
+#else
+        return false;
+#endif
+    }
+
+    scfd::communication::mpi_comm_info &deferred_send_comm_info_()
+    {
+        return deferred_send_state_.communicator == deferred_send_communicator::row ? row_comm_info_
+                                                                                    : line_comm_info_;
+    }
+
+    std::string deferred_send_profile_name_( deferred_send_stage stage, const char *action ) const
+    {
+        return std::string( "deferred_send/" ) + deferred_send_stage_name_( stage ) + "/" + action;
+    }
+
+    template <class Fn>
+    void time_deferred_send_action_( deferred_send_stage stage, const char *action, Fn fn )
+    {
+        const std::string label = deferred_send_profile_name_( stage, action );
+        auto              scope = profile_scope_( label );
+        if ( !native_stage_timing_active_ )
+        {
+            fn();
+            return;
+        }
+
+        scfd::utils::system_timer_event begin;
+        scfd::utils::system_timer_event end;
+        begin.record();
+        fn();
+        end.record();
+        record_native_stage_timing_( label.c_str(), end.elapsed_time( begin ) );
+    }
+
+    void ensure_no_deferred_send_( const char *where ) const
+    {
+        if ( !deferred_send_state_.active() )
+            return;
+        throw std::logic_error(
+            std::string( "owned reference deferred send still active at " ) + where + ": " +
+            deferred_send_stage_name_( deferred_send_state_.stage )
+        );
+    }
+
+    void defer_byte_send_requests_(
+        deferred_send_stage stage, deferred_send_communicator communicator,
+        std::vector<mpi_request_t> &byte_send_requests
+    )
+    {
+        ensure_no_deferred_send_( "new send deferral" );
+        time_deferred_send_action_( stage, "send_deferred", [&]() {
+            deferred_send_state_.stage        = stage;
+            deferred_send_state_.communicator = communicator;
+            deferred_send_state_.requests.swap( byte_send_requests );
+            deferred_send_state_.remaining =
+                detail::mpi_int_cast( deferred_send_state_.requests.size(), "owned deferred send request count" );
+            if ( deferred_send_state_.remaining == 0 )
+                deferred_send_state_.reset();
+        } );
+    }
+
+    void probe_deferred_send_after_fft_( deferred_send_stage expected_stage )
+    {
+        if ( !deferred_send_state_.active() )
+            return;
+        if ( deferred_send_state_.stage != expected_stage )
+        {
+            throw std::logic_error(
+                std::string( "owned reference deferred send stage mismatch after FFT: expected " ) +
+                deferred_send_stage_name_( expected_stage ) + ", active " +
+                deferred_send_stage_name_( deferred_send_state_.stage )
+            );
+        }
+
+        time_deferred_send_action_( expected_stage, "send_ready_after_fft", [&]() {
+            auto &comm_info = deferred_send_comm_info_();
+            while ( deferred_send_state_.remaining > 0 )
+            {
+                int flag  = 0;
+                const int index = comm_info.testany(
+                    detail::mpi_int_cast(
+                        deferred_send_state_.requests.size(), "owned deferred send readiness request count"
+                    ),
+                    deferred_send_state_.requests.data(), &flag
+                );
+                if ( !flag )
+                    break;
+                if ( index == MPI_UNDEFINED )
+                {
+                    deferred_send_state_.remaining = 0;
+                    break;
+                }
+                --deferred_send_state_.remaining;
+            }
+        } );
+    }
+
+    void drain_deferred_send_( deferred_send_stage expected_stage )
+    {
+        if ( !deferred_send_state_.active() )
+            return;
+        if ( deferred_send_state_.stage != expected_stage )
+        {
+            throw std::logic_error(
+                std::string( "owned reference deferred send drain stage mismatch: expected " ) +
+                deferred_send_stage_name_( expected_stage ) + ", active " +
+                deferred_send_stage_name_( deferred_send_state_.stage )
+            );
+        }
+
+        time_deferred_send_action_( expected_stage, "send_drain", [&]() {
+            if ( deferred_send_state_.remaining > 0 )
+            {
+                auto &comm_info = deferred_send_comm_info_();
+                comm_info.waitall(
+                    detail::mpi_int_cast(
+                        deferred_send_state_.requests.size(), "owned deferred send drain request count"
+                    ),
+                    deferred_send_state_.requests.data()
+                );
+            }
+        } );
+        deferred_send_state_.reset();
+    }
+
+    void finish_deferred_send_after_fft_( deferred_send_stage expected_stage )
+    {
+        probe_deferred_send_after_fft_( expected_stage );
+        drain_deferred_send_( expected_stage );
+    }
+
+    template <class Fn>
+    void execute_with_deferred_send_overlap_( deferred_send_stage stage, Fn &&fn )
+    {
+        try
+        {
+            std::forward<Fn>( fn )();
+        }
+        catch ( ... )
+        {
+            drain_deferred_send_noexcept_();
+            throw;
+        }
+        finish_deferred_send_after_fft_( stage );
+    }
+
+    void drain_deferred_send_noexcept_() noexcept
+    {
+        if ( !deferred_send_state_.active() )
+            return;
+        try
+        {
+            auto &comm_info = deferred_send_comm_info_();
+            if ( !deferred_send_state_.requests.empty() )
+            {
+                comm_info.waitall(
+                    detail::mpi_int_cast(
+                        deferred_send_state_.requests.size(), "owned deferred send destructor request count"
+                    ),
+                    deferred_send_state_.requests.data()
+                );
+            }
+        }
+        catch ( ... )
+        {
+        }
+        deferred_send_state_.reset();
+    }
+
     template <class CommInfo>
     void wait_send_requests_(
         CommInfo &comm_info, std::vector<mpi_request_t> &byte_send_requests,
@@ -4974,6 +5259,26 @@ public:
         {
             comm_info.waitall( value_request_count, value_send_requests.data() );
         }
+    }
+
+    template <class CommInfo>
+    void wait_or_defer_send_requests_(
+        deferred_send_stage stage, deferred_send_communicator communicator, CommInfo &comm_info,
+        std::vector<mpi_request_t> &byte_send_requests,
+        detail::persistent_send_requests<mpi_request_t> &persistent_send_state,
+        std::vector<mpi_request_t> &value_send_requests, int value_request_count, const char *byte_what,
+        const char *persistent_what
+    )
+    {
+        if ( deferred_send_completion_active_() )
+        {
+            defer_byte_send_requests_( stage, communicator, byte_send_requests );
+            return;
+        }
+        wait_send_requests_(
+            comm_info, byte_send_requests, persistent_send_state, value_send_requests, value_request_count, byte_what,
+            persistent_what
+        );
     }
 
     void null_completed_request_( std::vector<mpi_request_t> &requests, int index )
@@ -5029,12 +5334,14 @@ public:
 
     void reset_row_requests_()
     {
+        ensure_no_deferred_send_( "row request reset" );
         std::fill( row_send_requests_.begin(), row_send_requests_.end(), mpi_request_t() );
         std::fill( row_recv_requests_.begin(), row_recv_requests_.end(), mpi_request_t() );
     }
 
     void reset_line_requests_()
     {
+        ensure_no_deferred_send_( "line request reset" );
         std::fill( line_send_requests_.begin(), line_send_requests_.end(), mpi_request_t() );
         std::fill( line_recv_requests_.begin(), line_recv_requests_.end(), mpi_request_t() );
     }
@@ -6605,8 +6912,9 @@ public:
         synchronize_streams_( row_size, "first/recv_copy_complete" );
         {
             auto phase = profile_scope_( "first/wait_send" );
-            wait_send_requests_(
-                row_comm_info_, byte_send_requests, persistent_first_forward_send_, row_send_requests_, row_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::forward_first, deferred_send_communicator::row, row_comm_info_,
+                byte_send_requests, persistent_first_forward_send_, row_send_requests_, row_size,
                 "owned first byte forward send requests", "owned first persistent forward send requests"
             );
         }
@@ -6707,8 +7015,9 @@ public:
         synchronize_streams_( row_size, "first/recv_copy_complete" );
         {
             auto phase = profile_scope_( "first/wait_send" );
-            wait_send_requests_(
-                row_comm_info_, byte_send_requests, persistent_first_forward_send_, row_send_requests_, row_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::forward_first, deferred_send_communicator::row, row_comm_info_,
+                byte_send_requests, persistent_first_forward_send_, row_send_requests_, row_size,
                 "owned first byte forward send requests", "owned first persistent forward send requests"
             );
         }
@@ -7380,8 +7689,9 @@ public:
         synchronize_streams_( line_size, "second/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::forward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
                 "owned second byte forward send requests", "owned second persistent forward send requests"
             );
         }
@@ -7482,8 +7792,9 @@ public:
         synchronize_streams_( line_size, "second/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::forward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
                 "owned second byte forward send requests", "owned second persistent forward send requests"
             );
         }
@@ -7984,8 +8295,9 @@ public:
         synchronize_streams_( line_size, "second/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::forward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
                 "owned native second byte forward send requests", "owned native second persistent forward send requests"
             );
         }
@@ -8087,8 +8399,9 @@ public:
         synchronize_streams_( line_size, "second/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::forward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_forward_send_, line_send_requests_, line_size,
                 "owned native second byte forward send requests", "owned native second persistent forward send requests"
             );
         }
@@ -8357,8 +8670,9 @@ public:
         synchronize_streams_( line_size, "second_backward/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second_backward/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::backward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
                 "owned native second byte backward send requests", "owned native second persistent backward send requests"
             );
         }
@@ -8440,8 +8754,9 @@ public:
         synchronize_streams_( line_size, "second_backward/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second_backward/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::backward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
                 "owned native second byte backward send requests", "owned native second persistent backward send requests"
             );
         }
@@ -8860,8 +9175,9 @@ public:
         synchronize_streams_( line_size, "second_backward/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second_backward/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::backward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
                 "owned second byte backward send requests", "owned second persistent backward send requests"
             );
         }
@@ -8968,8 +9284,9 @@ public:
         synchronize_streams_( line_size, "second_backward/recv_copy_complete" );
         {
             auto phase = profile_scope_( "second_backward/wait_send" );
-            wait_send_requests_(
-                line_comm_info_, byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::backward_second, deferred_send_communicator::line, line_comm_info_,
+                byte_send_requests, persistent_second_backward_send_, line_send_requests_, line_size,
                 "owned second byte backward send requests", "owned second persistent backward send requests"
             );
         }
@@ -9373,8 +9690,9 @@ public:
         synchronize_streams_( row_size, "first_backward/recv_copy_complete" );
         {
             auto phase = profile_scope_( "first_backward/wait_send" );
-            wait_send_requests_(
-                row_comm_info_, byte_send_requests, persistent_first_backward_send_, row_send_requests_, row_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::backward_first, deferred_send_communicator::row, row_comm_info_,
+                byte_send_requests, persistent_first_backward_send_, row_send_requests_, row_size,
                 "owned first byte backward send requests", "owned first persistent backward send requests"
             );
         }
@@ -9481,8 +9799,9 @@ public:
         synchronize_streams_( row_size, "first_backward/recv_copy_complete" );
         {
             auto phase = profile_scope_( "first_backward/wait_send" );
-            wait_send_requests_(
-                row_comm_info_, byte_send_requests, persistent_first_backward_send_, row_send_requests_, row_size,
+            wait_or_defer_send_requests_(
+                deferred_send_stage::backward_first, deferred_send_communicator::row, row_comm_info_,
+                byte_send_requests, persistent_first_backward_send_, row_send_requests_, row_size,
                 "owned first byte backward send requests", "owned first persistent backward send requests"
             );
         }
@@ -9519,6 +9838,8 @@ public:
         ::fftm::fftm_3d_large_count_p2p_transport::hindexed;
     bool use_large_count_datatype_cache_ = false;
     bool use_native_backward_second_peer_loop_ = false;
+    bool use_deferred_send_completion_ = false;
+    deferred_send_state deferred_send_state_;
     bool native_opt0_default_z_layout_ = false;
     bool use_native_opt0_reference_y_buffer_topology_ = false;
     bool use_native_opt0_compact_y_workarea_ = false;

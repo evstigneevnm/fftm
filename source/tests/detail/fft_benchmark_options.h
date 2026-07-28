@@ -99,6 +99,7 @@ struct fftm_3d_benchmark_options
     bool                          use_large_count_datatype_cache = false;
     bool                          use_fft_exec_no_sync = false;
     bool                          use_native_backward_second_peer_loop = false;
+    bool                          use_3d_deferred_send_completion = false;
     bool                          use_native_opt0_default_z_layout = false;
     bool                          use_native_opt0_reference_y_buffer_topology = false;
     bool                          use_native_opt0_compact_y_workarea = false;
@@ -286,6 +287,7 @@ inline fftm_3d_test_options make_fftm_3d_test_options_base( const fftm_3d_benchm
     base_options.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
     base_options.use_fft_exec_no_sync = options.use_fft_exec_no_sync;
     base_options.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
+    base_options.use_3d_deferred_send_completion = options.use_3d_deferred_send_completion;
     base_options.use_native_opt0_default_z_layout = options.use_native_opt0_default_z_layout;
     base_options.use_native_opt0_reference_y_buffer_topology = options.use_native_opt0_reference_y_buffer_topology;
     base_options.use_native_opt0_compact_y_workarea = options.use_native_opt0_compact_y_workarea;
@@ -354,6 +356,7 @@ inline void copy_fftm_3d_test_options_base(
     options.use_large_count_datatype_cache = base_options.use_large_count_datatype_cache;
     options.use_fft_exec_no_sync = base_options.use_fft_exec_no_sync;
     options.use_native_backward_second_peer_loop = base_options.use_native_backward_second_peer_loop;
+    options.use_3d_deferred_send_completion = base_options.use_3d_deferred_send_completion;
     options.use_native_opt0_default_z_layout = base_options.use_native_opt0_default_z_layout;
     options.use_native_opt0_reference_y_buffer_topology = base_options.use_native_opt0_reference_y_buffer_topology;
     options.use_native_opt0_compact_y_workarea = base_options.use_native_opt0_compact_y_workarea;
@@ -392,6 +395,7 @@ inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
            " [--direct-p2p-cuda-aware|--no-direct-p2p-cuda-aware]"
            " [--use-p2p-byte-transfer|--no-p2p-byte-transfer]"
            " [--use-fft-exec-no-sync|--no-fft-exec-no-sync]"
+           " [--use-3d-deferred-send-completion|--no-3d-deferred-send-completion]"
            " [--enable-native-stage-timers|--disable-native-stage-timers]"
            " [--use-4d-slab-native-xw-transpose|--no-4d-slab-native-xw-transpose]"
            " [--use-4d-slab-native-xw-batched-peer-kernels|--no-4d-slab-native-xw-batched-peer-kernels]"
@@ -894,6 +898,16 @@ parse_fftm_3d_benchmark_options( int argc, char *argv[], int num_procs, const st
         else if ( arg == "--no-native-backward-second-peer-loop" )
         {
             options.use_native_backward_second_peer_loop = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-3d-deferred-send-completion" )
+        {
+            options.use_3d_deferred_send_completion = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-3d-deferred-send-completion" )
+        {
+            options.use_3d_deferred_send_completion = false;
             argi += 1;
         }
         else if ( arg == "--use-native-opt0-default-z-layout" )
@@ -1711,6 +1725,7 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_benchmark
     init_options.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
     init_options.use_fft_exec_no_sync = options.use_fft_exec_no_sync;
     init_options.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
+    init_options.use_3d_deferred_send_completion = options.use_3d_deferred_send_completion;
     init_options.use_native_opt0_default_z_layout = options.use_native_opt0_default_z_layout;
     init_options.use_native_opt0_reference_y_buffer_topology = options.use_native_opt0_reference_y_buffer_topology;
     init_options.use_native_opt0_compact_y_workarea = options.use_native_opt0_compact_y_workarea;

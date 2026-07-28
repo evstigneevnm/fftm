@@ -15,8 +15,11 @@ MAX_GPUS="${FFTM_MAX_GPUS:-}"
 GPUS_PER_NODE="${FFTM_GPUS_PER_NODE:-8}"
 SRUN_TIME="${FFTM_SRUN_TIME:-00:20:00}"
 SRUN_EXTRA_ARGS="${FFTM_SRUN_EXTRA_ARGS:-}"
+MPI_RANK_AFFINITY_MODE="${FFTM_MPI_RANK_AFFINITY_MODE:-auto}"
+MPI_RANK_AFFINITY_WRAPPER_HOST="${FFTM_MPI_RANK_AFFINITY_WRAPPER_HOST:-${SCRIPT_DIR}/run_mpi_rank_affinity.sh}"
 CONTAINER_WORKDIR="${FFTM_CONTAINER_WORKDIR:-/opt/fftm/bin}"
 CONTAINER_DATA_DIR="${FFTM_CONTAINER_DATA_DIR:-/data}"
+MPI_RANK_AFFINITY_WRAPPER_CONTAINER="${CONTAINER_DATA_DIR}/fftm_mpi_rank_affinity.sh"
 CONTAINER_TESTS_ROOT="${FFTM_CONTAINER_TESTS_ROOT:-/opt/fftm/bin}"
 CONTAINER_ENV="${FFTM_CONTAINER_ENV:-}"
 CONTAINER_MOUNTS="${FFTM_CONTAINER_MOUNTS:-}"
@@ -51,8 +54,8 @@ AUTO_MAX_SIZE_3D="${FFTM_AUTO_MAX_SIZE_3D:-}"
 AUTO_MAX_SIZE_4D="${FFTM_AUTO_MAX_SIZE_4D:-}"
 MODES="${FFTM_MODES:-alltoallv,p2p-waitall,p2p-waitany}"
 TRANSPORTS="${FFTM_TRANSPORTS:-cuda_aware,non_cuda_aware}"
-STRATEGIES_3D="${FFTM_STRATEGIES_3D:-slab-pencil,pencil-slab,pencil-pencil}"
-STRATEGIES_4D="${FFTM_STRATEGIES_4D:-slab-slab,pencil-pencil}"
+STRATEGIES_3D="${FFTM_STRATEGIES_3D-slab-pencil,pencil-slab,pencil-pencil}"
+STRATEGIES_4D="${FFTM_STRATEGIES_4D-slab-slab,pencil-pencil}"
 INCLUDE_VERSIONED="${FFTM_INCLUDE_VERSIONED:-0}"
 VERSIONED_FULL_MATRIX="${FFTM_VERSIONED_FULL_MATRIX:-0}"
 USE_DIRECT_BACKWARD_RECEIVE="${FFTM_USE_DIRECT_BACKWARD_RECEIVE:-0}"
@@ -68,6 +71,7 @@ USE_READY_STABLE_FORWARD_BYTE_SEND_BUFFER="${FFTM_USE_READY_STABLE_FORWARD_BYTE_
 USE_CONTIGUOUS_FORWARD_BYTE_SEND="${FFTM_USE_CONTIGUOUS_FORWARD_BYTE_SEND:-0}"
 USE_PHYSICAL_FORWARD_PEER_EXCHANGE="${FFTM_USE_PHYSICAL_FORWARD_PEER_EXCHANGE:-0}"
 USE_NATIVE_BACKWARD_SECOND_PEER_LOOP="${FFTM_USE_NATIVE_BACKWARD_SECOND_PEER_LOOP:-0}"
+USE_3D_DEFERRED_SEND_COMPLETION="${FFTM_USE_3D_DEFERRED_SEND_COMPLETION:-0}"
 USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT="${FFTM_USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT:-0}"
 USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY="${FFTM_USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY:-${FFTM_USE_NATIVE_OPT0_EGGER_Y_BUFFER_TOPOLOGY:-0}}"
 USE_NATIVE_OPT0_COMPACT_Y_WORKAREA="${FFTM_USE_NATIVE_OPT0_COMPACT_Y_WORKAREA:-0}"
@@ -140,6 +144,19 @@ GPU_NAME="${FFTM_GPU_NAME:-A100}"
 DEVICE_MEMORY_MIB="${FFTM_DEVICE_MEMORY_MIB:-40960}"
 TIMEOUT_SECONDS="${FFTM_TIMEOUT_SECONDS:-7200}"
 
+case "${MPI_RANK_AFFINITY_MODE}" in
+    auto|hca)
+        ;;
+    *)
+        echo "ERROR: FFTM_MPI_RANK_AFFINITY_MODE must be auto or hca." >&2
+        exit 2
+        ;;
+esac
+if [[ "${MPI_RANK_AFFINITY_MODE}" == "hca" && "${GPUS_PER_NODE}" -ne 8 ]]; then
+    echo "ERROR: hca affinity currently requires FFTM_GPUS_PER_NODE=8." >&2
+    exit 2
+fi
+
 mkdir -p "${DATA_DIR}"
 DATA_DIR="$(cd "${DATA_DIR}" && pwd -P)"
 
@@ -164,6 +181,16 @@ if ! ( : > "${DATA_DIR}/.fftm_write_test" ) 2>/dev/null; then
     exit 2
 fi
 rm -f "${DATA_DIR}/.fftm_write_test"
+
+if [[ "${MPI_RANK_AFFINITY_MODE}" == "hca" ]]; then
+    if [[ ! -x "${MPI_RANK_AFFINITY_WRAPPER_HOST}" ]]; then
+        echo "ERROR: missing executable MPI affinity wrapper: ${MPI_RANK_AFFINITY_WRAPPER_HOST}" >&2
+        exit 2
+    fi
+    install -m 0755 \
+        "${MPI_RANK_AFFINITY_WRAPPER_HOST}" \
+        "${DATA_DIR}/fftm_mpi_rank_affinity.sh"
+fi
 
 if [[ -n "${CONTAINER_MOUNTS}" ]]; then
     IFS=',' read -r -a preflight_mount_array <<< "${CONTAINER_MOUNTS}"
@@ -230,6 +257,9 @@ preflight_test_script="set -e; test -d '${CONTAINER_DATA_DIR}' || { echo 'missin
 for bin_name in "${selected_preflight_bins[@]}"; do
     preflight_test_script="${preflight_test_script}; test -x '${CONTAINER_TESTS_ROOT}/${bin_name}' || { echo 'missing or non-executable benchmark binary: ${CONTAINER_TESTS_ROOT}/${bin_name}' >&2; ls -l '${CONTAINER_TESTS_ROOT}' >&2 || true; exit 43; }"
 done
+if [[ "${MPI_RANK_AFFINITY_MODE}" == "hca" ]]; then
+    preflight_test_script="${preflight_test_script}; test -x '${MPI_RANK_AFFINITY_WRAPPER_CONTAINER}' || { echo 'missing MPI affinity wrapper: ${MPI_RANK_AFFINITY_WRAPPER_CONTAINER}' >&2; exit 44; }"
+fi
 
 if [[ "${RUN_PREFLIGHT}" != "0" && "${RUN_PREFLIGHT}" != "false" && "${RUN_PREFLIGHT}" != "FALSE" &&
       "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" && "${DRY_RUN}" != "TRUE" ]]; then
@@ -275,6 +305,7 @@ args=(
     --gpus-per-node "${GPUS_PER_NODE}"
     --srun-time "${SRUN_TIME}"
     "--srun-extra-args=${SRUN_EXTRA_ARGS}"
+    --mpi-rank-affinity-mode "${MPI_RANK_AFFINITY_MODE}"
     --gpu-name "${GPU_NAME}"
     --device-memory-mib "${DEVICE_MEMORY_MIB}"
     --benchmark-sizes-3d "${BENCHMARK_SIZES_3D}"
@@ -331,6 +362,10 @@ args=(
     --fftm-4d-pencil-degenerate-wz-sliced-z-fft "${FFTM_4D_PENCIL_DEGENERATE_WZ_SLICED_Z_FFT}"
     --timeout-seconds "${TIMEOUT_SECONDS}"
 )
+
+if [[ "${MPI_RANK_AFFINITY_MODE}" == "hca" ]]; then
+    args+=(--mpi-rank-affinity-wrapper "${MPI_RANK_AFFINITY_WRAPPER_CONTAINER}")
+fi
 
 case "${USE_DIRECT_BACKWARD_RECEIVE}" in
     1|true|TRUE|yes|YES|on|ON) args+=(--use-direct-backward-receive) ;;
@@ -395,6 +430,11 @@ esac
 case "${USE_NATIVE_BACKWARD_SECOND_PEER_LOOP}" in
     1|true|TRUE|yes|YES|on|ON) args+=(--use-native-backward-second-peer-loop) ;;
     *) args+=(--no-native-backward-second-peer-loop) ;;
+esac
+
+case "${USE_3D_DEFERRED_SEND_COMPLETION}" in
+    1|true|TRUE|yes|YES|on|ON) args+=(--use-3d-deferred-send-completion) ;;
+    *) args+=(--no-3d-deferred-send-completion) ;;
 esac
 
 case "${USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT}" in
