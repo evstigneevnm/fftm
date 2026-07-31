@@ -23,6 +23,8 @@ types so that HIP, SYCL, or CPU/FFTW backends can be added later.
 | `source/external_wrap/` | Backend wrappers around cuFFT and CUDA runtime functionality. |
 | `source/detail/` | Transpose kernels, MPI transpose classes, profiling, and shared implementation details. |
 | `source/tests/` | Unit tests, Poisson examples, comparison tests, versioned tests, and benchmark binaries. |
+| `examples/poisson/` | Minimal C++ autotuned periodic 3D Poisson application. |
+| `examples/turbulence/` | SCFD-based 3D Taylor-Green simulation, vorticity/Q visualization, and 4D spatio-temporal filtering. |
 | `scripts/` | Local, Docker, Slurm/Pyxis, and analysis scripts for collecting benchmark data and generating figures/tables. |
 | `Docker_config/Dockerfile` | Docker image used for local and cluster benchmark runs. |
 | `fft_Egger/` | Reference implementation used for comparison experiments. |
@@ -250,7 +252,9 @@ Usage:
 
 ## Examples and Tests
 
-The most useful examples are in `source/tests/`.
+The numerical transform tests are in `source/tests/`. The complete
+Taylor-Green application and 4D analysis workflow is documented in
+`examples/turbulence/README.md`.
 
 | Test family | Files |
 | --- | --- |

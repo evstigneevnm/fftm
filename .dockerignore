@@ -1,0 +1,17 @@
+.git
+.codex
+.agents
+build
+build/**
+**/build
+**/build/**
+data_*
+**/data_*
+*.sqsh
+*.sqsh.sha256
+enroot_workdir
+**/__pycache__
+*.pyc
+fft_Egger/results
+fftm3d/results
+examples/turbulence/reference_data/hiocfd_spectral_512.gdiag

@@ -1,0 +1,73 @@
+{
+  "format": "fftm-taylor-green-reference-manifest-v1",
+  "reynolds": 1600,
+  "normalization": {
+    "kinetic_energy": "0.5 * volume_average(|u|^2)",
+    "enstrophy": "0.5 * volume_average(|curl(u)|^2)",
+    "dissipation_relation": "epsilon = 2 * enstrophy / Reynolds"
+  },
+  "datasets": [
+    {
+      "id": "hiocfd_spectral_512",
+      "label": "HiOCFD spectral $512^3$",
+      "file": "hiocfd_spectral_512.gdiag",
+      "reader": "whitespace",
+      "columns": {
+        "time": 0,
+        "kinetic_energy": 1,
+        "dissipation": 2,
+        "enstrophy": 3
+      },
+      "method": "dealiased pseudospectral DNS",
+      "nominal_resolution": "512^3",
+      "citation": "HiOCFD Workshop case C3.5, DNS of the Taylor-Green vortex at Re=1600; spectral reference validated in van Rees et al., JCP 230 (2011) 2794-2805",
+      "doi": "10.1016/j.jcp.2010.11.031",
+      "source_url": "https://cfd.ku.edu/hiocfd/spectral_Re1600_512.gdiag",
+      "sha256": "60bfeaee2dd32de1b9e7171c70cf3774b6053d82a785d526c055547a0757017a",
+      "license": "No explicit redistribution license found; download from the authoritative source",
+      "bundled": false,
+      "required": false
+    },
+    {
+      "id": "opensbli_512",
+      "label": "OpenSBLI finite difference $512^3$",
+      "file": "opensbli_512.dat",
+      "reader": "whitespace",
+      "columns": {
+        "time": 0,
+        "kinetic_energy": 1,
+        "enstrophy": 2
+      },
+      "method": "high-order finite difference",
+      "nominal_resolution": "512^3",
+      "citation": "Jammy, Jacobs and Sandham (2016), Enstrophy and kinetic energy data from 3D Taylor-Green vortex simulations",
+      "doi": "10.5258/SOTON/401892",
+      "source_url": "https://eprints.soton.ac.uk/401892/1/512.dat",
+      "sha256": "77602efb596d534aaee4a7fd9d4376c6c60155c658b0dab78727520d562722f6",
+      "license": "Creative Commons Attribution",
+      "bundled": true,
+      "required": true
+    },
+    {
+      "id": "galaexi_dg_512",
+      "label": "GALAEXI DG $512^3$ DOF",
+      "file": "galaexi_dg_512.csv",
+      "reader": "named_csv",
+      "columns": {
+        "time": "Time",
+        "kinetic_energy": "Ekin incomp",
+        "dissipation": "Dissipation Rate Incompressible"
+      },
+      "enstrophy_from_dissipation": true,
+      "method": "degree-7 discontinuous Galerkin on 64^3 elements",
+      "nominal_resolution": "512 solution points per direction",
+      "citation": "Kurz et al. (2024), GALAEXI: Solving complex compressible flows with high-order discontinuous Galerkin methods on accelerator-based systems",
+      "doi": "10.18419/DARUS-4139",
+      "source_url": "https://darus.uni-stuttgart.de/api/access/datafile/291404?format=original",
+      "sha256": "1d1a86f6bd6602d024045bd576bc5e12dd53147deef0e6e4914c6ed2deaf0778",
+      "license": "Creative Commons Attribution 4.0",
+      "bundled": true,
+      "required": true
+    }
+  ]
+}

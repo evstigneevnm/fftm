@@ -1,0 +1,6 @@
+matplotlib>=3.7,<4
+numpy>=1.24,<3
+pillow>=10,<13
+pyvista==0.48.4
+scipy>=1.10,<2
+vtk==9.6.2

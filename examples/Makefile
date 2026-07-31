@@ -22,17 +22,52 @@ CUDA_ARCH=-gencode arch=compute_70,code=sm_70 -gencode arch=compute_75,code=sm_7
 NVCCFLAGS = -Wno-deprecated-gpu-targets $(CUDA_ARCH) -std=$(CPPSTD) $(TARGET_NVCC) --expt-relaxed-constexpr
 SCFD_FLAGS = -DSCFD_ARRAYS_ORDINAL_TYPE=ptrdiff_t -DSCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 
-ALL_BINS = poisson_periodic_3d_autotuned.bin
+ALL_BINS = \
+	poisson_periodic_3d_autotuned.bin \
+	taylor_green_3d_autotuned.bin \
+	taylor_green_spacetime_4d.bin
+OPTIONAL_BINS = taylor_green_3d_autotuned_float.bin
 
-.PHONY: all $(ALL_BINS)
+.PHONY: all $(ALL_BINS) $(OPTIONAL_BINS)
 
 all: $(addprefix $(BUILD_DIR)/,$(ALL_BINS))
 
 $(ALL_BINS): %: $(BUILD_DIR)/%
 
+$(OPTIONAL_BINS): %: $(BUILD_DIR)/%
+
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/poisson_periodic_3d_autotuned.bin: $(EXAMPLE_DIR)/poisson_periodic_3d_autotuned.cu | $(BUILD_DIR)
-	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $(SCFD_FLAGS) $< -c -o $(BUILD_DIR)/poisson_periodic_3d_autotuned.o
-	$(MPICXX) -g $(BUILD_DIR)/poisson_periodic_3d_autotuned.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
+POISSON_DIR := $(EXAMPLE_DIR)/poisson
+
+$(BUILD_DIR)/poisson_periodic_3d_autotuned.bin: \
+		$(POISSON_DIR)/Makefile \
+		$(POISSON_DIR)/source/poisson_periodic_3d_autotuned.cu | $(BUILD_DIR)
+	$(MAKE) -C $(POISSON_DIR) \
+		poisson_periodic_3d_autotuned.bin \
+		BUILD_FOLDER=$(BUILD_DIR) \
+		CUDA_ARCH="$(CUDA_ARCH)" \
+		NVCC="$(NVCC)" \
+		MPICXX="$(MPICXX)"
+
+TURBULENCE_SOURCE := $(EXAMPLE_DIR)/turbulence/source
+TURBULENCE_HEADERS := \
+	$(TURBULENCE_SOURCE)/snapshot_writer.h \
+	$(TURBULENCE_SOURCE)/spacetime_kernels.h \
+	$(TURBULENCE_SOURCE)/spacetime_options.h \
+	$(TURBULENCE_SOURCE)/taylor_green_kernels.h \
+	$(TURBULENCE_SOURCE)/taylor_green_solver.h \
+	$(TURBULENCE_SOURCE)/turbulence_options.h
+
+$(BUILD_DIR)/taylor_green_3d_autotuned.bin: $(TURBULENCE_SOURCE)/taylor_green_3d_autotuned.cu $(TURBULENCE_HEADERS) | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) -I$(TURBULENCE_SOURCE) $(SCFD_FLAGS) $< -c -o $(BUILD_DIR)/taylor_green_3d_autotuned.o
+	$(MPICXX) -g $(BUILD_DIR)/taylor_green_3d_autotuned.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
+
+$(BUILD_DIR)/taylor_green_3d_autotuned_float.bin: $(TURBULENCE_SOURCE)/taylor_green_3d_autotuned.cu $(TURBULENCE_HEADERS) | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) -DFFTM_TURBULENCE_SINGLE_PRECISION=1 -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) -I$(TURBULENCE_SOURCE) $(SCFD_FLAGS) $< -c -o $(BUILD_DIR)/taylor_green_3d_autotuned_float.o
+	$(MPICXX) -g $(BUILD_DIR)/taylor_green_3d_autotuned_float.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
+
+$(BUILD_DIR)/taylor_green_spacetime_4d.bin: $(TURBULENCE_SOURCE)/taylor_green_spacetime_4d.cu $(TURBULENCE_HEADERS) | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) -I$(TURBULENCE_SOURCE) $(SCFD_FLAGS) $< -c -o $(BUILD_DIR)/taylor_green_spacetime_4d.o
+	$(MPICXX) -g $(BUILD_DIR)/taylor_green_spacetime_4d.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@

@@ -33,6 +33,7 @@ data_*/
 
 # Container images and large packaged artifacts
 *.sqsh
+*.sqsh.sha256
 *.sif
 *.img
 *.tar
@@ -49,4 +50,10 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 .vscode/
-.codex/
+/.codex
+
+# Locally generated container comparison checksum manifest
+/fftm_transport_images.sha256
+
+# Externally downloaded validation data without redistribution permission
+examples/turbulence/reference_data/hiocfd_spectral_512.gdiag
