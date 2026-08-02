@@ -24,13 +24,17 @@ SCFD_FLAGS = -DSCFD_ARRAYS_ORDINAL_TYPE=ptrdiff_t -DSCFD_COMMUNICATION_ENABLE_CU
 
 ALL_BINS = \
 	poisson_periodic_3d_autotuned.bin \
+	poisson_periodic_4d.bin \
 	taylor_green_3d_autotuned.bin \
 	taylor_green_spacetime_4d.bin
 OPTIONAL_BINS = taylor_green_3d_autotuned_float.bin
 
-.PHONY: all $(ALL_BINS) $(OPTIONAL_BINS)
+.PHONY: all reader-smoke $(ALL_BINS) $(OPTIONAL_BINS)
 
 all: $(addprefix $(BUILD_DIR)/,$(ALL_BINS))
+
+reader-smoke:
+	bash $(EXAMPLE_DIR)/tests/run_reader_smoke.sh
 
 $(ALL_BINS): %: $(BUILD_DIR)/%
 
@@ -46,6 +50,16 @@ $(BUILD_DIR)/poisson_periodic_3d_autotuned.bin: \
 		$(POISSON_DIR)/source/poisson_periodic_3d_autotuned.cu | $(BUILD_DIR)
 	$(MAKE) -C $(POISSON_DIR) \
 		poisson_periodic_3d_autotuned.bin \
+		BUILD_FOLDER=$(BUILD_DIR) \
+		CUDA_ARCH="$(CUDA_ARCH)" \
+		NVCC="$(NVCC)" \
+		MPICXX="$(MPICXX)"
+
+$(BUILD_DIR)/poisson_periodic_4d.bin: \
+		$(POISSON_DIR)/Makefile \
+		$(POISSON_DIR)/source/poisson_periodic_4d.cu | $(BUILD_DIR)
+	$(MAKE) -C $(POISSON_DIR) \
+		poisson_periodic_4d.bin \
 		BUILD_FOLDER=$(BUILD_DIR) \
 		CUDA_ARCH="$(CUDA_ARCH)" \
 		NVCC="$(NVCC)" \

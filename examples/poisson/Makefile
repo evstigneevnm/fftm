@@ -22,17 +22,23 @@ CUDA_ARCH=-gencode arch=compute_70,code=sm_70 -gencode arch=compute_75,code=sm_7
 NVCCFLAGS = -Wno-deprecated-gpu-targets $(CUDA_ARCH) -std=$(CPPSTD) $(TARGET_NVCC) --expt-relaxed-constexpr
 SCFD_FLAGS = -DSCFD_ARRAYS_ORDINAL_TYPE=ptrdiff_t -DSCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 
-BIN = poisson_periodic_3d_autotuned.bin
+BINS = \
+	poisson_periodic_3d_autotuned.bin \
+	poisson_periodic_4d.bin
 
-.PHONY: all $(BIN)
+.PHONY: all $(BINS)
 
-all: $(BUILD_DIR)/$(BIN)
+all: $(addprefix $(BUILD_DIR)/,$(BINS))
 
-$(BIN): $(BUILD_DIR)/$(BIN)
+$(BINS): %: $(BUILD_DIR)/%
 
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/$(BIN): $(EXAMPLE_DIR)/source/poisson_periodic_3d_autotuned.cu | $(BUILD_DIR)
+$(BUILD_DIR)/poisson_periodic_3d_autotuned.bin: $(EXAMPLE_DIR)/source/poisson_periodic_3d_autotuned.cu | $(BUILD_DIR)
 	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $(SCFD_FLAGS) $< -c -o $(BUILD_DIR)/poisson_periodic_3d_autotuned.o
 	$(MPICXX) -g $(BUILD_DIR)/poisson_periodic_3d_autotuned.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@
+
+$(BUILD_DIR)/poisson_periodic_4d.bin: $(EXAMPLE_DIR)/source/poisson_periodic_4d.cu | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $(SCFD_FLAGS) $< -c -o $(BUILD_DIR)/poisson_periodic_4d.o
+	$(MPICXX) -g $(BUILD_DIR)/poisson_periodic_4d.o $(OMP) -L$(lib_cuda) -L$(lib_mpi) -lcudart -lcufft -lmpi -o $@

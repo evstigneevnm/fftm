@@ -1,7 +1,11 @@
-# Autotuned 3D periodic Poisson example
+# Periodic Poisson examples
 
-This directory contains the minimal SCFD/FFTM manufactured-solution example
-for a periodic three-dimensional Poisson problem.
+This directory contains two SCFD/FFTM manufactured-solution applications:
+
+- `poisson_periodic_3d_autotuned.bin` demonstrates measured C++ autotuning and
+  cache reuse for a distributed 3D transform.
+- `poisson_periodic_4d.bin` demonstrates the production 4D slab-slab path and
+  its native `xzwy` Fourier-space layout.
 
 Build it directly:
 
@@ -13,7 +17,10 @@ It remains part of the aggregate examples build:
 
 ```bash
 make -C examples poisson_periodic_3d_autotuned.bin
+make -C examples poisson_periodic_4d.bin
 ```
+
+## Autotuned 3D solve
 
 Run it with one MPI rank per GPU. The positional arguments are `Nx Ny Nz`,
 cache path, measured application iterations, and application warmup:
@@ -87,3 +94,43 @@ scripts/run_cpp_autotune_validation.sh production
 Each target requests one Slurm allocation unless it is already running inside
 one. The result directory contains one short subdirectory per GPU count,
 `status.csv`, the generated caches, and a compact selected-configuration log.
+
+## Native-spectral 4D solve
+
+The 4D application solves
+
+```text
+-Laplacian(u) = f
+u = sin(x) cos(2y) sin(3z) cos(w)
+```
+
+on the periodic domain `[0,2*pi)^4`. It uses the public production preset,
+stores all fields in SCFD tensors, applies the diagonal Poisson operator in
+FFTM's native `xzwy` spectral view, and verifies the relative L2 error.
+
+The positional arguments are the common side length and repetition count:
+
+```bash
+mpiexec -n 4 ./examples/build/poisson_periodic_4d.bin 64 3
+```
+
+For a local one-GPU correctness check with multiple wrapped MPI ranks:
+
+```bash
+FFTM_WRAP_PROCS_GPUS=1 \
+mpiexec -n 2 ./examples/build/poisson_periodic_4d.bin 16 1
+```
+
+## Reader smoke suite
+
+The source checkout provides a compact, no-Python correctness suite for both
+applications. It builds the public examples and runs each on one and two MPI
+ranks wrapped over the locally visible GPU. Each 3D case runs twice and
+requires cache creation followed by exact cache reuse:
+
+```bash
+make -C examples reader-smoke
+```
+
+Set `FFTM_READER_BUILD_DIR`, `CUDA_ARCH`, or `MPIEXEC` to override the local
+build directory, CUDA architecture, or MPI launcher.

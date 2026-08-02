@@ -23,7 +23,7 @@ types so that HIP, SYCL, or CPU/FFTW backends can be added later.
 | `source/external_wrap/` | Backend wrappers around cuFFT and CUDA runtime functionality. |
 | `source/detail/` | Transpose kernels, MPI transpose classes, profiling, and shared implementation details. |
 | `source/tests/` | Unit tests, Poisson examples, comparison tests, versioned tests, and benchmark binaries. |
-| `examples/poisson/` | Minimal C++ autotuned periodic 3D Poisson application. |
+| `examples/poisson/` | Minimal periodic 3D autotuning and 4D native-spectral Poisson applications. |
 | `examples/turbulence/` | SCFD-based 3D Taylor-Green simulation, vorticity/Q visualization, and 4D spatio-temporal filtering. |
 | `scripts/` | Local, Docker, Slurm/Pyxis, and analysis scripts for collecting benchmark data and generating figures/tables. |
 | `Docker_config/Dockerfile` | Docker image used for local and cluster benchmark runs. |
@@ -337,8 +337,9 @@ Usage:
 
 ## Examples and Tests
 
-The numerical transform tests are in `source/tests/`. The complete
-Taylor-Green application and 4D analysis workflow is documented in
+The numerical transform tests are in `source/tests/`. Reader-facing periodic
+Poisson applications are documented in `examples/poisson/README.md`. The
+complete Taylor-Green application and 4D analysis workflow is documented in
 `examples/turbulence/README.md`.
 
 | Test family | Files |
@@ -361,6 +362,52 @@ mpiexec -n 2 ./source/tests/build/test_fftm_3D_compare.bin \
 mpiexec -n 4 ./source/tests/build/test_fftm_4D_compare.bin \
   --strategy slab-slab --mode p2p-waitany 64 64 64 64
 ```
+
+Reader-facing 3D/4D application smoke test:
+
+```bash
+make -C examples reader-smoke
+```
+
+### Final Paper Verification
+
+The final verification launcher separates API correctness, single-node
+production performance, and HCA-pinned multinode performance into independent
+Slurm allocations:
+
+```bash
+FFTM_FINAL_CONTAINER_IMAGE=/scratch/evstigneevnm/fftm/fftm_bench_a100.sqsh \
+FFTM_FINAL_DATA_DIR=/scratch/evstigneevnm/fftm/data_final_paper_$(date +%Y%m%d_%H%M%S) \
+FFTM_FINAL_SALLOC_EXTRA_ARGS='--exclude=cn13' \
+scripts/run_final_paper_verification.sh all
+```
+
+The targets can also be queued separately against the same data root:
+
+```bash
+export FFTM_FINAL_CONTAINER_IMAGE=/scratch/evstigneevnm/fftm/fftm_bench_a100.sqsh
+export FFTM_FINAL_DATA_DIR=/scratch/evstigneevnm/fftm/data_final_paper_YYYYMMDD_HHMMSS
+export FFTM_FINAL_SALLOC_EXTRA_ARGS='--exclude=cn13'
+
+scripts/run_final_paper_verification.sh api
+scripts/run_final_paper_verification.sh production
+scripts/run_final_paper_verification.sh multinode
+scripts/run_final_paper_verification.sh validate
+```
+
+`api` checks public presets, quiet defaults, hardware-aware C++ autotuning,
+resource release, cache reuse, and the reader-facing 3D/4D Poisson examples.
+`production` runs the validated 6-8 GPU `2048^3` and `320^4` configurations.
+`multinode` runs `2048^3` on the explicit `4x4` 3D grid and `320^4` on the 4D
+slab-native path using 16 GPUs and HCA rank affinity. Each target writes a
+short status file and a `PASSED` marker only after numerical, configuration,
+telemetry, and regression-limit checks succeed.
+
+Build the SQSH from the clean commit being verified. `make_docker.sh` records
+the Git commit and tracked dirty state in `fftm_build_info.txt`; the launcher
+rejects an image that does not identify the current clean commit. A plan can be
+inspected without requesting an allocation by setting
+`FFTM_FINAL_DRY_RUN=1 FFTM_FINAL_REQUIRE_CLEAN=0`.
 
 Poisson tutorial timing example:
 

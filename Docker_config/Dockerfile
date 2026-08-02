@@ -3,6 +3,8 @@ ARG FFTM_BASE_IMAGE=nvcr.io/nvidia/hpc-benchmarks:24.06
 FROM ${FFTM_BASE_IMAGE} AS build
 
 ARG FFTM_BASE_IMAGE
+ARG FFTM_GIT_COMMIT=unknown
+ARG FFTM_GIT_DIRTY=unknown
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG CUDA_ARCH="-gencode arch=compute_80,code=sm_80 -gencode arch=compute_70,code=sm_70"
@@ -30,7 +32,8 @@ COPY README.md LICENSE /opt/fftm_src/
 
 RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.bin \
     test_benchmark_fftm_4D.bin test_benchmark_fftm_4D_nca.bin \
-    test_fftm_quiet_default.bin test_fftm_autotune_hardware.bin test_fftm_resource_lifecycle.bin \
+    test_fftm_options.bin test_fftm_quiet_default.bin \
+    test_fftm_autotune_hardware.bin test_fftm_resource_lifecycle.bin \
     test_scfd_mpi_transport.bin \
     test_4D_poisson_mpi.bin test_4D_poisson_mpi_tutorial.bin \
     BUILD_FOLDER=/opt/fftm/bin \
@@ -44,6 +47,7 @@ RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.b
     test -x /opt/fftm/bin/test_benchmark_fftm_3D_nca.bin && \
     test -x /opt/fftm/bin/test_benchmark_fftm_4D.bin && \
     test -x /opt/fftm/bin/test_benchmark_fftm_4D_nca.bin && \
+    test -x /opt/fftm/bin/test_fftm_options.bin && \
     test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
     test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
     test -x /opt/fftm/bin/test_fftm_resource_lifecycle.bin && \
@@ -51,8 +55,12 @@ RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.b
     test -x /opt/fftm/bin/test_4D_poisson_mpi.bin && \
     test -x /opt/fftm/bin/test_4D_poisson_mpi_tutorial.bin && \
     test -x /opt/fftm/bin/poisson_periodic_3d_autotuned.bin && \
+    test -x /opt/fftm/bin/poisson_periodic_4d.bin && \
     test -x /opt/fftm/bin/taylor_green_3d_autotuned.bin && \
-    test -x /opt/fftm/bin/taylor_green_spacetime_4d.bin
+    test -x /opt/fftm/bin/taylor_green_spacetime_4d.bin && \
+    printf 'git_commit=%s\ngit_dirty=%s\n' \
+        "${FFTM_GIT_COMMIT}" "${FFTM_GIT_DIRTY}" \
+        > /opt/fftm/bin/fftm_build_info.txt
 
 # Reference/comparison image build. Uncomment together with the fft_Egger/fftm3d
 # COPY lines above when running Egger or fftm3d A/B comparisons.
@@ -115,9 +123,13 @@ RUN python3 -m venv /opt/fftm/visualization-venv && \
     rm -f /tmp/pyvista-smoke.png
 
 RUN test -x /opt/fftm/bin/test_scfd_mpi_transport.bin && \
+    test -x /opt/fftm/bin/test_fftm_options.bin && \
     test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
     test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
     test -x /opt/fftm/bin/test_fftm_resource_lifecycle.bin && \
+    test -x /opt/fftm/bin/poisson_periodic_3d_autotuned.bin && \
+    test -x /opt/fftm/bin/poisson_periodic_4d.bin && \
+    test -s /opt/fftm/bin/fftm_build_info.txt && \
     test -x /opt/fftm/scripts/run_scfd_mpi_transport_diagnostic.sh && \
     test -x /opt/fftm/scripts/run_cpp_autotune_validation.sh && \
     test -x /opt/fftm/bin/taylor_green_3d_autotuned.bin && \
