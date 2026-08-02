@@ -578,43 +578,44 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
 inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_test_options &options )
 {
     ::fftm::fftm_init_options init_options;
-    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
-    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
-    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
-    init_options.use_fft_exec_no_sync        = options.use_fft_exec_no_sync;
-    init_options.enable_native_stage_timers  = options.enable_native_stage_timers;
-    init_options.use_4d_slab_native_xw_transpose = options.use_4d_slab_native_xw_transpose;
-    init_options.use_4d_slab_native_xw_batched_peer_kernels =
+    init_options.reporting = ::fftm::profiling_reporting_options();
+    init_options.execution.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.execution.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.execution.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+    init_options.diagnostics.use_fft_exec_no_sync        = options.use_fft_exec_no_sync;
+    init_options.diagnostics.enable_native_stage_timers  = options.enable_native_stage_timers;
+    init_options.execution.use_4d_slab_native_xw_transpose = options.use_4d_slab_native_xw_transpose;
+    init_options.diagnostics.use_4d_slab_native_xw_batched_peer_kernels =
         options.use_4d_slab_native_xw_batched_peer_kernels;
-    init_options.use_4d_slab_native_xw_tensor_coalesced_kernels =
+    init_options.diagnostics.use_4d_slab_native_xw_tensor_coalesced_kernels =
         options.use_4d_slab_native_xw_tensor_coalesced_kernels;
-    init_options.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
-    init_options.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
-    init_options.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
-    init_options.use_4d_native_xw_direct_layout = options.use_4d_native_xw_direct_layout;
-    init_options.use_4d_native_xw_chunked_transport = options.use_4d_native_xw_chunked_transport;
-    init_options.native_xw_chunk_bytes =
+    init_options.diagnostics.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
+    init_options.diagnostics.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
+    init_options.diagnostics.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
+    init_options.execution.use_4d_native_xw_direct_layout = options.use_4d_native_xw_direct_layout;
+    init_options.execution.use_4d_native_xw_chunked_transport = options.use_4d_native_xw_chunked_transport;
+    init_options.execution.native_xw_chunk_bytes =
         options.native_xw_chunk_mib * static_cast<std::size_t>( 1024 ) * static_cast<std::size_t>( 1024 );
-    init_options.native_xw_chunk_window = options.native_xw_chunk_window;
-    init_options.use_4d_native_xw_compact_staging = options.use_4d_native_xw_compact_staging;
-    init_options.use_4d_slab_native_work_area_alias = options.use_4d_slab_native_work_area_alias;
-    init_options.use_4d_slab_native_wz_communication_layout =
+    init_options.execution.native_xw_chunk_window = options.native_xw_chunk_window;
+    init_options.execution.use_4d_native_xw_compact_staging = options.use_4d_native_xw_compact_staging;
+    init_options.execution.use_4d_slab_native_work_area_alias = options.use_4d_slab_native_work_area_alias;
+    init_options.execution.use_4d_slab_native_wz_communication_layout =
         options.use_4d_slab_native_wz_communication_layout;
-    init_options.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
-    init_options.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
-    init_options.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
-    init_options.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
-    init_options.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
-    init_options.use_4d_pencil_degenerate_local_transposes =
+    init_options.execution.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
+    init_options.execution.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
+    init_options.diagnostics.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
+    init_options.execution.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
+    init_options.diagnostics.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
+    init_options.execution.use_4d_pencil_degenerate_local_transposes =
         options.use_4d_pencil_degenerate_local_transposes;
-    init_options.use_4d_pencil_degenerate_same_xw_native =
+    init_options.execution.use_4d_pencil_degenerate_same_xw_native =
         options.use_4d_pencil_degenerate_same_xw_native;
-    init_options.use_4d_pencil_degenerate_wz_sliced_z_fft =
+    init_options.execution.use_4d_pencil_degenerate_wz_sliced_z_fft =
         options.use_4d_pencil_degenerate_wz_sliced_z_fft;
     init_options.spectral_layout_4d =
         options.use_4d_slab_native_xw_native_spectral_layout ? ::fftm::fftm_4d_spectral_layout::native_xzwy
                                                              : ::fftm::fftm_4d_spectral_layout::public_yzwx;
-    init_options.use_4d_slab_native_xw_native_spectral_layout =
+    init_options.diagnostics.use_4d_slab_native_xw_native_spectral_layout =
         options.use_4d_slab_native_xw_native_spectral_layout;
     return init_options;
 }

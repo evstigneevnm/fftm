@@ -3,6 +3,8 @@
 
 #include <array>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -18,6 +20,7 @@
 #include <scfd/utils/cufft_safe_call.h>
 
 #include "fft_direction.h"
+#include "../detail/runtime_hardware_identity.h"
 
 namespace fftm
 {
@@ -134,6 +137,11 @@ struct cuda_runtime_api
         CUDA_SAFE_CALL( cudaMemcpy( dst, src, bytes, kind ) );
     }
 
+    static void memset_zero( void *dst, size_t bytes )
+    {
+        CUDA_SAFE_CALL( cudaMemset( dst, 0, bytes ) );
+    }
+
     static void device_synchronize()
     {
         CUDA_SAFE_CALL( cudaDeviceSynchronize() );
@@ -149,6 +157,36 @@ struct cuda_runtime_api
     static device_memory_info_type get_device_memory_info()
     {
         return scfd::backend::cuda::get_device_memory_info();
+    }
+
+    static ::fftm::detail::runtime_hardware_identity get_hardware_identity()
+    {
+        ::fftm::detail::runtime_hardware_identity result;
+        result.backend = "cuda";
+
+        const int device = get_device();
+        cudaDeviceProp properties{};
+        CUDA_SAFE_CALL( cudaGetDeviceProperties( &properties, device ) );
+        result.device_name       = properties.name;
+        result.architecture      = std::to_string( properties.major ) + "." + std::to_string( properties.minor );
+        result.total_memory_bytes = static_cast<std::size_t>( properties.totalGlobalMem );
+        result.total_memory_known = true;
+
+        char pci_bus_id[32] = {};
+        CUDA_SAFE_CALL( cudaDeviceGetPCIBusId( pci_bus_id, static_cast<int>( sizeof( pci_bus_id ) ), device ) );
+        result.pci_bus_id = pci_bus_id;
+
+#if CUDART_VERSION >= 10000
+        std::ostringstream uuid;
+        uuid << std::hex << std::setfill( '0' );
+        for ( unsigned char byte : properties.uuid.bytes )
+            uuid << std::setw( 2 ) << static_cast<unsigned int>( byte );
+        result.device_uuid = uuid.str();
+#endif
+
+        CUDA_SAFE_CALL( cudaRuntimeGetVersion( &result.runtime_version ) );
+        CUDA_SAFE_CALL( cudaDriverGetVersion( &result.driver_version ) );
+        return result;
     }
 
     static void set_device( int device )

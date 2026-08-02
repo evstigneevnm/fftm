@@ -109,8 +109,12 @@ public:
 
     ~fft_wrap_many()
     {
-        destroy_minimal_reference_c2c_plan_arrays_();
-        destroy_raw_c2c_plan_array_bundles_();
+        release_noexcept_();
+    }
+
+    void release()
+    {
+        release_();
     }
 
     template <::fftm::direction D, std::size_t Rank>
@@ -1693,6 +1697,65 @@ private:
                 c2cf_wrap_t::destroy_opaque_plan_noexcept( handle );
                 handle = 0;
             }
+        }
+    }
+
+    void release_()
+    {
+        // Sequence entries are non-owning plan pointers. Drop them before the
+        // plan containers so no stale references survive a manual release.
+        plan_sequences_.clear();
+        c2cf_plan_sequences_.clear();
+        c2cb_plan_sequences_.clear();
+        opaque_c2c_plan_sequences_.clear();
+        plan_sequence_kinds_.clear();
+        plan_sequence_typed_indices_.clear();
+        plan_sequence_opaque_indices_.clear();
+
+        destroy_minimal_reference_c2c_plan_arrays_();
+        minimal_reference_c2c_plan_arrays_.clear();
+
+        destroy_raw_c2c_plan_array_bundles_();
+        for ( auto &bundle : c2c_plan_array_bundles_ )
+        {
+            // cuFFT handles are bound to these streams. Destroy the handles
+            // first; vector member destruction would otherwise do the reverse.
+            bundle.plans.clear();
+            bundle.handles.clear();
+            bundle.context_handles.clear();
+            bundle.streams.clear();
+            bundle.external_streams.clear();
+            bundle.offsets.clear();
+        }
+        c2c_plan_array_bundles_.clear();
+
+        for ( auto &bundle : r2c_c2r_plan_bundles_ )
+        {
+            bundle.forward_plans.clear();
+            bundle.inverse_plans.clear();
+            bundle.streams.clear();
+        }
+        r2c_c2r_plan_bundles_.clear();
+
+        container_.clear();
+        if ( !work_area_.is_free() )
+            work_area_.free();
+
+        work_area_size_    = 0;
+        activated_         = false;
+        external_activated_ = false;
+        hot_exec_no_sync_  = false;
+        update_memory_profile_();
+    }
+
+    void release_noexcept_() noexcept
+    {
+        try
+        {
+            release_();
+        }
+        catch ( ... )
+        {
         }
     }
 

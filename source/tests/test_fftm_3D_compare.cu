@@ -377,20 +377,21 @@ test_options parse_options( int argc, char *argv[], int num_procs )
 fftm::fftm_init_options make_init_options( const test_options &options )
 {
     fftm::fftm_init_options init_options;
-    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
-    init_options.direct_p2p_cuda_aware      = options.direct_p2p_cuda_aware;
-    init_options.use_p2p_byte_transfer      = options.use_p2p_byte_transfer;
-    init_options.print_pencil_schedule      = options.print_pencil_schedule;
-    init_options.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
-    init_options.use_stable_forward_byte_send_buffer = options.use_stable_forward_byte_send_buffer;
-    init_options.use_ready_stable_forward_byte_send_buffer = options.use_ready_stable_forward_byte_send_buffer;
-    init_options.use_contiguous_forward_byte_send = options.use_contiguous_forward_byte_send;
-    init_options.use_physical_forward_peer_exchange = options.use_physical_forward_peer_exchange;
-    init_options.contiguous_forward_send_mode = options.contiguous_forward_send_mode;
-    init_options.contiguous_forward_send_chunk_bytes = options.contiguous_forward_send_chunk_bytes;
-    init_options.large_count_p2p_transport = options.large_count_p2p_transport;
-    init_options.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
-    init_options.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
+    init_options.reporting = fftm::profiling_reporting_options();
+    init_options.execution.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.execution.direct_p2p_cuda_aware      = options.direct_p2p_cuda_aware;
+    init_options.execution.use_p2p_byte_transfer      = options.use_p2p_byte_transfer;
+    init_options.diagnostics.print_pencil_schedule      = options.print_pencil_schedule;
+    init_options.diagnostics.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
+    init_options.diagnostics.use_stable_forward_byte_send_buffer = options.use_stable_forward_byte_send_buffer;
+    init_options.diagnostics.use_ready_stable_forward_byte_send_buffer = options.use_ready_stable_forward_byte_send_buffer;
+    init_options.diagnostics.use_contiguous_forward_byte_send = options.use_contiguous_forward_byte_send;
+    init_options.diagnostics.use_physical_forward_peer_exchange = options.use_physical_forward_peer_exchange;
+    init_options.diagnostics.contiguous_forward_send_mode = options.contiguous_forward_send_mode;
+    init_options.diagnostics.contiguous_forward_send_chunk_bytes = options.contiguous_forward_send_chunk_bytes;
+    init_options.execution.large_count_p2p_transport = options.large_count_p2p_transport;
+    init_options.diagnostics.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
+    init_options.diagnostics.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
     init_options.pencil_pipeline_3d         = options.pencil_pipeline;
     return init_options;
 }

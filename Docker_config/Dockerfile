@@ -30,6 +30,7 @@ COPY README.md LICENSE /opt/fftm_src/
 
 RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.bin \
     test_benchmark_fftm_4D.bin test_benchmark_fftm_4D_nca.bin \
+    test_fftm_quiet_default.bin test_fftm_autotune_hardware.bin test_fftm_resource_lifecycle.bin \
     test_scfd_mpi_transport.bin \
     test_4D_poisson_mpi.bin test_4D_poisson_mpi_tutorial.bin \
     BUILD_FOLDER=/opt/fftm/bin \
@@ -43,6 +44,9 @@ RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.b
     test -x /opt/fftm/bin/test_benchmark_fftm_3D_nca.bin && \
     test -x /opt/fftm/bin/test_benchmark_fftm_4D.bin && \
     test -x /opt/fftm/bin/test_benchmark_fftm_4D_nca.bin && \
+    test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
+    test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
+    test -x /opt/fftm/bin/test_fftm_resource_lifecycle.bin && \
     test -x /opt/fftm/bin/test_scfd_mpi_transport.bin && \
     test -x /opt/fftm/bin/test_4D_poisson_mpi.bin && \
     test -x /opt/fftm/bin/test_4D_poisson_mpi_tutorial.bin && \
@@ -111,7 +115,11 @@ RUN python3 -m venv /opt/fftm/visualization-venv && \
     rm -f /tmp/pyvista-smoke.png
 
 RUN test -x /opt/fftm/bin/test_scfd_mpi_transport.bin && \
+    test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
+    test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
+    test -x /opt/fftm/bin/test_fftm_resource_lifecycle.bin && \
     test -x /opt/fftm/scripts/run_scfd_mpi_transport_diagnostic.sh && \
+    test -x /opt/fftm/scripts/run_cpp_autotune_validation.sh && \
     test -x /opt/fftm/bin/taylor_green_3d_autotuned.bin && \
     test -x /opt/fftm/bin/taylor_green_spacetime_4d.bin && \
     test -x /opt/fftm/scripts/run_mpi_rank_affinity.sh && \

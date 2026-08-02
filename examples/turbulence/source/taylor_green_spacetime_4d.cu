@@ -158,27 +158,11 @@ rect4_t range_4d( const Array &array )
 
 fftm::fftm_init_options production_4d_options()
 {
-    fftm::fftm_init_options options;
-    options.print_profile_summary_on_destroy = false;
-    options.print_profile_totals_on_destroy  = false;
-    options.print_memory_profile_on_destroy  = false;
-    options.print_memory_totals_on_destroy   = false;
-    options.direct_p2p_cuda_aware            = true;
-    options.use_p2p_byte_transfer            = true;
-    options.use_4d_slab_native_xw_transpose  = true;
-    options.spectral_layout_4d               = fftm::fftm_4d_spectral_layout::native_xzwy;
-    options.use_4d_slab_native_xw_native_spectral_layout = true;
-    options.use_4d_native_xw_direct_layout       = true;
-    options.use_4d_native_xw_chunked_transport   = true;
-    options.native_xw_chunk_bytes =
-        static_cast<std::size_t>( 512 ) * static_cast<std::size_t>( 1024 ) * static_cast<std::size_t>( 1024 );
-    options.native_xw_chunk_window                = 1;
-    options.use_4d_native_xw_compact_staging      = true;
-    options.use_4d_slab_native_work_area_alias    = true;
-    options.use_4d_slab_native_wz_communication_layout = true;
-    options.slab_native_wz_plan_concurrency       = 4;
-    options.use_4d_slab_native_wz_ready_pipeline  = true;
-    return options;
+    return fftm::production_options_4d(
+        fftm::transform_strategy_4d_mpi::slab_slab,
+        fftm::fftm_4d_spectral_layout::native_xzwy,
+        true
+    );
 }
 
 template <class HostSnapshot>

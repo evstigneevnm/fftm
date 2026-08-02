@@ -115,6 +115,93 @@ The `ffts` benchmarks are the preferred one-GPU baseline for performance plots.
 `fftm` distributes the transform over MPI ranks. Each MPI rank selects one CUDA
 device through `scfd::utils::init_cuda_mpi`.
 
+### Production configuration
+
+Application code should start from a production preset rather than configuring
+transport and plan-execution switches individually:
+
+```cpp
+auto options_3d = fftm::production_options_3d(
+    fftm::transform_strategy_3d::pencil_pencil,
+    comm.num_procs,
+    true // CUDA-aware MPI
+);
+
+auto options_4d = fftm::production_options_4d(
+    fftm::transform_strategy_4d_mpi::slab_slab,
+    fftm::fftm_4d_spectral_layout::native_xzwy,
+    true // CUDA-aware MPI
+);
+```
+
+The top-level `fftm_init_options` contains layout selection and three grouped
+option sets:
+
+| Group | Purpose |
+| --- | --- |
+| `reporting` | Explicit profiling, verbose setup messages, and destruction-time summaries. Defaults to silent. |
+| `execution` | Internal policy selected by production presets or the autotune cache. Direct use is intended for benchmark construction. |
+| `diagnostics` | Unsafe, failed, or measurement-only variants. These are disabled by default and are not production API choices. |
+
+Use `fftm::profiling_reporting_options()` when a benchmark intentionally needs
+the complete timing and memory summaries.
+
+The C++ autotune API has two layers and does not require Python:
+
+- `fftm_autotune.hpp` creates or loads a known production-policy cache.
+- `fftm_autotune_measure.hpp` measures complete forward/backward pairs for a
+  production-safe 3D candidate matrix, stores every candidate timing, and
+  selects the lowest median max-rank wall time.
+
+Schema-v2 caches validate the GPU model and architecture, device memory,
+CUDA runtime and driver, MPI implementation, node/rank topology, distinct
+devices per node, and transport environment. Exact device UUIDs, PCI IDs, and
+node names are recorded but only enforced when
+`autotune_options::strict_device_identity` is enabled. This lets an ordinary
+cache move between equivalent scheduler nodes while preventing a wrapped
+multi-rank/one-GPU run from matching a real multi-GPU allocation. Legacy
+hardware signatures are rejected unless explicitly allowed.
+
+The minimal measured setup is:
+
+```cpp
+fftm::autotune::autotune_options cache;
+cache.cache_file = "fftm_3d.env";
+
+fftm::autotune::measured_3d_options measurements;
+measurements.warmup = 2;
+measurements.iterations = 5;
+measurements.verify_candidate_memory_recovery = true;
+
+using evaluator_t = fftm::autotune::fftm_3d_candidate_evaluator<
+    fft_backend_t, comm_t, backend_t, log_t>;
+evaluator_t evaluator(comm, sizes, log);
+
+auto selected = fftm::autotune::load_or_measure_3d_config<runtime_api_t>(
+    comm, sizes, cache, measurements, evaluator);
+```
+
+An expert can constrain a cached selection without rerunning measurements:
+
+```cpp
+cache.constraints_3d.strategy_3d = "pencil-pencil";
+cache.constraints_3d.pencil_layout = "opt0";
+```
+
+The measured cache retains the global winner and the timings/configuration of
+all tested candidates, so removing the constraints restores global-fastest
+selection. Plan construction is outside the timed section; the benchmarked
+quantity is a synchronized forward/backward transform pair. During a measured
+sweep, candidates lease backend-neutral SCFD pools for the FFT workspace and
+the communication-visible complex spectrum. These allocations are reused
+without freeing and reallocating CUDA-aware MPI-registered storage, then
+transferred to the selected application plan and its spectrum view. The real
+input retains normal SCFD ownership because it is not registered by the
+validated communication paths. Applications using a measured
+selection should initialize the transform arrays with
+`init_autotuned_3d_data_arrays`. The memory guard reports intentional pool
+growth separately and still rejects unexplained retained memory.
+
 ### 3D Strategies
 
 | Strategy | Process grid | Local FFT structure |
@@ -139,12 +226,10 @@ device through `scfd::utils::init_cuda_mpi`.
 | `p2p-waitall` | Peer-to-peer nonblocking sends/receives, completed with `Waitall`. |
 | `p2p-waitany` | Peer-to-peer nonblocking sends/receives, unpacking received chunks as they complete. |
 
-For large production measurements, the most tested default is currently:
-
-```bash
---mode p2p-waitany --no-direct-backward-receive --direct-p2p-cuda-aware \
-  --no-p2p-send-thread --no-p2p-byte-transfer
-```
+For large production measurements, use the C++ production preset or the
+benchmark launcher’s `production` policy. The selected byte-transfer and
+layout options differ by strategy and process count, so one manual flag list is
+not valid for every 3D and 4D path.
 
 Avoid `alltoallw` for very large sizes unless the MPI stack has been tested for
 large derived datatypes and displacements.
@@ -365,6 +450,19 @@ For fixed-size strong scaling across GPU counts, add:
 FFTM_FIXED_SCALING_SIZES_3D=2048
 FFTM_FIXED_SCALING_SIZES_4D=256
 ```
+
+After changing production configuration or transpose ownership, rebuild the
+container and run the focused six-case guard:
+
+```bash
+FFTM_CONTAINER_IMAGE=/scratch/$USER/fftm_bench_a100.sqsh \
+FFTM_DATA_DIR=/scratch/$USER/data_cleanup_prod_guard_$(date +%Y%m%d_%H%M%S) \
+scripts/run_cleanup_production_guard.sh
+```
+
+It checks the validated 6/7/8-GPU 3D `2048^3` pencil configurations and 4D
+`320^4` native-spectral slab configurations. Node `cn13` is excluded by
+default and can be overridden with `FFTM_CLEANUP_SRUN_EXTRA_ARGS`.
 
 ### Orchestration Script Controls
 

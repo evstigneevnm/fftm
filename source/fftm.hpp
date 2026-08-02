@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -15,7 +16,6 @@
 
 #include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
-#include <scfd/memory/shared_buffer.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
@@ -23,6 +23,7 @@
 #include <scfd/utils/safe_call.h>
 #include <scfd/utils/system_timer_event.h>
 
+#include "fftm_options.hpp"
 #include "detail/array_arrangers.h"
 #include "detail/direct_transpose_4d.h"
 #include "detail/memory_profile_utils.h"
@@ -30,175 +31,13 @@
 #include "detail/mpi_transpose_3d_pencil_pencil_reference_owned.h"
 #include "detail/mpi_transpose_3d_pencil_pencil_pipeline.h"
 #include "detail/mpi_transpose_4d.h"
+#include "detail/shared_workspace_buffer.h"
 #include "fft_direction.h"
 #include "fft_partitioning.h"
 #include "profiling.h"
 
 namespace fftm
 {
-
-enum class transform_strategy_3d
-{
-    slab_pencil,
-    pencil_slab,
-    pencil_pencil
-};
-
-enum class transform_strategy_4d_mpi
-{
-    pencil_pencil,
-    slab_slab
-};
-
-enum class fftm_4d_spectral_layout
-{
-    public_yzwx,
-    native_xzwy
-};
-
-inline const char *fftm_4d_spectral_layout_name( fftm_4d_spectral_layout layout )
-{
-    switch ( layout )
-    {
-    case fftm_4d_spectral_layout::public_yzwx:
-        return "public-yzwx";
-    case fftm_4d_spectral_layout::native_xzwy:
-        return "native-xzwy";
-    }
-    return "unknown";
-}
-
-template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv, bool UseOptimized = true>
-struct strategy_3d_slab_pencil
-{
-};
-
-template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv, bool UseOptimized = true>
-struct strategy_3d_pencil_slab
-{
-};
-
-template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv, bool UseOptimized = true>
-struct strategy_3d_pencil_pencil
-{
-};
-
-enum class fftm_3d_pencil_layout
-{
-    auto_select,
-    opt0,
-    opt1,
-    legacy
-};
-
-enum class fftm_3d_pencil_pipeline
-{
-    staged,
-    fused,
-    reference,
-    reference_parity,
-    egger = reference,
-    egger_parity = reference_parity
-};
-
-template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
-struct strategy_4d_pencil_pencil_mpi
-{
-};
-
-template <mpi_transpose_3d_mode Mode = mpi_transpose_3d_mode::alltoallv>
-struct strategy_4d_slab_slab_mpi
-{
-};
-
-struct fftm_init_options
-{
-    std::string profiling_key                    = "fftm_prof";
-    std::string memory_profiling_key             = "fftm_mem";
-    bool        use_optimized                    = true;
-    bool        use_direct_backward_receive      = false;
-    bool        direct_p2p_cuda_aware            = true;
-    bool        use_p2p_send_thread              = false;
-	    bool        use_p2p_byte_transfer            = false;
-	    bool        use_persistent_p2p               = false;
-	    bool        use_ready_p2p_send               = false;
-    bool        print_pencil_schedule            = false;
-    bool        use_direct_forward_byte_receive  = false;
-    bool        use_stable_forward_byte_send_buffer = false;
-    bool        use_ready_stable_forward_byte_send_buffer = false;
-    bool        use_contiguous_forward_byte_send = false;
-    bool        use_physical_forward_peer_exchange = false;
-    fftm_3d_contiguous_forward_send_mode contiguous_forward_send_mode =
-        fftm_3d_contiguous_forward_send_mode::single;
-    std::size_t contiguous_forward_send_chunk_bytes = static_cast<std::size_t>( 1 ) << 30;
-    fftm_3d_large_count_p2p_transport large_count_p2p_transport =
-        fftm_3d_large_count_p2p_transport::hindexed;
-    bool        use_large_count_datatype_cache = false;
-    bool        use_fft_exec_no_sync = false;
-    bool        use_native_backward_second_peer_loop = false;
-    bool        use_3d_deferred_send_completion = false;
-    bool        use_native_opt0_default_z_layout = false;
-    bool        use_native_opt0_reference_y_buffer_topology = false;
-    bool        use_native_opt0_compact_y_workarea = false;
-    bool        use_native_opt0_tight_y_plan_sequence = false;
-    bool        use_native_opt0_shared_y_plan_handles = false;
-    bool        use_native_opt0_y_group_device_sync = false;
-    bool        use_native_opt0_y_no_sync_exec = true;
-    bool        use_native_opt0_raw_y_plan_array_executor = false;
-    bool        use_native_opt0_reference_y_plan_lifecycle = false;
-    bool        use_native_opt0_reference_y_plan_bundle = false;
-    bool        use_native_opt0_raw_y_plan_bundle = false;
-    bool        use_native_opt0_y_plan_bundle_stream_first = false;
-    bool        use_native_opt0_raw_y_plan_bundle_reference_streams = false;
-    bool        use_native_opt0_reference_local_plan_context = false;
-    bool        allow_native_opt0_diagnostic_variants = false;
-    bool        use_native_opt0_memory_feasibility_guard = true;
-    std::size_t native_opt0_memory_feasibility_reserve_bytes =
-        static_cast<std::size_t>( 512 ) * static_cast<std::size_t>( 1024 ) * static_cast<std::size_t>( 1024 );
-    fftm_3d_pencil_layout pencil_layout_3d        = fftm_3d_pencil_layout::auto_select;
-    fftm_3d_pencil_pipeline pencil_pipeline_3d    = fftm_3d_pencil_pipeline::staged;
-    bool        print_profile_summary_on_destroy = true;
-    bool        print_profile_totals_on_destroy  = true;
-    bool        print_memory_profile_on_destroy  = true;
-    bool        print_memory_totals_on_destroy   = true;
-    bool        enable_local_fft_diagnostics     = false;
-    std::string local_fft_diagnostics_directory;
-    std::string local_fft_diagnostics_label;
-    bool        enable_native_stage_timers       = false;
-    bool        use_4d_slab_native_xw_transpose  = true;
-    bool        use_4d_slab_native_xw_batched_peer_kernels = false;
-    bool        use_4d_slab_native_xw_tensor_coalesced_kernels = false;
-    bool        use_4d_slab_native_xw_vector4_kernels = false;
-    bool        use_4d_slab_native_xw_tiled_kernels = false;
-    bool        use_4d_slab_native_xw_layout_stage = false;
-    bool        use_4d_native_xw_direct_layout = false;
-    bool        use_4d_native_xw_chunked_transport = false;
-    std::size_t native_xw_chunk_bytes =
-        static_cast<std::size_t>( 512 ) * static_cast<std::size_t>( 1024 ) * static_cast<std::size_t>( 1024 );
-    std::size_t native_xw_chunk_window = 0; // 0 keeps all chunks in flight.
-    // Use bounded per-peer slots instead of a full-domain XW buffer.
-    bool        use_4d_native_xw_compact_staging = false;
-    // Alias the otherwise-unused slab stage-1 tensor to the shared FFT/transpose
-    // workspace. This is only valid for the native-xzwy slab execution path.
-    bool        use_4d_slab_native_work_area_alias = false;
-    // Produce the slab WZ FFT in peer-transfer order and exchange contiguous
-    // Y planes directly, avoiding forward pack and backward unpack kernels.
-    bool        use_4d_slab_native_wz_communication_layout = false;
-    // Number of independent WZ FFT plan/stream lanes used by the communication
-    // layout. Each lane owns a disjoint slice of the shared FFT work area.
-    std::size_t slab_native_wz_plan_concurrency = 1;
-    // Interleave completed WZ planes with the direct same-XW exchange.
-    bool        use_4d_slab_native_wz_ready_pipeline = false;
-    bool        use_4d_pencil_same_zw_peer_paired = false;
-    bool        use_4d_pencil_same_zw_native_layout = true;
-    bool        use_4d_pencil_degenerate_xw_slab_path = false;
-    bool        use_4d_pencil_degenerate_local_transposes = false;
-    bool        use_4d_pencil_degenerate_same_xw_native = false;
-    bool        use_4d_pencil_degenerate_wz_sliced_z_fft = true;
-    fftm_4d_spectral_layout spectral_layout_4d = fftm_4d_spectral_layout::public_yzwx;
-    // Deprecated compatibility alias for the benchmark/script layer. Prefer spectral_layout_4d.
-    bool        use_4d_slab_native_xw_native_spectral_layout = false;
-};
 
 namespace detail
 {
@@ -487,6 +326,52 @@ public:
         catch ( ... )
         {
         }
+
+        try
+        {
+            release_resources();
+        }
+        catch ( ... )
+        {
+        }
+    }
+
+    void release_resources()
+    {
+        runtime_api_t::device_synchronize();
+        pencil_pencil_reference_owned_.quiesce_for_resource_release();
+        base_fft_.release();
+
+        release_owned_array_( scratch_stage0_xfft_3d_ );
+        release_owned_array_( scratch_stage0_default_z_3d_ );
+        release_owned_array_( scratch_stage1_3d_ );
+        release_owned_array_( scratch_stage1_xfast_3d_ );
+        release_owned_array_( scratch_stage0_stage2_4d_ );
+        release_owned_array_( scratch_stage1_4d_ );
+
+        if ( reusable_workspace_resource_ )
+        {
+            if ( reusable_workspace_lease_active_ )
+            {
+                reusable_workspace_resource_->release_lease();
+                reusable_workspace_lease_active_ = false;
+            }
+        }
+        else
+        {
+            shared_work_buffer_.release();
+            shared_host_work_buffer_.release();
+        }
+        init_done_ = false;
+    }
+
+    void set_reusable_workspace_resource(
+        const std::shared_ptr<detail::reusable_workspace_resource> &resource
+    )
+    {
+        if ( init_done_ || reusable_workspace_lease_active_ )
+            throw std::logic_error( "FFTM reusable workspace must be set before plan initialization" );
+        reusable_workspace_resource_ = resource;
     }
 
     template <std::size_t Dim>
@@ -718,7 +603,7 @@ public:
         {
             native_4d_stage_timing_iteration_ = iteration;
             native_4d_stage_timings_.clear();
-            native_4d_stage_timing_active_ = init_options_.enable_native_stage_timers;
+            native_4d_stage_timing_active_ = init_options_.diagnostics.enable_native_stage_timers;
         }
         pencil_pencil_reference_owned_.begin_native_stage_timing_iteration( iteration );
     }
@@ -879,8 +764,8 @@ private:
     using for_each_3d_t    = typename Backend::template for_each_nd_type<3, int>;
     using for_each_4d_t    = typename Backend::template for_each_nd_type<4, int>;
     using complex_buffer_t = scfd::arrays::array_nd<complex, 1, memory_t>;
-    using shared_buffer_t  = scfd::memory::shared_buffer<memory_t>;
-    using host_shared_buffer_t       = scfd::memory::shared_buffer<typename memory_t::host_memory_type>;
+    using shared_buffer_t = detail::shared_workspace_buffer<memory_t>;
+    using host_shared_buffer_t = detail::shared_workspace_buffer<typename memory_t::host_memory_type>;
 
     typename optional_profiler_t::scoped_ticker profile_scope_( const std::string &name )
     {
@@ -900,12 +785,16 @@ private:
 
     void *shared_work_ptr_( std::size_t offset = 0 ) const
     {
-        return static_cast<void *>( static_cast<char *>( shared_work_buffer_.naive_ptr() ) + offset );
+        void *base = reusable_workspace_resource_ ? reusable_workspace_resource_->device_ptr()
+                                                   : shared_work_buffer_.naive_ptr();
+        return static_cast<void *>( static_cast<char *>( base ) + offset );
     }
 
     void *shared_host_work_ptr_( std::size_t offset = 0 ) const
     {
-        return static_cast<void *>( static_cast<char *>( shared_host_work_buffer_.naive_ptr() ) + offset );
+        void *base = reusable_workspace_resource_ ? reusable_workspace_resource_->host_ptr()
+                                                   : shared_host_work_buffer_.naive_ptr();
+        return static_cast<void *>( static_cast<char *>( base ) + offset );
     }
 
     std::size_t add_reserve_bytes_( std::size_t allocation_bytes, std::size_t reserve_bytes, const char *what ) const
@@ -1148,11 +1037,14 @@ private:
         scratch_stage0_default_z_3d_.free();
         native_opt0_default_z_scratch_aliased_ = true;
 
-        std::ostringstream ss;
-        ss << "FFTM native opt0 default-Z scratch aliased into shared workspace: released="
-           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( released_bytes ) )
-           << " MiB";
-        log_.info( ss.str() );
+        if ( init_options_.reporting.verbose )
+        {
+            std::ostringstream ss;
+            ss << "FFTM native opt0 default-Z scratch aliased into shared workspace: released="
+               << bytes_to_mib_( static_cast<memory_profile_bytes_t>( released_bytes ) )
+               << " MiB";
+            log_.info( ss.str() );
+        }
     }
 
     void maybe_enable_native_opt0_auto_compact_y_workarea_(
@@ -1160,8 +1052,8 @@ private:
     )
     {
         if ( !native_opt0_reference_y_buffer_topology_enabled_() ||
-             !init_options_.use_native_opt0_memory_feasibility_guard ||
-             init_options_.use_native_opt0_compact_y_workarea ||
+             !init_options_.execution.use_native_opt0_memory_feasibility_guard ||
+             init_options_.execution.use_native_opt0_compact_y_workarea ||
              native_opt0_auto_compact_y_workarea_ )
         {
             return;
@@ -1173,7 +1065,7 @@ private:
             return;
         }
 
-        const std::size_t reserve_bytes = init_options_.native_opt0_memory_feasibility_reserve_bytes;
+        const std::size_t reserve_bytes = init_options_.execution.native_opt0_memory_feasibility_reserve_bytes;
         const std::size_t noncompact_workspace_bytes = align_up_(
             std::max( std::max( fft_work_size, transpose_work_size ), native_opt0_y_parallel_work_size_( false ) ),
             256
@@ -1187,7 +1079,16 @@ private:
         const std::size_t compact_required_bytes =
             add_reserve_bytes_( compact_workspace_bytes, reserve_bytes, "native opt0 compact requirement" );
 
-        if ( mem_info.free_bytes >= noncompact_required_bytes || mem_info.free_bytes < compact_required_bytes )
+        const std::size_t reusable_capacity = reusable_workspace_resource_
+                                                  ? reusable_workspace_resource_->device_capacity_bytes()
+                                                  : 0;
+        if ( reusable_capacity >= noncompact_workspace_bytes )
+            return;
+        const bool reusable_compact_fit =
+            reusable_capacity != 0 && reusable_capacity >= compact_workspace_bytes;
+
+        if ( !reusable_compact_fit &&
+             ( mem_info.free_bytes >= noncompact_required_bytes || mem_info.free_bytes < compact_required_bytes ) )
         {
             return;
         }
@@ -1195,19 +1096,22 @@ private:
         native_opt0_auto_compact_y_workarea_ = true;
         pencil_pencil_reference_owned_.set_native_opt0_compact_y_workarea_enabled( true );
 
-        std::ostringstream ss;
-        ss << "FFTM native opt0 auto-compact Y workspace enabled: free="
-           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( mem_info.free_bytes ) )
-           << " MiB, noncompact_required="
-           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( noncompact_required_bytes ) )
-           << " MiB, compact_required="
-           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( compact_required_bytes ) )
-           << " MiB, saved="
-           << bytes_to_mib_(
-                  static_cast<memory_profile_bytes_t>( noncompact_workspace_bytes - compact_workspace_bytes )
-              )
-           << " MiB";
-        log_.info( ss.str() );
+        if ( init_options_.reporting.verbose )
+        {
+            std::ostringstream ss;
+            ss << "FFTM native opt0 auto-compact Y workspace enabled: free="
+               << bytes_to_mib_( static_cast<memory_profile_bytes_t>( mem_info.free_bytes ) )
+               << " MiB, noncompact_required="
+               << bytes_to_mib_( static_cast<memory_profile_bytes_t>( noncompact_required_bytes ) )
+               << " MiB, compact_required="
+               << bytes_to_mib_( static_cast<memory_profile_bytes_t>( compact_required_bytes ) )
+               << " MiB, saved="
+               << bytes_to_mib_(
+                      static_cast<memory_profile_bytes_t>( noncompact_workspace_bytes - compact_workspace_bytes )
+                  )
+               << " MiB";
+            log_.info( ss.str() );
+        }
     }
 
     void activate_shared_work_area_()
@@ -1256,8 +1160,18 @@ private:
             256
         );
         preflight_native_opt0_shared_work_allocation_( shared_work_size_ );
-        shared_work_buffer_.require_size_bytes( shared_work_size_ );
-        shared_work_buffer_.activate();
+        if ( reusable_workspace_resource_ )
+        {
+            reusable_workspace_resource_->acquire( detail::workspace_memory_type_token<memory_t>() );
+            reusable_workspace_lease_active_ = true;
+            reusable_workspace_resource_->require_device_size_bytes( shared_work_size_ );
+            reusable_workspace_resource_->activate_device();
+        }
+        else
+        {
+            shared_work_buffer_.require_size_bytes( shared_work_size_ );
+            shared_work_buffer_.activate();
+        }
 
         const std::size_t transpose_host_work_size = only_same_xw_4d_work
                                                           ? same_xw_.get_host_work_size_bytes()
@@ -1278,10 +1192,16 @@ private:
                                                                 )
                                                             );
         shared_host_work_size_ = align_up_( transpose_host_work_size, 256 );
-        shared_host_work_buffer_.require_size_bytes( shared_host_work_size_ );
-        if ( shared_host_work_size_ != 0 )
+        if ( reusable_workspace_resource_ )
         {
-            shared_host_work_buffer_.activate();
+            reusable_workspace_resource_->require_host_size_bytes( shared_host_work_size_ );
+            reusable_workspace_resource_->activate_host();
+        }
+        else
+        {
+            shared_host_work_buffer_.require_size_bytes( shared_host_work_size_ );
+            if ( shared_host_work_size_ != 0 )
+                shared_host_work_buffer_.activate();
         }
 
         void *work_area = shared_work_ptr_();
@@ -1332,7 +1252,7 @@ private:
 
     bool only_same_xw_4d_transpose_workspace_active_() const
     {
-        if ( dim_ != 4 || !init_options_.use_4d_native_xw_direct_layout )
+        if ( dim_ != 4 || !init_options_.execution.use_4d_native_xw_direct_layout )
         {
             return false;
         }
@@ -1346,11 +1266,11 @@ private:
 
     void ensure_slab_4d_native_work_area_alias_supported_() const
     {
-        if ( !init_options_.use_4d_slab_native_work_area_alias )
+        if ( !init_options_.execution.use_4d_slab_native_work_area_alias )
             return;
         if ( dim_ != 4 || strategy_family_4d != transform_strategy_4d_mpi::slab_slab ||
              !slab_4d_native_xw_native_spectral_layout_enabled_() ||
-             !init_options_.use_4d_native_xw_direct_layout )
+             !init_options_.execution.use_4d_native_xw_direct_layout )
         {
             throw std::logic_error(
                 "FFTM 4D slab work-area alias requires slab-slab, native-xzwy spectral layout, "
@@ -1365,7 +1285,7 @@ private:
 
     void log_shared_workspace_sizes_()
     {
-        if ( dim_ != 4 )
+        if ( dim_ != 4 || !init_options_.reporting.verbose )
             return;
         std::ostringstream ss;
         ss << "FFTM 4D shared workspace: fft=" << shared_fft_work_size_ << " B ("
@@ -1388,7 +1308,7 @@ private:
     void preflight_native_opt0_shared_work_allocation_( std::size_t allocation_bytes ) const
     {
         if ( !native_opt0_reference_y_buffer_topology_enabled_() ||
-             !init_options_.use_native_opt0_memory_feasibility_guard )
+             !init_options_.execution.use_native_opt0_memory_feasibility_guard )
         {
             return;
         }
@@ -1399,9 +1319,20 @@ private:
             return;
         }
 
-        const std::size_t reserve_bytes = init_options_.native_opt0_memory_feasibility_reserve_bytes;
+        const std::size_t reserve_bytes = init_options_.execution.native_opt0_memory_feasibility_reserve_bytes;
+        const std::size_t reusable_capacity = reusable_workspace_resource_
+                                                  ? reusable_workspace_resource_->device_capacity_bytes()
+                                                  : 0;
+        if ( reusable_capacity != 0 && reusable_capacity < allocation_bytes )
+        {
+            throw std::runtime_error(
+                "FFTM reusable device workspace is smaller than the requested native opt0 workspace; "
+                "evaluate the largest-memory candidate first"
+            );
+        }
+        const std::size_t allocation_needed = reusable_capacity >= allocation_bytes ? 0 : allocation_bytes;
         const std::size_t required_bytes =
-            add_reserve_bytes_( allocation_bytes, reserve_bytes, "native opt0 memory feasibility guard" );
+            add_reserve_bytes_( allocation_needed, reserve_bytes, "native opt0 memory feasibility guard" );
         if ( mem_info.free_bytes >= required_bytes )
         {
             return;
@@ -1422,6 +1353,8 @@ private:
            << bytes_to_mib_( static_cast<memory_profile_bytes_t>( required_bytes ) )
            << " MiB, shared_workspace="
            << bytes_to_mib_( static_cast<memory_profile_bytes_t>( allocation_bytes ) )
+           << " MiB, reusable_capacity="
+           << bytes_to_mib_( static_cast<memory_profile_bytes_t>( reusable_capacity ) )
            << " MiB, reserve="
            << bytes_to_mib_( static_cast<memory_profile_bytes_t>( reserve_bytes ) )
            << " MiB, domain_slot="
@@ -1491,28 +1424,29 @@ private:
 
     static fftm_init_options normalize_init_options_( fftm_init_options options )
     {
-        if ( options.use_4d_slab_native_xw_native_spectral_layout )
+        if ( options.diagnostics.use_4d_slab_native_xw_native_spectral_layout )
         {
             options.spectral_layout_4d = fftm_4d_spectral_layout::native_xzwy;
         }
         if ( native_opt0_diagnostic_variant_requested_( options ) &&
-             !options.allow_native_opt0_diagnostic_variants )
+             !options.diagnostics.allow_native_opt0_diagnostic_variants )
         {
             throw std::logic_error(
                 "FFTM native opt0 diagnostic Y executor variants require "
-                "fftm_init_options::allow_native_opt0_diagnostic_variants=true. "
+                "fftm_init_options::diagnostics.allow_native_opt0_diagnostic_variants=true. "
                 "Use the production native opt0 path without reference/bundle/context diagnostic flags."
             );
         }
-        if ( options.use_fft_exec_no_sync && !options.allow_native_opt0_diagnostic_variants )
+        if ( options.diagnostics.use_fft_exec_no_sync && !options.diagnostics.allow_native_opt0_diagnostic_variants )
         {
             throw std::logic_error(
                 "FFTM generic FFT exec no-sync is diagnostic-only. It can race later MPI/copy stages unless every "
                 "consumer has an explicit stage-boundary synchronization. Use the native opt0 Y no-sync path for "
-                "production, or set fftm_init_options::allow_native_opt0_diagnostic_variants=true for diagnostics."
+                "production, or set fftm_init_options::diagnostics.allow_native_opt0_diagnostic_variants=true "
+                "for diagnostics."
             );
         }
-        if ( options.use_3d_deferred_send_completion &&
+        if ( options.diagnostics.use_3d_deferred_send_completion &&
              ( strategy_family_3d != transform_strategy_3d::pencil_pencil ||
                transpose_mode_3d != mpi_transpose_3d_mode::p2p_waitany ||
                !strategy_3d_optimized_layout ||
@@ -1524,76 +1458,76 @@ private:
                 "p2p-waitany, and reference-parity."
             );
         }
-        if ( options.use_4d_slab_native_xw_layout_stage &&
+        if ( options.diagnostics.use_4d_slab_native_xw_layout_stage &&
              options.spectral_layout_4d == fftm_4d_spectral_layout::native_xzwy )
         {
             throw std::logic_error(
                 "FFTM 4D slab native XW layout-stage and native-spectral-layout are mutually exclusive."
             );
         }
-        if ( options.use_4d_pencil_degenerate_local_transposes &&
+        if ( options.execution.use_4d_pencil_degenerate_local_transposes &&
              options.spectral_layout_4d != fftm_4d_spectral_layout::native_xzwy )
         {
             throw std::logic_error(
                 "FFTM 4D degenerate-pencil local transposes require spectral_layout_4d=native_xzwy."
             );
         }
-        if ( options.use_4d_pencil_degenerate_same_xw_native &&
-             !options.use_4d_pencil_degenerate_local_transposes )
+        if ( options.execution.use_4d_pencil_degenerate_same_xw_native &&
+             !options.execution.use_4d_pencil_degenerate_local_transposes )
         {
             throw std::logic_error(
                 "FFTM 4D degenerate-pencil native same_xw requires use_4d_pencil_degenerate_local_transposes=true."
             );
         }
-        if ( options.use_4d_native_xw_direct_layout &&
+        if ( options.execution.use_4d_native_xw_direct_layout &&
              options.spectral_layout_4d != fftm_4d_spectral_layout::native_xzwy )
         {
             throw std::logic_error(
                 "FFTM 4D native XW direct layout requires spectral_layout_4d=native_xzwy."
             );
         }
-        if ( options.use_4d_native_xw_chunked_transport && !options.use_4d_native_xw_direct_layout )
+        if ( options.execution.use_4d_native_xw_chunked_transport && !options.execution.use_4d_native_xw_direct_layout )
         {
             throw std::logic_error(
                 "FFTM 4D native XW chunked transport requires use_4d_native_xw_direct_layout=true."
             );
         }
-        if ( options.use_4d_native_xw_chunked_transport && options.native_xw_chunk_bytes == 0 )
+        if ( options.execution.use_4d_native_xw_chunked_transport && options.execution.native_xw_chunk_bytes == 0 )
         {
             throw std::logic_error( "FFTM 4D native XW chunked transport requires a nonzero chunk size." );
         }
-        if ( options.native_xw_chunk_window != 0 && !options.use_4d_native_xw_chunked_transport )
+        if ( options.execution.native_xw_chunk_window != 0 && !options.execution.use_4d_native_xw_chunked_transport )
         {
             throw std::logic_error( "FFTM 4D native XW chunk window requires chunked transport." );
         }
-        if ( options.use_4d_native_xw_compact_staging &&
-             ( !options.use_4d_native_xw_direct_layout ||
-               !options.use_4d_native_xw_chunked_transport ||
-               options.native_xw_chunk_window == 0 ) )
+        if ( options.execution.use_4d_native_xw_compact_staging &&
+             ( !options.execution.use_4d_native_xw_direct_layout ||
+               !options.execution.use_4d_native_xw_chunked_transport ||
+               options.execution.native_xw_chunk_window == 0 ) )
         {
             throw std::logic_error(
                 "FFTM 4D native XW compact staging requires direct layout, chunked transport, and a bounded chunk window."
             );
         }
-        if ( options.use_4d_slab_native_wz_communication_layout &&
-             ( !options.use_4d_slab_native_xw_transpose ||
+        if ( options.execution.use_4d_slab_native_wz_communication_layout &&
+             ( !options.execution.use_4d_slab_native_xw_transpose ||
                options.spectral_layout_4d != fftm_4d_spectral_layout::native_xzwy ||
-               !options.use_4d_native_xw_direct_layout ||
-               !options.use_4d_native_xw_chunked_transport ||
-               options.native_xw_chunk_window == 0 ) )
+               !options.execution.use_4d_native_xw_direct_layout ||
+               !options.execution.use_4d_native_xw_chunked_transport ||
+               options.execution.native_xw_chunk_window == 0 ) )
         {
             throw std::logic_error(
                 "FFTM 4D slab WZ communication layout requires native slab XW, native-xzwy spectral layout, "
                 "direct layout, chunked transport, and a bounded chunk window."
             );
         }
-        if ( options.slab_native_wz_plan_concurrency == 0 )
+        if ( options.execution.slab_native_wz_plan_concurrency == 0 )
         {
             throw std::logic_error( "FFTM 4D slab WZ plan concurrency must be positive." );
         }
-        if ( ( options.slab_native_wz_plan_concurrency != 1 ||
-               options.use_4d_slab_native_wz_ready_pipeline ) &&
-             !options.use_4d_slab_native_wz_communication_layout )
+        if ( ( options.execution.slab_native_wz_plan_concurrency != 1 ||
+               options.execution.use_4d_slab_native_wz_ready_pipeline ) &&
+             !options.execution.use_4d_slab_native_wz_communication_layout )
         {
             throw std::logic_error(
                 "FFTM 4D slab WZ plan concurrency/pipeline options require the WZ communication layout."
@@ -1601,24 +1535,24 @@ private:
         }
         if ( is_reference_parity_pencil_pipeline_( options.pencil_pipeline_3d ) )
         {
-            options.use_direct_backward_receive = false;
-            options.direct_p2p_cuda_aware       = true;
-            options.use_p2p_send_thread         = false;
-            options.use_p2p_byte_transfer       = true;
-            options.use_persistent_p2p          = false;
-            options.use_ready_p2p_send          = false;
+            options.execution.use_direct_backward_receive = false;
+            options.execution.direct_p2p_cuda_aware       = true;
+            options.diagnostics.use_p2p_send_thread         = false;
+            options.execution.use_p2p_byte_transfer       = true;
+            options.execution.use_persistent_p2p          = false;
+            options.diagnostics.use_ready_p2p_send          = false;
         }
         return options;
     }
 
     static bool native_opt0_diagnostic_variant_requested_( const fftm_init_options &options )
     {
-        return options.use_native_opt0_reference_y_plan_lifecycle ||
-               options.use_native_opt0_reference_y_plan_bundle ||
-               options.use_native_opt0_raw_y_plan_bundle ||
-               options.use_native_opt0_y_plan_bundle_stream_first ||
-               options.use_native_opt0_raw_y_plan_bundle_reference_streams ||
-               options.use_native_opt0_reference_local_plan_context;
+        return options.diagnostics.use_native_opt0_reference_y_plan_lifecycle ||
+               options.diagnostics.use_native_opt0_reference_y_plan_bundle ||
+               options.diagnostics.use_native_opt0_raw_y_plan_bundle ||
+               options.diagnostics.use_native_opt0_y_plan_bundle_stream_first ||
+               options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams ||
+               options.diagnostics.use_native_opt0_reference_local_plan_context;
     }
 
     static void native_4d_stage_timing_callback_( void *context, const char *stage, double ms )
@@ -1631,9 +1565,9 @@ private:
         init_options_ = normalize_init_options_( options );
         native_opt0_auto_compact_y_workarea_ = false;
         native_opt0_default_z_scratch_aliased_ = false;
-        if ( !init_options_.profiling_key.empty() )
+        if ( !init_options_.reporting.profiling_key.empty() )
         {
-            profiler_.enable( init_options_.profiling_key );
+            profiler_.enable( init_options_.reporting.profiling_key );
         }
         else
         {
@@ -1660,118 +1594,118 @@ private:
             this, &fftm::native_4d_stage_timing_callback_, "4d/transpose/same_xw"
         );
         same_xw_.set_slab_native_batched_peer_kernels_enabled(
-            init_options_.use_4d_slab_native_xw_batched_peer_kernels
+            init_options_.diagnostics.use_4d_slab_native_xw_batched_peer_kernels
         );
         same_xw_.set_slab_native_tensor_coalesced_kernels_enabled(
-            init_options_.use_4d_slab_native_xw_tensor_coalesced_kernels
+            init_options_.diagnostics.use_4d_slab_native_xw_tensor_coalesced_kernels
         );
         same_xw_.set_slab_native_vector4_kernels_enabled(
-            init_options_.use_4d_slab_native_xw_vector4_kernels
+            init_options_.diagnostics.use_4d_slab_native_xw_vector4_kernels
         );
         same_xw_.set_slab_native_tiled_kernels_enabled(
-            init_options_.use_4d_slab_native_xw_tiled_kernels
+            init_options_.diagnostics.use_4d_slab_native_xw_tiled_kernels
         );
-        same_xw_.set_native_xzwy_direct_layout_enabled( init_options_.use_4d_native_xw_direct_layout );
+        same_xw_.set_native_xzwy_direct_layout_enabled( init_options_.execution.use_4d_native_xw_direct_layout );
         same_xw_.set_native_xzwy_chunked_transport(
-            init_options_.use_4d_native_xw_chunked_transport, init_options_.native_xw_chunk_bytes,
-            init_options_.native_xw_chunk_window
+            init_options_.execution.use_4d_native_xw_chunked_transport, init_options_.execution.native_xw_chunk_bytes,
+            init_options_.execution.native_xw_chunk_window
         );
         same_xw_.set_native_xzwy_compact_staging_enabled(
-            init_options_.use_4d_native_xw_compact_staging
+            init_options_.execution.use_4d_native_xw_compact_staging
         );
         same_xw_.set_slab_native_wz_communication_layout_enabled(
             slab_4d_native_wz_communication_layout_enabled_()
         );
-        same_zw_.set_peer_paired_p2p_enabled( init_options_.use_4d_pencil_same_zw_peer_paired );
+        same_zw_.set_peer_paired_p2p_enabled( init_options_.diagnostics.use_4d_pencil_same_zw_peer_paired );
         same_zw_.set_native_message_layout_enabled( pencil_4d_native_zw_message_layout_enabled_() );
         same_zw_.set_stage_timing_callback(
             this, &fftm::native_4d_stage_timing_callback_, "4d/transpose/same_zw"
         );
         same_x_.set_direct_transfer_options(
-            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+            init_options_.execution.use_direct_backward_receive, init_options_.execution.direct_p2p_cuda_aware
         );
         same_z_.set_direct_transfer_options(
-            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+            init_options_.execution.use_direct_backward_receive, init_options_.execution.direct_p2p_cuda_aware
         );
         pencil_pencil_reference_owned_.set_direct_transfer_options(
-            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+            init_options_.execution.use_direct_backward_receive, init_options_.execution.direct_p2p_cuda_aware
         );
-        same_x_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
-        same_z_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
-        pencil_pencil_reference_owned_.set_p2p_send_thread_enabled( init_options_.use_p2p_send_thread );
-        same_x_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
-        same_z_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
-        pencil_pencil_reference_owned_.set_p2p_byte_transfer_enabled( init_options_.use_p2p_byte_transfer );
-        same_x_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
-        same_z_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
-	        pencil_pencil_reference_owned_.set_persistent_p2p_enabled( init_options_.use_persistent_p2p );
-	        pencil_pencil_reference_owned_.set_ready_p2p_send_enabled( init_options_.use_ready_p2p_send );
-	        pencil_pencil_reference_owned_.set_schedule_dump_enabled( init_options_.print_pencil_schedule );
+        same_x_.set_p2p_send_thread_enabled( init_options_.diagnostics.use_p2p_send_thread );
+        same_z_.set_p2p_send_thread_enabled( init_options_.diagnostics.use_p2p_send_thread );
+        pencil_pencil_reference_owned_.set_p2p_send_thread_enabled( init_options_.diagnostics.use_p2p_send_thread );
+        same_x_.set_p2p_byte_transfer_enabled( init_options_.execution.use_p2p_byte_transfer );
+        same_z_.set_p2p_byte_transfer_enabled( init_options_.execution.use_p2p_byte_transfer );
+        pencil_pencil_reference_owned_.set_p2p_byte_transfer_enabled( init_options_.execution.use_p2p_byte_transfer );
+        same_x_.set_persistent_p2p_enabled( init_options_.execution.use_persistent_p2p );
+        same_z_.set_persistent_p2p_enabled( init_options_.execution.use_persistent_p2p );
+	        pencil_pencil_reference_owned_.set_persistent_p2p_enabled( init_options_.execution.use_persistent_p2p );
+	        pencil_pencil_reference_owned_.set_ready_p2p_send_enabled( init_options_.diagnostics.use_ready_p2p_send );
+	        pencil_pencil_reference_owned_.set_schedule_dump_enabled( init_options_.diagnostics.print_pencil_schedule );
         pencil_pencil_reference_owned_.set_direct_forward_byte_receive_enabled(
-            init_options_.use_direct_forward_byte_receive
+            init_options_.diagnostics.use_direct_forward_byte_receive
         );
         pencil_pencil_reference_owned_.set_stable_forward_byte_send_buffer_enabled(
-            init_options_.use_stable_forward_byte_send_buffer
+            init_options_.diagnostics.use_stable_forward_byte_send_buffer
         );
         pencil_pencil_reference_owned_.set_ready_stable_forward_byte_send_buffer_enabled(
-            init_options_.use_ready_stable_forward_byte_send_buffer
+            init_options_.diagnostics.use_ready_stable_forward_byte_send_buffer
         );
         pencil_pencil_reference_owned_.set_contiguous_forward_byte_send_enabled(
-            init_options_.use_contiguous_forward_byte_send
+            init_options_.diagnostics.use_contiguous_forward_byte_send
         );
         pencil_pencil_reference_owned_.set_physical_forward_peer_exchange_enabled(
-            init_options_.use_physical_forward_peer_exchange
+            init_options_.diagnostics.use_physical_forward_peer_exchange
         );
         pencil_pencil_reference_owned_.set_contiguous_forward_send_mode(
-            init_options_.contiguous_forward_send_mode
+            init_options_.diagnostics.contiguous_forward_send_mode
         );
         pencil_pencil_reference_owned_.set_contiguous_forward_send_chunk_bytes(
-            init_options_.contiguous_forward_send_chunk_bytes
+            init_options_.diagnostics.contiguous_forward_send_chunk_bytes
         );
-        pencil_pencil_reference_owned_.set_large_count_p2p_transport( init_options_.large_count_p2p_transport );
+        pencil_pencil_reference_owned_.set_large_count_p2p_transport( init_options_.execution.large_count_p2p_transport );
         pencil_pencil_reference_owned_.set_large_count_datatype_cache_enabled(
-            init_options_.use_large_count_datatype_cache
+            init_options_.diagnostics.use_large_count_datatype_cache
         );
         pencil_pencil_reference_owned_.set_native_backward_second_peer_loop_enabled(
-            init_options_.use_native_backward_second_peer_loop
+            init_options_.diagnostics.use_native_backward_second_peer_loop
         );
         pencil_pencil_reference_owned_.set_deferred_send_completion_enabled(
-            init_options_.use_3d_deferred_send_completion
+            init_options_.diagnostics.use_3d_deferred_send_completion
         );
         pencil_pencil_reference_owned_.set_local_fft_diagnostics(
-            init_options_.enable_local_fft_diagnostics, init_options_.local_fft_diagnostics_directory,
-            init_options_.local_fft_diagnostics_label
+            init_options_.diagnostics.enable_local_fft_diagnostics, init_options_.diagnostics.local_fft_diagnostics_directory,
+            init_options_.diagnostics.local_fft_diagnostics_label
         );
-        pencil_pencil_reference_owned_.set_native_stage_timers_enabled( init_options_.enable_native_stage_timers );
+        pencil_pencil_reference_owned_.set_native_stage_timers_enabled( init_options_.diagnostics.enable_native_stage_timers );
         pencil_pencil_reference_owned_.set_native_opt0_shared_y_plan_handles_enabled(
-            init_options_.use_native_opt0_shared_y_plan_handles
+            init_options_.execution.use_native_opt0_shared_y_plan_handles
         );
         pencil_pencil_reference_owned_.set_native_opt0_y_group_device_sync_enabled(
-            init_options_.use_native_opt0_y_group_device_sync
+            init_options_.execution.use_native_opt0_y_group_device_sync
         );
         pencil_pencil_reference_owned_.set_native_opt0_y_no_sync_exec_enabled(
-            init_options_.use_native_opt0_y_no_sync_exec
+            init_options_.execution.use_native_opt0_y_no_sync_exec
         );
         pencil_pencil_reference_owned_.set_native_opt0_raw_y_plan_array_executor_enabled(
-            init_options_.use_native_opt0_raw_y_plan_array_executor
+            init_options_.execution.use_native_opt0_raw_y_plan_array_executor
         );
         pencil_pencil_reference_owned_.set_native_opt0_reference_y_plan_lifecycle_enabled(
-            init_options_.use_native_opt0_reference_y_plan_lifecycle
+            init_options_.diagnostics.use_native_opt0_reference_y_plan_lifecycle
         );
         pencil_pencil_reference_owned_.set_native_opt0_reference_y_plan_bundle_enabled(
-            init_options_.use_native_opt0_reference_y_plan_bundle
+            init_options_.diagnostics.use_native_opt0_reference_y_plan_bundle
         );
         pencil_pencil_reference_owned_.set_native_opt0_raw_y_plan_bundle_enabled(
-            init_options_.use_native_opt0_raw_y_plan_bundle
+            init_options_.diagnostics.use_native_opt0_raw_y_plan_bundle
         );
         pencil_pencil_reference_owned_.set_native_opt0_y_plan_bundle_stream_first_enabled(
-            init_options_.use_native_opt0_y_plan_bundle_stream_first
+            init_options_.diagnostics.use_native_opt0_y_plan_bundle_stream_first
         );
         pencil_pencil_reference_owned_.set_native_opt0_raw_y_plan_bundle_reference_streams_enabled(
-            init_options_.use_native_opt0_raw_y_plan_bundle_reference_streams
+            init_options_.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams
         );
         pencil_pencil_reference_owned_.set_native_opt0_reference_local_plan_context_enabled(
-            init_options_.use_native_opt0_reference_local_plan_context
+            init_options_.diagnostics.use_native_opt0_reference_local_plan_context
         );
         const auto selected_pencil_layout = native_pencil_pencil_plan_layout_();
         pencil_pencil_reference_owned_.set_pencil_layout_selector(
@@ -1784,9 +1718,9 @@ private:
 
     void configure_memory_profiling_( const fftm_init_options &options )
     {
-        if ( !options.memory_profiling_key.empty() )
+        if ( !options.reporting.memory_profiling_key.empty() )
         {
-            memory_profiler_.enable( options.memory_profiling_key );
+            memory_profiler_.enable( options.reporting.memory_profiling_key );
         }
         else
         {
@@ -1794,7 +1728,7 @@ private:
         }
 
         base_fft_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/base_fft" );
-        base_fft_.set_hot_exec_no_sync_enabled( init_options_.use_fft_exec_no_sync );
+        base_fft_.set_hot_exec_no_sync_enabled( init_options_.diagnostics.use_fft_exec_no_sync );
         same_x_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_x" );
         same_z_.set_memory_profiler( memory_profiler_.native_ptr(), "fftm/transpose_3d_same_z" );
         pencil_pencil_reference_owned_.set_memory_profiler(
@@ -1812,11 +1746,11 @@ private:
         {
             return;
         }
-        if ( init_options_.print_profile_summary_on_destroy )
+        if ( init_options_.reporting.print_profile_summary_on_destroy )
         {
             profiler_.log_print( log_ );
         }
-        if ( init_options_.print_profile_totals_on_destroy )
+        if ( init_options_.reporting.print_profile_totals_on_destroy )
         {
             profiler_.log_print_totals( log_ );
         }
@@ -1828,11 +1762,11 @@ private:
         {
             return;
         }
-        if ( init_options_.print_memory_profile_on_destroy )
+        if ( init_options_.reporting.print_memory_profile_on_destroy )
         {
             log_memory_profile_summary_();
         }
-        if ( init_options_.print_memory_totals_on_destroy )
+        if ( init_options_.reporting.print_memory_totals_on_destroy )
         {
             log_memory_profile_totals_();
         }
@@ -1905,7 +1839,7 @@ private:
 
     void record_native_4d_stage_timing_( const char *stage, double ms )
     {
-        if ( !init_options_.enable_native_stage_timers || !native_4d_stage_timing_active_ )
+        if ( !init_options_.diagnostics.enable_native_stage_timers || !native_4d_stage_timing_active_ )
         {
             return;
         }
@@ -1919,7 +1853,7 @@ private:
     template <class Fn>
     void time_native_4d_stage_( const char *stage, Fn fn )
     {
-        if ( !init_options_.enable_native_stage_timers || !native_4d_stage_timing_active_ )
+        if ( !init_options_.diagnostics.enable_native_stage_timers || !native_4d_stage_timing_active_ )
         {
             fn();
             return;
@@ -2061,7 +1995,7 @@ private:
 
     void ensure_4d_native_xw_direct_layout_supported_() const
     {
-        if ( !init_options_.use_4d_native_xw_direct_layout )
+        if ( !init_options_.execution.use_4d_native_xw_direct_layout )
             return;
         if ( transpose_mode_4d != mpi_transpose_3d_mode::p2p_waitany )
         {
@@ -2092,7 +2026,7 @@ private:
 
     bool native_opt0_default_z_layout_enabled_() const
     {
-        if ( !init_options_.use_native_opt0_default_z_layout )
+        if ( !init_options_.execution.use_native_opt0_default_z_layout )
         {
             return false;
         }
@@ -2116,7 +2050,7 @@ private:
     bool native_opt0_reference_y_buffer_topology_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
-               init_options_.use_native_opt0_reference_y_buffer_topology;
+               init_options_.execution.use_native_opt0_reference_y_buffer_topology;
     }
 
     bool native_opt0_reference_scratch_aliasing_enabled_() const
@@ -2131,12 +2065,12 @@ private:
 
     bool slab_4d_native_xw_transpose_enabled_() const
     {
-        return init_options_.use_4d_slab_native_xw_transpose;
+        return init_options_.execution.use_4d_slab_native_xw_transpose;
     }
 
     bool slab_4d_native_xw_layout_stage_enabled_() const
     {
-        return slab_4d_native_xw_transpose_enabled_() && init_options_.use_4d_slab_native_xw_layout_stage;
+        return slab_4d_native_xw_transpose_enabled_() && init_options_.diagnostics.use_4d_slab_native_xw_layout_stage;
     }
 
     bool slab_4d_native_xw_native_spectral_layout_enabled_() const
@@ -2149,7 +2083,7 @@ private:
     bool slab_4d_native_wz_communication_layout_enabled_() const
     {
         return slab_4d_native_xw_native_spectral_layout_enabled_() &&
-               init_options_.use_4d_slab_native_wz_communication_layout;
+               init_options_.execution.use_4d_slab_native_wz_communication_layout;
     }
 
     std::size_t slab_4d_native_wz_plan_concurrency_() const
@@ -2157,7 +2091,7 @@ private:
         if ( !slab_4d_native_wz_communication_layout_enabled_() )
             return 1;
         return std::max<std::size_t>(
-            1, std::min<std::size_t>( init_options_.slab_native_wz_plan_concurrency,
+            1, std::min<std::size_t>( init_options_.execution.slab_native_wz_plan_concurrency,
                                      input_dim_.size_y[myid_j_] )
         );
     }
@@ -2165,7 +2099,7 @@ private:
     bool slab_4d_native_wz_ready_pipeline_enabled_() const
     {
         return slab_4d_native_wz_communication_layout_enabled_() &&
-               init_options_.use_4d_slab_native_wz_ready_pipeline;
+               init_options_.execution.use_4d_slab_native_wz_ready_pipeline;
     }
 
     bool pencil_4d_native_zw_native_spectral_layout_enabled_() const
@@ -2177,14 +2111,14 @@ private:
     bool pencil_4d_native_zw_message_layout_enabled_() const
     {
         return pencil_4d_native_zw_native_spectral_layout_enabled_() &&
-               init_options_.use_4d_pencil_same_zw_native_layout;
+               init_options_.execution.use_4d_pencil_same_zw_native_layout;
     }
 
     bool pencil_4d_degenerate_xw_slab_path_enabled_() const
     {
         if ( !pencil_4d_native_zw_native_spectral_layout_enabled_() ||
-             init_options_.use_4d_pencil_degenerate_local_transposes ||
-             !init_options_.use_4d_pencil_degenerate_xw_slab_path || !slab_4d_native_xw_transpose_enabled_() )
+             init_options_.execution.use_4d_pencil_degenerate_local_transposes ||
+             !init_options_.diagnostics.use_4d_pencil_degenerate_xw_slab_path || !slab_4d_native_xw_transpose_enabled_() )
         {
             return false;
         }
@@ -2195,7 +2129,7 @@ private:
     bool pencil_4d_degenerate_local_transposes_enabled_() const
     {
         if ( !pencil_4d_native_zw_native_spectral_layout_enabled_() ||
-             !init_options_.use_4d_pencil_degenerate_local_transposes )
+             !init_options_.execution.use_4d_pencil_degenerate_local_transposes )
         {
             return false;
         }
@@ -2206,55 +2140,55 @@ private:
     bool pencil_4d_degenerate_same_xw_native_enabled_() const
     {
         return pencil_4d_degenerate_local_transposes_enabled_() &&
-               init_options_.use_4d_pencil_degenerate_same_xw_native;
+               init_options_.execution.use_4d_pencil_degenerate_same_xw_native;
     }
 
     bool pencil_4d_degenerate_wz_sliced_z_fft_enabled_() const
     {
         return pencil_4d_degenerate_local_transposes_enabled_() &&
-               init_options_.use_4d_pencil_degenerate_wz_sliced_z_fft;
+               init_options_.execution.use_4d_pencil_degenerate_wz_sliced_z_fft;
     }
 
     bool native_opt0_compact_y_workarea_enabled_() const
     {
         return native_opt0_reference_y_buffer_topology_enabled_() &&
-               ( init_options_.use_native_opt0_compact_y_workarea || native_opt0_auto_compact_y_workarea_ );
+               ( init_options_.execution.use_native_opt0_compact_y_workarea || native_opt0_auto_compact_y_workarea_ );
     }
 
     bool native_opt0_tight_y_plan_sequence_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
-               init_options_.use_native_opt0_tight_y_plan_sequence;
+               init_options_.execution.use_native_opt0_tight_y_plan_sequence;
     }
 
     bool native_opt0_y_group_device_sync_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
-               init_options_.use_native_opt0_y_group_device_sync;
+               init_options_.execution.use_native_opt0_y_group_device_sync;
     }
 
     bool native_opt0_shared_y_plan_handles_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
-               init_options_.use_native_opt0_shared_y_plan_handles;
+               init_options_.execution.use_native_opt0_shared_y_plan_handles;
     }
 
     bool native_opt0_raw_y_plan_array_executor_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
-               init_options_.use_native_opt0_raw_y_plan_array_executor;
+               init_options_.execution.use_native_opt0_raw_y_plan_array_executor;
     }
 
     bool native_opt0_reference_y_plan_bundle_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
-               init_options_.use_native_opt0_reference_y_plan_bundle;
+               init_options_.diagnostics.use_native_opt0_reference_y_plan_bundle;
     }
 
     bool native_opt0_raw_y_plan_bundle_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
-               init_options_.use_native_opt0_raw_y_plan_bundle;
+               init_options_.diagnostics.use_native_opt0_raw_y_plan_bundle;
     }
 
     bool native_opt0_y_plan_bundle_enabled_() const
@@ -2265,20 +2199,20 @@ private:
 
     bool native_opt0_y_plan_bundle_stream_first_enabled_() const
     {
-        return native_opt0_y_plan_bundle_enabled_() && init_options_.use_native_opt0_y_plan_bundle_stream_first;
+        return native_opt0_y_plan_bundle_enabled_() && init_options_.diagnostics.use_native_opt0_y_plan_bundle_stream_first;
     }
 
     bool native_opt0_raw_y_plan_bundle_reference_streams_enabled_() const
     {
         return native_opt0_raw_y_plan_bundle_enabled_() &&
-               init_options_.use_native_opt0_raw_y_plan_bundle_reference_streams;
+               init_options_.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams;
     }
 
     bool native_opt0_reference_local_plan_context_enabled_() const
     {
         return native_opt0_default_z_layout_enabled_() &&
                is_reference_owned_pencil_pipeline_( init_options_.pencil_pipeline_3d ) &&
-               init_options_.use_native_opt0_reference_local_plan_context;
+               init_options_.diagnostics.use_native_opt0_reference_local_plan_context;
     }
 
     void init_(
@@ -2313,7 +2247,7 @@ private:
         SCFD_SAFE_CALL( init_strategy_( strategy_family_3d_tag() ) );
         SCFD_SAFE_CALL( add_plans_( strategy_family_3d_tag() ) );
         SCFD_SAFE_CALL( activate_shared_work_area_() );
-        if ( init_options_.enable_local_fft_diagnostics )
+        if ( init_options_.diagnostics.enable_local_fft_diagnostics )
         {
             SCFD_SAFE_CALL( pencil_pencil_reference_owned_.dump_local_fft_plan_descriptors() );
         }
@@ -2937,20 +2871,20 @@ private:
             {
                 SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
                     transpose_mode_3d, pencil_pencil_plan_state_, half_input_dim_, transpose1_dim_, output_dim_,
-                    myid_i_, myid_j_, init_options_.use_persistent_p2p
+                    myid_i_, myid_j_, init_options_.execution.use_persistent_p2p
                 ) );
             }
             else
             {
                 SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
                     transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
-                    init_options_.use_persistent_p2p
+                    init_options_.execution.use_persistent_p2p
                 ) );
             }
         }
         else if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
         {
-            SCFD_SAFE_CALL( pencil_pencil_pipeline_.init( transpose_mode_3d, init_options_.use_persistent_p2p ) );
+            SCFD_SAFE_CALL( pencil_pencil_pipeline_.init( transpose_mode_3d, init_options_.execution.use_persistent_p2p ) );
         }
     }
 
@@ -3027,20 +2961,20 @@ private:
             {
                 SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
                     transpose_mode_3d, pencil_pencil_plan_state_, half_input_dim_, transpose1_dim_, output_dim_,
-                    myid_i_, myid_j_, init_options_.use_persistent_p2p
+                    myid_i_, myid_j_, init_options_.execution.use_persistent_p2p
                 ) );
             }
             else
             {
                 SCFD_SAFE_CALL( pencil_pencil_reference_owned_.init(
                     transpose_mode_3d, half_input_dim_, transpose1_dim_, output_dim_, myid_i_, myid_j_,
-                    init_options_.use_persistent_p2p
+                    init_options_.execution.use_persistent_p2p
                 ) );
             }
         }
         else if ( init_options_.pencil_pipeline_3d != fftm_3d_pencil_pipeline::staged )
         {
-            SCFD_SAFE_CALL( pencil_pencil_pipeline_.init( transpose_mode_3d, init_options_.use_persistent_p2p ) );
+            SCFD_SAFE_CALL( pencil_pencil_pipeline_.init( transpose_mode_3d, init_options_.execution.use_persistent_p2p ) );
         }
     }
 
@@ -3048,12 +2982,12 @@ private:
     init_4d_strategy_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil> )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_4d_pencil_pencil" );
-        if ( init_options_.use_4d_slab_native_wz_communication_layout )
+        if ( init_options_.execution.use_4d_slab_native_wz_communication_layout )
         {
             throw std::logic_error( "FFTM 4D slab WZ communication layout is not valid for pencil-pencil" );
         }
         ensure_4d_native_xw_direct_layout_supported_();
-        if ( init_options_.use_4d_pencil_degenerate_local_transposes )
+        if ( init_options_.execution.use_4d_pencil_degenerate_local_transposes )
         {
             const processor_grid grid = partitioning_.get_process_grid();
             if ( grid.p1 != 1 || grid.p3 != 1 )
@@ -3063,7 +2997,7 @@ private:
                 );
             }
         }
-        if ( init_options_.use_4d_native_xw_direct_layout &&
+        if ( init_options_.execution.use_4d_native_xw_direct_layout &&
              !pencil_4d_degenerate_same_xw_native_enabled_() )
         {
             throw std::logic_error(
@@ -3093,24 +3027,24 @@ private:
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::init_strategy_4d_slab_slab" );
         ensure_4d_native_xw_direct_layout_supported_();
-        if ( init_options_.use_4d_slab_native_wz_communication_layout &&
+        if ( init_options_.execution.use_4d_slab_native_wz_communication_layout &&
              transpose_mode_4d != mpi_transpose_3d_mode::p2p_waitany )
         {
             throw std::logic_error( "FFTM 4D slab WZ communication layout requires p2p-waitany" );
         }
 #ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        if ( init_options_.use_4d_slab_native_wz_communication_layout )
+        if ( init_options_.execution.use_4d_slab_native_wz_communication_layout )
         {
             throw std::logic_error( "FFTM 4D slab WZ communication layout requires CUDA-aware MPI" );
         }
 #endif
-        if ( init_options_.use_4d_native_xw_direct_layout && !slab_4d_native_xw_transpose_enabled_() )
+        if ( init_options_.execution.use_4d_native_xw_direct_layout && !slab_4d_native_xw_transpose_enabled_() )
         {
             throw std::logic_error(
                 "FFTM 4D slab native XW direct layout requires use_4d_slab_native_xw_transpose=true."
             );
         }
-        if ( init_options_.use_4d_native_xw_direct_layout &&
+        if ( init_options_.execution.use_4d_native_xw_direct_layout &&
              !slab_4d_native_xw_native_spectral_layout_enabled_() )
         {
             throw std::logic_error(
@@ -3684,7 +3618,7 @@ private:
                      * the generic transpose can stall on some MPI stacks; keep
                      * these shortcut paths on the packed value transfer.
                      */
-                    same_z_.set_direct_transfer_options( false, init_options_.direct_p2p_cuda_aware );
+                    same_z_.set_direct_transfer_options( false, init_options_.execution.direct_p2p_cuda_aware );
                     try
                     {
                         SCFD_SAFE_CALL(
@@ -3694,12 +3628,12 @@ private:
                     catch ( ... )
                     {
                         same_z_.set_direct_transfer_options(
-                            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                            init_options_.execution.use_direct_backward_receive, init_options_.execution.direct_p2p_cuda_aware
                         );
                         throw;
                     }
                     same_z_.set_direct_transfer_options(
-                        init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                        init_options_.execution.use_direct_backward_receive, init_options_.execution.direct_p2p_cuda_aware
                     );
                     SCFD_SAFE_CALL( base_fft_.template exec<stage0_complex3_t, real_array3_t>(
                         "inverse_yz_pencil_pencil_p2_degenerate", stage0_slab_view, out
@@ -3722,7 +3656,7 @@ private:
                      * receives in the generic same-X shortcut and reserve that
                      * variant for the owned pencil pipeline.
                      */
-                    same_x_.set_direct_transfer_options( false, init_options_.direct_p2p_cuda_aware );
+                    same_x_.set_direct_transfer_options( false, init_options_.execution.direct_p2p_cuda_aware );
                     try
                     {
                         SCFD_SAFE_CALL( same_x_.transpose_xzy_to_xyz_optimized_layout(
@@ -3732,12 +3666,12 @@ private:
                     catch ( ... )
                     {
                         same_x_.set_direct_transfer_options(
-                            init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                            init_options_.execution.use_direct_backward_receive, init_options_.execution.direct_p2p_cuda_aware
                         );
                         throw;
                     }
                     same_x_.set_direct_transfer_options(
-                        init_options_.use_direct_backward_receive, init_options_.direct_p2p_cuda_aware
+                        init_options_.execution.use_direct_backward_receive, init_options_.execution.direct_p2p_cuda_aware
                     );
                     SCFD_SAFE_CALL(
                         base_fft_.template exec<stage0_complex3_t, real_array3_t>( "inverse_z", stage0_3d_, out )
@@ -4707,7 +4641,7 @@ private:
         stage1_4d_d2_   = d2;
         stage1_4d_d3_   = d3;
         stage1_4d_size_ = d0 * d1 * d2 * d3;
-        stage1_4d_alias_pending_ = init_options_.use_4d_slab_native_work_area_alias;
+        stage1_4d_alias_pending_ = init_options_.execution.use_4d_slab_native_work_area_alias;
         if ( !stage1_4d_alias_pending_ )
         {
             SCFD_SAFE_CALL( scratch_stage1_4d_.init( stage1_4d_size_ ) );
@@ -4742,11 +4676,11 @@ private:
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
         profiler->set_bytes(
-            "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+            "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_size_ )
         );
         profiler->set_bytes(
             "fftm/shared_host_work_buffer",
-            static_cast<memory_profiler_t::bytes_type>( shared_host_work_buffer_.get_work_size() )
+            static_cast<memory_profiler_t::bytes_type>( shared_host_work_size_ )
         );
         profiler->set_bytes(
             "fftm/scratch_stage0_xfft_3d",
@@ -4784,11 +4718,11 @@ private:
 
         memory_profiler_t *profiler = memory_profiler_.native_ptr();
         profiler->set_bytes(
-            "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_buffer_.get_work_size() )
+            "fftm/shared_work_buffer", static_cast<memory_profiler_t::bytes_type>( shared_work_size_ )
         );
         profiler->set_bytes(
             "fftm/shared_host_work_buffer",
-            static_cast<memory_profiler_t::bytes_type>( shared_host_work_buffer_.get_work_size() )
+            static_cast<memory_profiler_t::bytes_type>( shared_host_work_size_ )
         );
         profiler->set_bytes( "fftm/scratch_stage0_xfft_3d", 0 );
         profiler->set_bytes( "fftm/scratch_stage1_3d", 0 );
@@ -4810,15 +4744,35 @@ private:
     }
 
 private:
-    BaseFFT                    base_fft_;
+    template <class Array>
+    static void release_owned_array_( Array &array )
+    {
+        if ( !array.is_free() && array.is_own() )
+            array.free();
+    }
+
     MPIComm                    mpi_;
     Log                        log_;
     fftm_init_options          init_options_;
     optional_profiler_t        profiler_;
     optional_memory_profiler_t memory_profiler_;
     partitioning_t             partitioning_;
+
+    // Owners must precede every execution object that refers to their storage.
+    // C++ destroys members in reverse declaration order, so transpose state and
+    // FFT plans are torn down before these buffers release their allocations.
     shared_buffer_t            shared_work_buffer_;
     host_shared_buffer_t       shared_host_work_buffer_;
+    std::shared_ptr<detail::reusable_workspace_resource> reusable_workspace_resource_;
+    bool                       reusable_workspace_lease_active_ = false;
+    complex_buffer_t           scratch_stage0_xfft_3d_;
+    complex_buffer_t           scratch_stage0_default_z_3d_;
+    complex_buffer_t           scratch_stage1_3d_;
+    complex_buffer_t           scratch_stage1_xfast_3d_;
+    complex_buffer_t           scratch_stage0_stage2_4d_;
+    complex_buffer_t           scratch_stage1_4d_;
+
+    BaseFFT                    base_fft_;
     std::size_t                shared_work_size_      = 0;
     std::size_t                shared_host_work_size_ = 0;
     std::size_t                shared_fft_work_size_ = 0;
@@ -4860,12 +4814,6 @@ private:
     partition_t transpose3_dim_;
     partition_t output_dim_;
 
-	    complex_buffer_t  scratch_stage0_xfft_3d_;
-    complex_buffer_t  scratch_stage0_default_z_3d_;
-	    complex_buffer_t  scratch_stage1_3d_;
-	    complex_buffer_t  scratch_stage1_xfast_3d_;
-    complex_buffer_t  scratch_stage0_stage2_4d_;
-    complex_buffer_t  scratch_stage1_4d_;
     std::size_t       stage1_4d_d0_ = 0;
     std::size_t       stage1_4d_d1_ = 0;
     std::size_t       stage1_4d_d2_ = 0;

@@ -1380,9 +1380,9 @@ int run_benchmark_case(
     public_tensor_reserve_bytes += reserve_bytes;
 
     auto init_options = fftm::test::detail::make_fftm_init_options( options );
-    if ( init_options.native_opt0_memory_feasibility_reserve_bytes < public_tensor_reserve_bytes )
+    if ( init_options.execution.native_opt0_memory_feasibility_reserve_bytes < public_tensor_reserve_bytes )
     {
-        init_options.native_opt0_memory_feasibility_reserve_bytes = public_tensor_reserve_bytes;
+        init_options.execution.native_opt0_memory_feasibility_reserve_bytes = public_tensor_reserve_bytes;
     }
 
     fftm_t distributed_fft( comm_info, log );

@@ -55,10 +55,6 @@ int run_taylor_green(
 
     fftm_t distributed_fft( comm_info, log );
     fftm::fftm_init_options init_options = selected.init_options;
-    init_options.print_profile_summary_on_destroy = false;
-    init_options.print_profile_totals_on_destroy  = false;
-    init_options.print_memory_profile_on_destroy  = false;
-    init_options.print_memory_totals_on_destroy   = false;
 
     fftm::autotune::selected_3d_config selected_for_plan = selected;
     selected_for_plan.init_options = init_options;

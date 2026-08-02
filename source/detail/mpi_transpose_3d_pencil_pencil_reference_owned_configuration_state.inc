@@ -1,0 +1,47 @@
+    base_fft_t        &base_fft_;
+    MPIComm            mpi_;
+    Log                log_;
+    OptionalProfiler  &optional_profiler_;
+    profiler_t        *profiler_        = nullptr;
+    memory_profiler_t *memory_profiler_ = nullptr;
+    std::string        memory_profile_prefix_;
+
+    bool is_inited_                   = false;
+    bool use_external_work_area_      = false;
+    bool use_external_host_work_area_ = false;
+    bool use_direct_backward_receive_ = false;
+    bool direct_p2p_cuda_aware_       = true;
+    bool use_p2p_send_thread_         = false;
+    bool use_p2p_byte_transfer_       = false;
+    bool use_persistent_p2p_          = false;
+    bool use_ready_p2p_send_          = false;
+    bool print_schedule_              = false;
+    bool reference_parity_enabled_    = false;
+    bool use_direct_forward_byte_receive_ = false;
+    bool use_stable_forward_byte_send_buffer_ = false;
+    bool use_ready_stable_forward_byte_send_buffer_ = false;
+    bool use_contiguous_forward_byte_send_ = false;
+    bool use_physical_forward_peer_exchange_ = false;
+    ::fftm::fftm_3d_contiguous_forward_send_mode contiguous_forward_send_mode_ =
+        ::fftm::fftm_3d_contiguous_forward_send_mode::single;
+    std::size_t contiguous_forward_send_chunk_bytes_ = static_cast<std::size_t>( 1 ) << 30;
+    ::fftm::fftm_3d_large_count_p2p_transport large_count_p2p_transport_ =
+        ::fftm::fftm_3d_large_count_p2p_transport::hindexed;
+    bool use_large_count_datatype_cache_ = false;
+    bool use_native_backward_second_peer_loop_ = false;
+    bool use_deferred_send_completion_ = false;
+    deferred_send_state deferred_send_state_;
+    bool native_opt0_default_z_layout_ = false;
+    bool use_native_opt0_reference_y_buffer_topology_ = false;
+    bool use_native_opt0_compact_y_workarea_ = false;
+    bool use_native_opt0_tight_y_plan_sequence_ = false;
+    bool use_native_opt0_shared_y_plan_handles_ = false;
+    bool use_native_opt0_y_group_device_sync_ = false;
+    bool use_native_opt0_y_no_sync_exec_ = false;
+    bool use_native_opt0_raw_y_plan_array_executor_ = false;
+    bool use_native_opt0_reference_y_plan_lifecycle_ = false;
+    bool use_native_opt0_reference_y_plan_bundle_ = false;
+    bool use_native_opt0_raw_y_plan_bundle_ = false;
+    bool use_native_opt0_y_plan_bundle_stream_first_ = false;
+    bool use_native_opt0_raw_y_plan_bundle_reference_streams_ = false;
+    bool use_native_opt0_reference_local_plan_context_ = false;

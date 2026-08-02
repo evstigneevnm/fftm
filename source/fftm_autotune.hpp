@@ -3,8 +3,13 @@
 
 #include <cstdlib>
 #include <cstdio>
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -13,6 +18,8 @@
 #include <vector>
 
 #include "fftm.hpp"
+#include "detail/runtime_hardware_identity.h"
+#include "external_wrap/mpi_runtime_identity.h"
 
 namespace fftm
 {
@@ -27,12 +34,24 @@ enum class cache_mismatch_policy
     overwrite
 };
 
+struct autotune_constraints_3d
+{
+    std::string strategy_3d;
+    std::string mode;
+    std::string backend_3d;
+    std::string grid_3d;
+    std::string pencil_layout;
+};
+
 struct autotune_options
 {
     std::string           cache_file;
     bool                  create_if_missing = true;
     cache_mismatch_policy mismatch_policy   = cache_mismatch_policy::error;
     bool                  validate_hardware = true;
+    bool                  strict_device_identity = false;
+    bool                  allow_legacy_hardware_signature = false;
+    autotune_constraints_3d constraints_3d;
 };
 
 struct selected_3d_config
@@ -44,6 +63,9 @@ struct selected_3d_config
     std::string       mode;
     std::string       backend_3d;
     std::string       source;
+    // Runtime-only workspace and spectrum pool retained after an in-process
+    // measured sweep. They are deliberately absent from the serialized cache.
+    std::shared_ptr<detail::reusable_workspace_resource> runtime_workspace;
 };
 
 inline std::string trim( const std::string &value )
@@ -218,6 +240,30 @@ inline std::string value_or_empty( const config_map &config, const std::string &
 {
     const auto it = config.find( key );
     return it == config.end() ? std::string() : it->second;
+}
+
+inline bool constraint_matches( const std::string &required, const std::string &actual )
+{
+    return required.empty() || required == actual;
+}
+
+inline void validate_config_constraints_3d(
+    const config_map &config, const autotune_constraints_3d &constraints,
+    const std::string &cache_kind
+)
+{
+    if ( !constraint_matches( constraints.strategy_3d, value_or_empty( config, "FFTM_AUTOTUNE_STRATEGY_3D" ) ) ||
+         !constraint_matches( constraints.mode, value_or_empty( config, "FFTM_AUTOTUNE_MODE" ) ) ||
+         !constraint_matches( constraints.backend_3d, value_or_empty( config, "FFTM_AUTOTUNE_BACKEND_3D" ) ) ||
+         !constraint_matches( constraints.grid_3d, value_or_empty( config, "FFTM_AUTOTUNE_GRID_3D" ) ) ||
+         !constraint_matches(
+             constraints.pencil_layout, value_or_empty( config, "FFTM_AUTOTUNE_PENCIL_LAYOUT" )
+         ) )
+    {
+        throw std::logic_error(
+            "FFTM " + cache_kind + " cache does not satisfy the requested 3D constraints"
+        );
+    }
 }
 
 inline bool bool_value( const config_map &config, const std::string &key, bool fallback )
@@ -421,34 +467,7 @@ inline void validate_match( const config_map &config, int num_procs, const globa
     }
 }
 
-template <class RuntimeApi>
-inline std::string hardware_signature( int num_procs )
-{
-    const auto mem_info = RuntimeApi::get_device_memory_info();
-    std::ostringstream out;
-    out << "mpi=" << num_procs << ";device_total=";
-    if ( mem_info.total_bytes_known )
-        out << mem_info.total_bytes;
-    else
-        out << "unknown";
-    return out.str();
-}
-
-template <class RuntimeApi>
-inline void validate_hardware_match( const config_map &config, int num_procs )
-{
-    const std::string expected = value_or_empty( config, "FFTM_AUTOTUNE_HARDWARE_SIGNATURE" );
-    if ( expected.empty() )
-        return;
-    const std::string actual = hardware_signature<RuntimeApi>( num_procs );
-    if ( expected != actual )
-    {
-        throw std::logic_error(
-            "FFTM autotune config hardware signature '" + expected + "' does not match current hardware '" + actual +
-            "'"
-        );
-    }
-}
+#include "detail/fftm_autotune_hardware.inc"
 
 inline void set_common_native_pencil_options( config_map &config )
 {
@@ -506,18 +525,15 @@ inline void set_native_opt0_hot_y_options( config_map &config )
     config["FFTM_USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT"] = "0";
 }
 
-template <class RuntimeApi>
-inline config_map make_default_3d_config( int num_procs, const global_sizes &sizes )
+inline config_map make_default_3d_policy_config( int num_procs, const global_sizes &sizes )
 {
     config_map config;
-    config["FFTM_AUTOTUNE_SCHEMA"] = "1";
+    config["FFTM_AUTOTUNE_SCHEMA"] = "2";
     config["FFTM_AUTOTUNE_LIBRARY"] = "fftm";
     config["FFTM_AUTOTUNE_DIM"] = "3";
     config["FFTM_AUTOTUNE_NUM_GPUS"] = std::to_string( num_procs );
     config["FFTM_AUTOTUNE_SIZE_3D"] = sizes_to_string( sizes );
-    config["FFTM_AUTOTUNE_HARDWARE_SIGNATURE"] = hardware_signature<RuntimeApi>( num_procs );
-    config["FFTM_AUTOTUNE_SOURCE"] =
-        "cpp-policy-cache-v1"; // Measured C++ candidate timing will extend this schema later.
+    config["FFTM_AUTOTUNE_SOURCE"] = "cpp-policy-cache-v2";
 
     if ( num_procs <= 1 )
     {
@@ -564,6 +580,26 @@ inline config_map make_default_3d_config( int num_procs, const global_sizes &siz
     return config;
 }
 
+inline config_map make_default_3d_config(
+    int num_procs, const global_sizes &sizes, const hardware_inventory &inventory
+)
+{
+    config_map config = make_default_3d_policy_config( num_procs, sizes );
+    const auto signature = make_hardware_signature_record(
+        inventory, hardware_transport_policy( config, num_procs )
+    );
+    set_hardware_signature_metadata( config, inventory, signature );
+    return config;
+}
+
+template <class RuntimeApi>
+inline config_map make_default_3d_config( int num_procs, const global_sizes &sizes )
+{
+    return make_default_3d_config(
+        num_procs, sizes, query_local_hardware_inventory<RuntimeApi>( num_procs )
+    );
+}
+
 inline bool apply_config_3d(
     const config_map &config, int num_procs, const global_sizes &sizes, processor_grid &grid,
     fftm_init_options &options
@@ -577,6 +613,7 @@ inline selected_3d_config load_or_create_3d_config(
     if ( autotune.cache_file.empty() )
         throw std::logic_error( "fftm::autotune_options::cache_file must not be empty" );
 
+    const hardware_inventory inventory = query_local_hardware_inventory<RuntimeApi>( num_procs );
     config_map config;
     std::string source;
     if ( file_exists( autotune.cache_file ) )
@@ -586,13 +623,13 @@ inline selected_3d_config load_or_create_3d_config(
         {
             validate_match( config, num_procs, sizes );
             if ( autotune.validate_hardware )
-                validate_hardware_match<RuntimeApi>( config, num_procs );
+                validate_hardware_match( config, inventory, autotune );
         }
         catch ( const std::exception & )
         {
             if ( autotune.mismatch_policy != cache_mismatch_policy::overwrite )
                 throw;
-            config = make_default_3d_config<RuntimeApi>( num_procs, sizes );
+            config = make_default_3d_config( num_procs, sizes, inventory );
             save_key_value_file( autotune.cache_file, config );
             source = "created";
         }
@@ -603,10 +640,12 @@ inline selected_3d_config load_or_create_3d_config(
     {
         if ( !autotune.create_if_missing )
             throw std::logic_error( "FFTM autotune cache file does not exist: " + autotune.cache_file );
-        config = make_default_3d_config<RuntimeApi>( num_procs, sizes );
+        config = make_default_3d_config( num_procs, sizes, inventory );
         save_key_value_file( autotune.cache_file, config );
         source = "created";
     }
+
+    validate_config_constraints_3d( config, autotune.constraints_3d, "policy" );
 
     processor_grid    grid;
     fftm_init_options options;
@@ -632,6 +671,10 @@ inline selected_3d_config load_or_create_3d_config(
     if ( autotune.cache_file.empty() )
         throw std::logic_error( "fftm::autotune_options::cache_file must not be empty" );
 
+    // Every rank participates before rank 0 performs cache I/O. The inventory
+    // gathers are collective for an SCFD communicator.
+    const hardware_inventory inventory = query_distributed_hardware_inventory<RuntimeApi>( comm );
+
     int cache_state        = 0; // 0: existing cache, 1: created/replaced by rank 0, 2: missing and creation disabled.
     int root_prepare_error = 0;
     if ( comm.myid == 0 )
@@ -647,7 +690,7 @@ inline selected_3d_config load_or_create_3d_config(
                     const config_map config = load_key_value_file( autotune.cache_file );
                     validate_match( config, comm.num_procs, sizes );
                     if ( autotune.validate_hardware )
-                        validate_hardware_match<RuntimeApi>( config, comm.num_procs );
+                        validate_hardware_match( config, inventory, autotune );
                 }
                 catch ( const std::exception & )
                 {
@@ -656,14 +699,16 @@ inline selected_3d_config load_or_create_3d_config(
                 if ( !cache_valid && autotune.mismatch_policy == cache_mismatch_policy::overwrite )
                 {
                     save_key_value_file(
-                        autotune.cache_file, make_default_3d_config<RuntimeApi>( comm.num_procs, sizes )
+                        autotune.cache_file, make_default_3d_config( comm.num_procs, sizes, inventory )
                     );
                     cache_state = 1;
                 }
             }
             else if ( autotune.create_if_missing )
             {
-                save_key_value_file( autotune.cache_file, make_default_3d_config<RuntimeApi>( comm.num_procs, sizes ) );
+                save_key_value_file(
+                    autotune.cache_file, make_default_3d_config( comm.num_procs, sizes, inventory )
+                );
                 cache_state = 1;
             }
             else
@@ -688,7 +733,8 @@ inline selected_3d_config load_or_create_3d_config(
     config_map config = load_key_value_file( autotune.cache_file );
     validate_match( config, comm.num_procs, sizes );
     if ( autotune.validate_hardware )
-        validate_hardware_match<RuntimeApi>( config, comm.num_procs );
+        validate_hardware_match( config, inventory, autotune );
+    validate_config_constraints_3d( config, autotune.constraints_3d, "policy" );
 
     processor_grid    grid;
     fftm_init_options options;
@@ -711,7 +757,58 @@ inline void init_autotuned_3d_plan(
     FFTMPlan &plan, const selected_3d_config &selected, const global_sizes &sizes
 )
 {
+    if ( selected.runtime_workspace )
+        plan.set_reusable_workspace_resource( selected.runtime_workspace );
     plan.template init<3>( selected.grid, sizes, selected.init_options );
+}
+
+template <class Sizes>
+inline std::size_t checked_local_3d_bytes(
+    const Sizes &sizes, std::size_t element_size, const char *description
+)
+{
+    std::size_t result = element_size;
+    for ( int dimension = 0; dimension < 3; ++dimension )
+    {
+        const std::size_t extent = dimension == 0 ? static_cast<std::size_t>( std::get<0>( sizes ) )
+                                 : dimension == 1 ? static_cast<std::size_t>( std::get<1>( sizes ) )
+                                                  : static_cast<std::size_t>( std::get<2>( sizes ) );
+        if ( extent != 0 && result > std::numeric_limits<std::size_t>::max() / extent )
+            throw std::overflow_error( std::string( "FFTM autotune " ) + description + " size overflows size_t" );
+        result *= extent;
+    }
+    return result;
+}
+
+template <class RealArray, class SpectrumArray, class InputSizes, class SpectrumSizes>
+inline void init_autotuned_3d_data_arrays(
+    RealArray &input, SpectrumArray &spectrum, const selected_3d_config &selected,
+    const InputSizes &input_sizes, const SpectrumSizes &spectrum_sizes
+)
+{
+    if ( !selected.runtime_workspace )
+    {
+        input.init( std::get<0>( input_sizes ), std::get<1>( input_sizes ), std::get<2>( input_sizes ) );
+        spectrum.init(
+            std::get<0>( spectrum_sizes ), std::get<1>( spectrum_sizes ), std::get<2>( spectrum_sizes )
+        );
+        return;
+    }
+
+    const std::size_t spectrum_bytes = checked_local_3d_bytes(
+        spectrum_sizes, sizeof( typename SpectrumArray::value_type ), "spectrum buffer"
+    );
+    // The real input is not exposed to CUDA-aware MPI in the validated 3D
+    // candidates and releases cleanly. Keep its normal SCFD ownership and only
+    // retain the communication-visible spectrum allocation between candidates.
+    input.init( std::get<0>( input_sizes ), std::get<1>( input_sizes ), std::get<2>( input_sizes ) );
+    selected.runtime_workspace->require_spectrum_size_bytes( spectrum_bytes );
+    selected.runtime_workspace->activate_spectrum();
+
+    spectrum.init_by_raw_data(
+        static_cast<typename SpectrumArray::pointer_type>( selected.runtime_workspace->spectrum_ptr() ),
+        std::get<0>( spectrum_sizes ), std::get<1>( spectrum_sizes ), std::get<2>( spectrum_sizes )
+    );
 }
 
 inline bool apply_config_3d(
@@ -748,18 +845,18 @@ inline bool apply_config_3d(
     const std::string large_count = value_or_empty( config, "FFTM_LARGE_COUNT_P2P_TRANSPORTS" );
     if ( !large_count.empty() && !configured_sentinel( large_count ) )
     {
-        options.large_count_p2p_transport = parse_large_count_transport( split( large_count, ',' ).front() );
+        options.execution.large_count_p2p_transport = parse_large_count_transport( split( large_count, ',' ).front() );
         applied                           = true;
     }
 
     const bool allow_fft_exec_no_sync = bool_value( config, "FFTM_ALLOW_FFT_EXEC_NO_SYNC", false );
-    options.allow_native_opt0_diagnostic_variants = bool_value(
-        config, "FFTM_ALLOW_NATIVE_OPT0_DIAGNOSTIC_VARIANTS", options.allow_native_opt0_diagnostic_variants
+    options.diagnostics.allow_native_opt0_diagnostic_variants = bool_value(
+        config, "FFTM_ALLOW_NATIVE_OPT0_DIAGNOSTIC_VARIANTS", options.diagnostics.allow_native_opt0_diagnostic_variants
     );
     if ( allow_fft_exec_no_sync )
-        options.allow_native_opt0_diagnostic_variants = true;
+        options.diagnostics.allow_native_opt0_diagnostic_variants = true;
     if ( bool_value( config, "FFTM_AUTOTUNE_DIAGNOSTIC_ONLY", false ) &&
-         !options.allow_native_opt0_diagnostic_variants )
+         !options.diagnostics.allow_native_opt0_diagnostic_variants )
     {
         throw std::logic_error(
             "FFTM autotune config is marked FFTM_AUTOTUNE_DIAGNOSTIC_ONLY=1. "
@@ -773,39 +870,39 @@ inline bool apply_config_3d(
             value_or_empty( config, "FFTM_CONTIGUOUS_FORWARD_SEND_MODES" );
     if ( !contiguous_mode.empty() && !configured_sentinel( contiguous_mode ) )
     {
-        options.contiguous_forward_send_mode = parse_contiguous_forward_send_mode( first_csv_value( contiguous_mode ) );
+        options.diagnostics.contiguous_forward_send_mode = parse_contiguous_forward_send_mode( first_csv_value( contiguous_mode ) );
         applied                              = true;
     }
 
-    options.use_direct_backward_receive = bool_value(
-        config, "FFTM_USE_DIRECT_BACKWARD_RECEIVE", options.use_direct_backward_receive
+    options.execution.use_direct_backward_receive = bool_value(
+        config, "FFTM_USE_DIRECT_BACKWARD_RECEIVE", options.execution.use_direct_backward_receive
     );
-    options.direct_p2p_cuda_aware = bool_value( config, "FFTM_DIRECT_P2P_CUDA_AWARE", options.direct_p2p_cuda_aware );
-    options.use_p2p_send_thread = bool_value( config, "FFTM_USE_P2P_SEND_THREAD", options.use_p2p_send_thread );
-    options.use_p2p_byte_transfer = bool_value( config, "FFTM_USE_P2P_BYTE_TRANSFER", options.use_p2p_byte_transfer );
-    options.use_persistent_p2p = bool_value( config, "FFTM_USE_PERSISTENT_P2P", options.use_persistent_p2p );
-    options.use_ready_p2p_send = bool_value( config, "FFTM_USE_READY_P2P_SEND", options.use_ready_p2p_send );
-    options.use_direct_forward_byte_receive = bool_value(
-        config, "FFTM_USE_DIRECT_FORWARD_BYTE_RECEIVE", options.use_direct_forward_byte_receive
+    options.execution.direct_p2p_cuda_aware = bool_value( config, "FFTM_DIRECT_P2P_CUDA_AWARE", options.execution.direct_p2p_cuda_aware );
+    options.diagnostics.use_p2p_send_thread = bool_value( config, "FFTM_USE_P2P_SEND_THREAD", options.diagnostics.use_p2p_send_thread );
+    options.execution.use_p2p_byte_transfer = bool_value( config, "FFTM_USE_P2P_BYTE_TRANSFER", options.execution.use_p2p_byte_transfer );
+    options.execution.use_persistent_p2p = bool_value( config, "FFTM_USE_PERSISTENT_P2P", options.execution.use_persistent_p2p );
+    options.diagnostics.use_ready_p2p_send = bool_value( config, "FFTM_USE_READY_P2P_SEND", options.diagnostics.use_ready_p2p_send );
+    options.diagnostics.use_direct_forward_byte_receive = bool_value(
+        config, "FFTM_USE_DIRECT_FORWARD_BYTE_RECEIVE", options.diagnostics.use_direct_forward_byte_receive
     );
-    options.use_stable_forward_byte_send_buffer = bool_value(
-        config, "FFTM_USE_STABLE_FORWARD_BYTE_SEND_BUFFER", options.use_stable_forward_byte_send_buffer
+    options.diagnostics.use_stable_forward_byte_send_buffer = bool_value(
+        config, "FFTM_USE_STABLE_FORWARD_BYTE_SEND_BUFFER", options.diagnostics.use_stable_forward_byte_send_buffer
     );
-    options.use_ready_stable_forward_byte_send_buffer = bool_value(
+    options.diagnostics.use_ready_stable_forward_byte_send_buffer = bool_value(
         config, "FFTM_USE_READY_STABLE_FORWARD_BYTE_SEND_BUFFER",
-        options.use_ready_stable_forward_byte_send_buffer
+        options.diagnostics.use_ready_stable_forward_byte_send_buffer
     );
-    options.use_contiguous_forward_byte_send = bool_value(
-        config, "FFTM_USE_CONTIGUOUS_FORWARD_BYTE_SEND", options.use_contiguous_forward_byte_send
+    options.diagnostics.use_contiguous_forward_byte_send = bool_value(
+        config, "FFTM_USE_CONTIGUOUS_FORWARD_BYTE_SEND", options.diagnostics.use_contiguous_forward_byte_send
     );
-    options.use_physical_forward_peer_exchange = bool_value(
-        config, "FFTM_USE_PHYSICAL_FORWARD_PEER_EXCHANGE", options.use_physical_forward_peer_exchange
+    options.diagnostics.use_physical_forward_peer_exchange = bool_value(
+        config, "FFTM_USE_PHYSICAL_FORWARD_PEER_EXCHANGE", options.diagnostics.use_physical_forward_peer_exchange
     );
-    options.use_large_count_datatype_cache = bool_value(
-        config, "FFTM_USE_LARGE_COUNT_DATATYPE_CACHE", options.use_large_count_datatype_cache
+    options.diagnostics.use_large_count_datatype_cache = bool_value(
+        config, "FFTM_USE_LARGE_COUNT_DATATYPE_CACHE", options.diagnostics.use_large_count_datatype_cache
     );
-    options.use_fft_exec_no_sync = bool_value( config, "FFTM_USE_FFT_EXEC_NO_SYNC", options.use_fft_exec_no_sync );
-    if ( options.use_fft_exec_no_sync && !allow_fft_exec_no_sync )
+    options.diagnostics.use_fft_exec_no_sync = bool_value( config, "FFTM_USE_FFT_EXEC_NO_SYNC", options.diagnostics.use_fft_exec_no_sync );
+    if ( options.diagnostics.use_fft_exec_no_sync && !allow_fft_exec_no_sync )
     {
         throw std::logic_error(
             "FFTM_USE_FFT_EXEC_NO_SYNC=1 is diagnostic-only. It removes generic cuFFT execution synchronization "
@@ -813,82 +910,82 @@ inline bool apply_config_3d(
             "FFTM_ALLOW_FFT_EXEC_NO_SYNC=1 only for explicit diagnostics."
         );
     }
-    options.use_native_backward_second_peer_loop = bool_value(
-        config, "FFTM_USE_NATIVE_BACKWARD_SECOND_PEER_LOOP", options.use_native_backward_second_peer_loop
+    options.diagnostics.use_native_backward_second_peer_loop = bool_value(
+        config, "FFTM_USE_NATIVE_BACKWARD_SECOND_PEER_LOOP", options.diagnostics.use_native_backward_second_peer_loop
     );
-    options.use_native_opt0_default_z_layout = bool_value(
-        config, "FFTM_USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT", options.use_native_opt0_default_z_layout
+    options.execution.use_native_opt0_default_z_layout = bool_value(
+        config, "FFTM_USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT", options.execution.use_native_opt0_default_z_layout
     );
-    options.use_native_opt0_reference_y_buffer_topology = bool_value(
+    options.execution.use_native_opt0_reference_y_buffer_topology = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY",
-        options.use_native_opt0_reference_y_buffer_topology
+        options.execution.use_native_opt0_reference_y_buffer_topology
     );
-    options.use_native_opt0_reference_y_buffer_topology = bool_value(
+    options.execution.use_native_opt0_reference_y_buffer_topology = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_EGGER_Y_BUFFER_TOPOLOGY",
-        options.use_native_opt0_reference_y_buffer_topology
+        options.execution.use_native_opt0_reference_y_buffer_topology
     );
-    options.use_native_opt0_compact_y_workarea = bool_value(
+    options.execution.use_native_opt0_compact_y_workarea = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_COMPACT_Y_WORKAREA",
-        options.use_native_opt0_compact_y_workarea
+        options.execution.use_native_opt0_compact_y_workarea
     );
-    options.use_native_opt0_tight_y_plan_sequence = bool_value(
-        config, "FFTM_USE_NATIVE_OPT0_TIGHT_Y_PLAN_SEQUENCE", options.use_native_opt0_tight_y_plan_sequence
+    options.execution.use_native_opt0_tight_y_plan_sequence = bool_value(
+        config, "FFTM_USE_NATIVE_OPT0_TIGHT_Y_PLAN_SEQUENCE", options.execution.use_native_opt0_tight_y_plan_sequence
     );
-    options.use_native_opt0_shared_y_plan_handles = bool_value(
-        config, "FFTM_USE_NATIVE_OPT0_SHARED_Y_PLAN_HANDLES", options.use_native_opt0_shared_y_plan_handles
+    options.execution.use_native_opt0_shared_y_plan_handles = bool_value(
+        config, "FFTM_USE_NATIVE_OPT0_SHARED_Y_PLAN_HANDLES", options.execution.use_native_opt0_shared_y_plan_handles
     );
-    options.use_native_opt0_y_group_device_sync = bool_value(
-        config, "FFTM_USE_NATIVE_OPT0_Y_GROUP_DEVICE_SYNC", options.use_native_opt0_y_group_device_sync
+    options.execution.use_native_opt0_y_group_device_sync = bool_value(
+        config, "FFTM_USE_NATIVE_OPT0_Y_GROUP_DEVICE_SYNC", options.execution.use_native_opt0_y_group_device_sync
     );
-    options.use_native_opt0_y_no_sync_exec = bool_value(
-        config, "FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC", options.use_native_opt0_y_no_sync_exec
+    options.execution.use_native_opt0_y_no_sync_exec = bool_value(
+        config, "FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC", options.execution.use_native_opt0_y_no_sync_exec
     );
-    options.use_native_opt0_raw_y_plan_array_executor = bool_value(
+    options.execution.use_native_opt0_raw_y_plan_array_executor = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_ARRAY_EXECUTOR",
-        options.use_native_opt0_raw_y_plan_array_executor
+        options.execution.use_native_opt0_raw_y_plan_array_executor
     );
-    options.use_native_opt0_reference_y_plan_lifecycle = bool_value(
+    options.diagnostics.use_native_opt0_reference_y_plan_lifecycle = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_LIFECYCLE",
-        options.use_native_opt0_reference_y_plan_lifecycle
+        options.diagnostics.use_native_opt0_reference_y_plan_lifecycle
     );
-    options.use_native_opt0_reference_y_plan_bundle = bool_value(
-        config, "FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_BUNDLE", options.use_native_opt0_reference_y_plan_bundle
+    options.diagnostics.use_native_opt0_reference_y_plan_bundle = bool_value(
+        config, "FFTM_USE_NATIVE_OPT0_REFERENCE_Y_PLAN_BUNDLE", options.diagnostics.use_native_opt0_reference_y_plan_bundle
     );
-    options.use_native_opt0_raw_y_plan_bundle = bool_value(
-        config, "FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE", options.use_native_opt0_raw_y_plan_bundle
+    options.diagnostics.use_native_opt0_raw_y_plan_bundle = bool_value(
+        config, "FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE", options.diagnostics.use_native_opt0_raw_y_plan_bundle
     );
-    options.use_native_opt0_y_plan_bundle_stream_first = bool_value(
+    options.diagnostics.use_native_opt0_y_plan_bundle_stream_first = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_Y_PLAN_BUNDLE_STREAM_FIRST",
-        options.use_native_opt0_y_plan_bundle_stream_first
+        options.diagnostics.use_native_opt0_y_plan_bundle_stream_first
     );
-    options.use_native_opt0_raw_y_plan_bundle_reference_streams = bool_value(
+    options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_REFERENCE_STREAMS",
-        options.use_native_opt0_raw_y_plan_bundle_reference_streams
+        options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams
     );
-    options.use_native_opt0_raw_y_plan_bundle_reference_streams = bool_value(
+    options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_BUNDLE_EGGER_STREAMS",
-        options.use_native_opt0_raw_y_plan_bundle_reference_streams
+        options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams
     );
-    options.use_native_opt0_reference_local_plan_context = bool_value(
+    options.diagnostics.use_native_opt0_reference_local_plan_context = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT",
-        options.use_native_opt0_reference_local_plan_context
+        options.diagnostics.use_native_opt0_reference_local_plan_context
     );
-    options.use_native_opt0_reference_local_plan_context = bool_value(
+    options.diagnostics.use_native_opt0_reference_local_plan_context = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_EGGER_LOCAL_PLAN_CONTEXT",
-        options.use_native_opt0_reference_local_plan_context
+        options.diagnostics.use_native_opt0_reference_local_plan_context
     );
-    options.use_native_opt0_memory_feasibility_guard = bool_value(
+    options.execution.use_native_opt0_memory_feasibility_guard = bool_value(
         config, "FFTM_USE_NATIVE_OPT0_MEMORY_FEASIBILITY_GUARD",
-        options.use_native_opt0_memory_feasibility_guard
+        options.execution.use_native_opt0_memory_feasibility_guard
     );
-    options.native_opt0_memory_feasibility_reserve_bytes =
+    options.execution.native_opt0_memory_feasibility_reserve_bytes =
         size_value(
             config, "FFTM_NATIVE_OPT0_MEMORY_FEASIBILITY_RESERVE_MIB",
-            options.native_opt0_memory_feasibility_reserve_bytes / ( 1024u * 1024u )
+            options.execution.native_opt0_memory_feasibility_reserve_bytes / ( 1024u * 1024u )
         ) *
         static_cast<std::size_t>( 1024u * 1024u );
-    options.contiguous_forward_send_chunk_bytes =
-        size_value( config, "FFTM_CONTIGUOUS_FORWARD_SEND_CHUNK_MIB", options.contiguous_forward_send_chunk_bytes /
+    options.diagnostics.contiguous_forward_send_chunk_bytes =
+        size_value( config, "FFTM_CONTIGUOUS_FORWARD_SEND_CHUNK_MIB", options.diagnostics.contiguous_forward_send_chunk_bytes /
                                                                               ( 1024u * 1024u ) ) *
         static_cast<std::size_t>( 1024u * 1024u );
 

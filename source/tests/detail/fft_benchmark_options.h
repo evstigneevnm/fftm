@@ -1707,51 +1707,52 @@ template <class T>
 inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_benchmark_options<T> &options )
 {
     ::fftm::fftm_init_options init_options;
-    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
-    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
-    init_options.use_p2p_send_thread         = options.use_p2p_send_thread;
-	    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
-	    init_options.use_persistent_p2p          = options.use_persistent_p2p;
-	    init_options.use_ready_p2p_send          = options.use_ready_p2p_send;
-    init_options.print_pencil_schedule       = options.print_pencil_schedule;
-    init_options.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
-    init_options.use_stable_forward_byte_send_buffer = options.use_stable_forward_byte_send_buffer;
-    init_options.use_ready_stable_forward_byte_send_buffer = options.use_ready_stable_forward_byte_send_buffer;
-    init_options.use_contiguous_forward_byte_send = options.use_contiguous_forward_byte_send;
-    init_options.use_physical_forward_peer_exchange = options.use_physical_forward_peer_exchange;
-    init_options.contiguous_forward_send_mode = options.contiguous_forward_send_mode;
-    init_options.contiguous_forward_send_chunk_bytes = options.contiguous_forward_send_chunk_bytes;
-    init_options.large_count_p2p_transport  = options.large_count_p2p_transport;
-    init_options.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
-    init_options.use_fft_exec_no_sync = options.use_fft_exec_no_sync;
-    init_options.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
-    init_options.use_3d_deferred_send_completion = options.use_3d_deferred_send_completion;
-    init_options.use_native_opt0_default_z_layout = options.use_native_opt0_default_z_layout;
-    init_options.use_native_opt0_reference_y_buffer_topology = options.use_native_opt0_reference_y_buffer_topology;
-    init_options.use_native_opt0_compact_y_workarea = options.use_native_opt0_compact_y_workarea;
-    init_options.use_native_opt0_tight_y_plan_sequence = options.use_native_opt0_tight_y_plan_sequence;
-    init_options.use_native_opt0_shared_y_plan_handles = options.use_native_opt0_shared_y_plan_handles;
-    init_options.use_native_opt0_y_group_device_sync = options.use_native_opt0_y_group_device_sync;
-    init_options.use_native_opt0_y_no_sync_exec = options.use_native_opt0_y_no_sync_exec;
-    init_options.use_native_opt0_raw_y_plan_array_executor = options.use_native_opt0_raw_y_plan_array_executor;
-    init_options.use_native_opt0_reference_y_plan_lifecycle = options.use_native_opt0_reference_y_plan_lifecycle;
-    init_options.use_native_opt0_reference_y_plan_bundle = options.use_native_opt0_reference_y_plan_bundle;
-    init_options.use_native_opt0_raw_y_plan_bundle = options.use_native_opt0_raw_y_plan_bundle;
-    init_options.use_native_opt0_y_plan_bundle_stream_first = options.use_native_opt0_y_plan_bundle_stream_first;
-    init_options.use_native_opt0_raw_y_plan_bundle_reference_streams =
+    init_options.reporting = ::fftm::profiling_reporting_options();
+    init_options.execution.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.execution.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.diagnostics.use_p2p_send_thread         = options.use_p2p_send_thread;
+	    init_options.execution.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+	    init_options.execution.use_persistent_p2p          = options.use_persistent_p2p;
+	    init_options.diagnostics.use_ready_p2p_send          = options.use_ready_p2p_send;
+    init_options.diagnostics.print_pencil_schedule       = options.print_pencil_schedule;
+    init_options.diagnostics.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
+    init_options.diagnostics.use_stable_forward_byte_send_buffer = options.use_stable_forward_byte_send_buffer;
+    init_options.diagnostics.use_ready_stable_forward_byte_send_buffer = options.use_ready_stable_forward_byte_send_buffer;
+    init_options.diagnostics.use_contiguous_forward_byte_send = options.use_contiguous_forward_byte_send;
+    init_options.diagnostics.use_physical_forward_peer_exchange = options.use_physical_forward_peer_exchange;
+    init_options.diagnostics.contiguous_forward_send_mode = options.contiguous_forward_send_mode;
+    init_options.diagnostics.contiguous_forward_send_chunk_bytes = options.contiguous_forward_send_chunk_bytes;
+    init_options.execution.large_count_p2p_transport  = options.large_count_p2p_transport;
+    init_options.diagnostics.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
+    init_options.diagnostics.use_fft_exec_no_sync = options.use_fft_exec_no_sync;
+    init_options.diagnostics.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
+    init_options.diagnostics.use_3d_deferred_send_completion = options.use_3d_deferred_send_completion;
+    init_options.execution.use_native_opt0_default_z_layout = options.use_native_opt0_default_z_layout;
+    init_options.execution.use_native_opt0_reference_y_buffer_topology = options.use_native_opt0_reference_y_buffer_topology;
+    init_options.execution.use_native_opt0_compact_y_workarea = options.use_native_opt0_compact_y_workarea;
+    init_options.execution.use_native_opt0_tight_y_plan_sequence = options.use_native_opt0_tight_y_plan_sequence;
+    init_options.execution.use_native_opt0_shared_y_plan_handles = options.use_native_opt0_shared_y_plan_handles;
+    init_options.execution.use_native_opt0_y_group_device_sync = options.use_native_opt0_y_group_device_sync;
+    init_options.execution.use_native_opt0_y_no_sync_exec = options.use_native_opt0_y_no_sync_exec;
+    init_options.execution.use_native_opt0_raw_y_plan_array_executor = options.use_native_opt0_raw_y_plan_array_executor;
+    init_options.diagnostics.use_native_opt0_reference_y_plan_lifecycle = options.use_native_opt0_reference_y_plan_lifecycle;
+    init_options.diagnostics.use_native_opt0_reference_y_plan_bundle = options.use_native_opt0_reference_y_plan_bundle;
+    init_options.diagnostics.use_native_opt0_raw_y_plan_bundle = options.use_native_opt0_raw_y_plan_bundle;
+    init_options.diagnostics.use_native_opt0_y_plan_bundle_stream_first = options.use_native_opt0_y_plan_bundle_stream_first;
+    init_options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams =
         options.use_native_opt0_raw_y_plan_bundle_reference_streams;
-    init_options.use_native_opt0_reference_local_plan_context = options.use_native_opt0_reference_local_plan_context;
-    init_options.allow_native_opt0_diagnostic_variants = options.allow_native_opt0_diagnostic_variants;
-    init_options.use_native_opt0_memory_feasibility_guard =
+    init_options.diagnostics.use_native_opt0_reference_local_plan_context = options.use_native_opt0_reference_local_plan_context;
+    init_options.diagnostics.allow_native_opt0_diagnostic_variants = options.allow_native_opt0_diagnostic_variants;
+    init_options.execution.use_native_opt0_memory_feasibility_guard =
         options.use_native_opt0_memory_feasibility_guard;
-    init_options.native_opt0_memory_feasibility_reserve_bytes =
+    init_options.execution.native_opt0_memory_feasibility_reserve_bytes =
         options.native_opt0_memory_feasibility_reserve_bytes;
-    init_options.enable_local_fft_diagnostics =
+    init_options.diagnostics.enable_local_fft_diagnostics =
         options.enable_local_fft_diagnostics || options.native_opt0_y_microbench;
-    init_options.enable_native_stage_timers = options.enable_native_stage_timers;
-    init_options.local_fft_diagnostics_directory =
+    init_options.diagnostics.enable_native_stage_timers = options.enable_native_stage_timers;
+    init_options.diagnostics.local_fft_diagnostics_directory =
         options.local_fft_diagnostics_directory.empty() ? options.directory : options.local_fft_diagnostics_directory;
-    init_options.local_fft_diagnostics_label =
+    init_options.diagnostics.local_fft_diagnostics_label =
         "fftm-native_g" + std::to_string( static_cast<unsigned long long>( options.p1 * options.p2 ) ) + "_p" +
         std::to_string( static_cast<unsigned long long>( options.p1 ) ) + "x" +
         std::to_string( static_cast<unsigned long long>( options.p2 ) ) + "_" + pencil_layout_name( options.pencil_layout ) +
@@ -1767,43 +1768,44 @@ template <class T>
 inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_benchmark_options<T> &options )
 {
     ::fftm::fftm_init_options init_options;
-    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
-    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
-    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
-    init_options.use_fft_exec_no_sync        = options.use_fft_exec_no_sync;
-    init_options.enable_native_stage_timers  = options.enable_native_stage_timers;
-    init_options.use_4d_slab_native_xw_transpose = options.use_4d_slab_native_xw_transpose;
-    init_options.use_4d_slab_native_xw_batched_peer_kernels =
+    init_options.reporting = ::fftm::profiling_reporting_options();
+    init_options.execution.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.execution.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.execution.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+    init_options.diagnostics.use_fft_exec_no_sync        = options.use_fft_exec_no_sync;
+    init_options.diagnostics.enable_native_stage_timers  = options.enable_native_stage_timers;
+    init_options.execution.use_4d_slab_native_xw_transpose = options.use_4d_slab_native_xw_transpose;
+    init_options.diagnostics.use_4d_slab_native_xw_batched_peer_kernels =
         options.use_4d_slab_native_xw_batched_peer_kernels;
-    init_options.use_4d_slab_native_xw_tensor_coalesced_kernels =
+    init_options.diagnostics.use_4d_slab_native_xw_tensor_coalesced_kernels =
         options.use_4d_slab_native_xw_tensor_coalesced_kernels;
-    init_options.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
-    init_options.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
-    init_options.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
-    init_options.use_4d_native_xw_direct_layout = options.use_4d_native_xw_direct_layout;
-    init_options.use_4d_native_xw_chunked_transport = options.use_4d_native_xw_chunked_transport;
-    init_options.native_xw_chunk_bytes =
+    init_options.diagnostics.use_4d_slab_native_xw_vector4_kernels = options.use_4d_slab_native_xw_vector4_kernels;
+    init_options.diagnostics.use_4d_slab_native_xw_tiled_kernels = options.use_4d_slab_native_xw_tiled_kernels;
+    init_options.diagnostics.use_4d_slab_native_xw_layout_stage = options.use_4d_slab_native_xw_layout_stage;
+    init_options.execution.use_4d_native_xw_direct_layout = options.use_4d_native_xw_direct_layout;
+    init_options.execution.use_4d_native_xw_chunked_transport = options.use_4d_native_xw_chunked_transport;
+    init_options.execution.native_xw_chunk_bytes =
         options.native_xw_chunk_mib * static_cast<std::size_t>( 1024 ) * static_cast<std::size_t>( 1024 );
-    init_options.native_xw_chunk_window = options.native_xw_chunk_window;
-    init_options.use_4d_native_xw_compact_staging = options.use_4d_native_xw_compact_staging;
-    init_options.use_4d_slab_native_work_area_alias = options.use_4d_slab_native_work_area_alias;
-    init_options.use_4d_slab_native_wz_communication_layout =
+    init_options.execution.native_xw_chunk_window = options.native_xw_chunk_window;
+    init_options.execution.use_4d_native_xw_compact_staging = options.use_4d_native_xw_compact_staging;
+    init_options.execution.use_4d_slab_native_work_area_alias = options.use_4d_slab_native_work_area_alias;
+    init_options.execution.use_4d_slab_native_wz_communication_layout =
         options.use_4d_slab_native_wz_communication_layout;
-    init_options.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
-    init_options.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
-    init_options.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
-    init_options.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
-    init_options.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
-    init_options.use_4d_pencil_degenerate_local_transposes =
+    init_options.execution.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
+    init_options.execution.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
+    init_options.diagnostics.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
+    init_options.execution.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
+    init_options.diagnostics.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
+    init_options.execution.use_4d_pencil_degenerate_local_transposes =
         options.use_4d_pencil_degenerate_local_transposes;
-    init_options.use_4d_pencil_degenerate_same_xw_native =
+    init_options.execution.use_4d_pencil_degenerate_same_xw_native =
         options.use_4d_pencil_degenerate_same_xw_native;
-    init_options.use_4d_pencil_degenerate_wz_sliced_z_fft =
+    init_options.execution.use_4d_pencil_degenerate_wz_sliced_z_fft =
         options.use_4d_pencil_degenerate_wz_sliced_z_fft;
     init_options.spectral_layout_4d =
         options.use_4d_slab_native_xw_native_spectral_layout ? ::fftm::fftm_4d_spectral_layout::native_xzwy
                                                              : ::fftm::fftm_4d_spectral_layout::public_yzwx;
-    init_options.use_4d_slab_native_xw_native_spectral_layout =
+    init_options.diagnostics.use_4d_slab_native_xw_native_spectral_layout =
         options.use_4d_slab_native_xw_native_spectral_layout;
     return init_options;
 }

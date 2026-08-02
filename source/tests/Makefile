@@ -12,6 +12,7 @@ cuda_dir=/usr/local/cuda
 mpi_dir=/usr/local/mpi
 NVCC ?= $(cuda_dir)/bin/nvcc
 MPICXX ?= $(mpi_dir)/bin/mpicxx
+CXX ?= g++
 source=$(PROJECT_ROOT)/source
 contrib=$(source)/contrib/scfd/include
 include_cuda=$(cuda_dir)/include
@@ -54,6 +55,10 @@ FFTM3D_BENCH_FLAGS :=
 endif
 
 ALL_BINS = \
+	test_fftm_options.bin \
+	test_fftm_autotune_hardware.bin \
+	test_fftm_resource_lifecycle.bin \
+	test_fftm_quiet_default.bin \
 	test_init.bin \
 	test_fft_2D.bin \
 	test_2D_poisson.bin \
@@ -126,6 +131,9 @@ $(BIN_TARGETS): %: $(BUILD_DIR)/%
 $(BUILD_DIR):
 	mkdir -p $@
 
+$(BUILD_DIR)/test_fftm_options.bin: $(TEST_DIR)/test_fftm_options.cpp $(source)/fftm_options.hpp | $(BUILD_DIR)
+	$(CXX) $(GCCFLAGS) -I$(source) $< -o $@
+
 define BUILD_MPI_TEST
 $(BUILD_DIR)/$1: $(TEST_DIR)/$2 | $(BUILD_DIR)
 	$(NVCC) $3 -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $4 $$< -c -o $(BUILD_DIR)/$5
@@ -146,6 +154,12 @@ $(BUILD_DIR)/$1: $(TEST_DIR)/$2 | $(BUILD_DIR)
 endef
 
 $(eval $(call BUILD_MPI_TEST,test_init.bin,test_init.cu,$(NVCCFLAGS),$(SCFD_FLAGS),test_init.o,-lcudart -lcufft -lmpi))
+
+$(eval $(call BUILD_MPI_TEST,test_fftm_quiet_default.bin,test_fftm_quiet_default.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_quiet_default.o,-lcudart -lcufft -lmpi))
+
+$(eval $(call BUILD_MPI_TEST,test_fftm_autotune_hardware.bin,test_fftm_autotune_hardware.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_autotune_hardware.o,-lcudart -lcufft -lmpi))
+
+$(eval $(call BUILD_MPI_TEST,test_fftm_resource_lifecycle.bin,test_fftm_resource_lifecycle.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_resource_lifecycle.o,-lcudart -lcufft -lmpi))
 
 $(eval $(call BUILD_CUDA_TEST,test_cudaMemcpy3DAsync.bin,test_cudaMemcpy3DAsync.cu,$(NVCCFLAGS),$(SCFD_FLAGS),))
 

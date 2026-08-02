@@ -2276,8 +2276,16 @@ def parse_summary_line(line: str) -> Optional[Dict[str, Any]]:
             key, raw_value = part.split("=", 1)
             data[key.strip()] = parse_scalar(raw_value)
     else:
-        for match in SUMMARY_TOKEN_RE.finditer(payload):
-            data[match.group(1)] = parse_scalar(match.group(2))
+        parts = split_top_level_csv(payload)
+        if len(parts) > 1:
+            for part in parts:
+                if "=" not in part:
+                    continue
+                key, raw_value = part.split("=", 1)
+                data[key.strip()] = parse_scalar(raw_value)
+        else:
+            for match in SUMMARY_TOKEN_RE.finditer(payload):
+                data[match.group(1)] = parse_scalar(match.group(2))
     return data or None
 
 

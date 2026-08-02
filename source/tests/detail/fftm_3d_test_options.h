@@ -346,50 +346,50 @@ inline void copy_fftm_init_options_to_fftm_3d_test_options(
     fftm_3d_test_options &options, const ::fftm::fftm_init_options &init_options
 )
 {
-    options.use_direct_backward_receive = init_options.use_direct_backward_receive;
-    options.direct_p2p_cuda_aware       = init_options.direct_p2p_cuda_aware;
-    options.use_p2p_send_thread         = init_options.use_p2p_send_thread;
-    options.use_p2p_byte_transfer       = init_options.use_p2p_byte_transfer;
-    options.use_persistent_p2p          = init_options.use_persistent_p2p;
-    options.use_ready_p2p_send          = init_options.use_ready_p2p_send;
-    options.print_pencil_schedule       = init_options.print_pencil_schedule;
-    options.use_direct_forward_byte_receive = init_options.use_direct_forward_byte_receive;
-    options.use_stable_forward_byte_send_buffer = init_options.use_stable_forward_byte_send_buffer;
+    options.use_direct_backward_receive = init_options.execution.use_direct_backward_receive;
+    options.direct_p2p_cuda_aware       = init_options.execution.direct_p2p_cuda_aware;
+    options.use_p2p_send_thread         = init_options.diagnostics.use_p2p_send_thread;
+    options.use_p2p_byte_transfer       = init_options.execution.use_p2p_byte_transfer;
+    options.use_persistent_p2p          = init_options.execution.use_persistent_p2p;
+    options.use_ready_p2p_send          = init_options.diagnostics.use_ready_p2p_send;
+    options.print_pencil_schedule       = init_options.diagnostics.print_pencil_schedule;
+    options.use_direct_forward_byte_receive = init_options.diagnostics.use_direct_forward_byte_receive;
+    options.use_stable_forward_byte_send_buffer = init_options.diagnostics.use_stable_forward_byte_send_buffer;
     options.use_ready_stable_forward_byte_send_buffer =
-        init_options.use_ready_stable_forward_byte_send_buffer;
-    options.use_contiguous_forward_byte_send = init_options.use_contiguous_forward_byte_send;
-    options.use_physical_forward_peer_exchange = init_options.use_physical_forward_peer_exchange;
-    options.contiguous_forward_send_mode = init_options.contiguous_forward_send_mode;
-    options.contiguous_forward_send_chunk_bytes = init_options.contiguous_forward_send_chunk_bytes;
-    options.large_count_p2p_transport = init_options.large_count_p2p_transport;
-    options.use_large_count_datatype_cache = init_options.use_large_count_datatype_cache;
-    options.use_fft_exec_no_sync = init_options.use_fft_exec_no_sync;
-    options.use_native_backward_second_peer_loop = init_options.use_native_backward_second_peer_loop;
-    options.use_3d_deferred_send_completion = init_options.use_3d_deferred_send_completion;
-    options.use_native_opt0_default_z_layout = init_options.use_native_opt0_default_z_layout;
-    options.use_native_opt0_reference_y_buffer_topology = init_options.use_native_opt0_reference_y_buffer_topology;
-    options.use_native_opt0_compact_y_workarea = init_options.use_native_opt0_compact_y_workarea;
-    options.use_native_opt0_tight_y_plan_sequence = init_options.use_native_opt0_tight_y_plan_sequence;
-    options.use_native_opt0_shared_y_plan_handles = init_options.use_native_opt0_shared_y_plan_handles;
-    options.use_native_opt0_y_group_device_sync = init_options.use_native_opt0_y_group_device_sync;
-    options.use_native_opt0_y_no_sync_exec = init_options.use_native_opt0_y_no_sync_exec;
-    options.use_native_opt0_raw_y_plan_array_executor = init_options.use_native_opt0_raw_y_plan_array_executor;
+        init_options.diagnostics.use_ready_stable_forward_byte_send_buffer;
+    options.use_contiguous_forward_byte_send = init_options.diagnostics.use_contiguous_forward_byte_send;
+    options.use_physical_forward_peer_exchange = init_options.diagnostics.use_physical_forward_peer_exchange;
+    options.contiguous_forward_send_mode = init_options.diagnostics.contiguous_forward_send_mode;
+    options.contiguous_forward_send_chunk_bytes = init_options.diagnostics.contiguous_forward_send_chunk_bytes;
+    options.large_count_p2p_transport = init_options.execution.large_count_p2p_transport;
+    options.use_large_count_datatype_cache = init_options.diagnostics.use_large_count_datatype_cache;
+    options.use_fft_exec_no_sync = init_options.diagnostics.use_fft_exec_no_sync;
+    options.use_native_backward_second_peer_loop = init_options.diagnostics.use_native_backward_second_peer_loop;
+    options.use_3d_deferred_send_completion = init_options.diagnostics.use_3d_deferred_send_completion;
+    options.use_native_opt0_default_z_layout = init_options.execution.use_native_opt0_default_z_layout;
+    options.use_native_opt0_reference_y_buffer_topology = init_options.execution.use_native_opt0_reference_y_buffer_topology;
+    options.use_native_opt0_compact_y_workarea = init_options.execution.use_native_opt0_compact_y_workarea;
+    options.use_native_opt0_tight_y_plan_sequence = init_options.execution.use_native_opt0_tight_y_plan_sequence;
+    options.use_native_opt0_shared_y_plan_handles = init_options.execution.use_native_opt0_shared_y_plan_handles;
+    options.use_native_opt0_y_group_device_sync = init_options.execution.use_native_opt0_y_group_device_sync;
+    options.use_native_opt0_y_no_sync_exec = init_options.execution.use_native_opt0_y_no_sync_exec;
+    options.use_native_opt0_raw_y_plan_array_executor = init_options.execution.use_native_opt0_raw_y_plan_array_executor;
     options.use_native_opt0_reference_y_plan_lifecycle =
-        init_options.use_native_opt0_reference_y_plan_lifecycle;
-    options.use_native_opt0_reference_y_plan_bundle = init_options.use_native_opt0_reference_y_plan_bundle;
-    options.use_native_opt0_raw_y_plan_bundle = init_options.use_native_opt0_raw_y_plan_bundle;
-    options.use_native_opt0_y_plan_bundle_stream_first = init_options.use_native_opt0_y_plan_bundle_stream_first;
+        init_options.diagnostics.use_native_opt0_reference_y_plan_lifecycle;
+    options.use_native_opt0_reference_y_plan_bundle = init_options.diagnostics.use_native_opt0_reference_y_plan_bundle;
+    options.use_native_opt0_raw_y_plan_bundle = init_options.diagnostics.use_native_opt0_raw_y_plan_bundle;
+    options.use_native_opt0_y_plan_bundle_stream_first = init_options.diagnostics.use_native_opt0_y_plan_bundle_stream_first;
     options.use_native_opt0_raw_y_plan_bundle_reference_streams =
-        init_options.use_native_opt0_raw_y_plan_bundle_reference_streams;
-    options.use_native_opt0_reference_local_plan_context = init_options.use_native_opt0_reference_local_plan_context;
-    options.allow_native_opt0_diagnostic_variants = init_options.allow_native_opt0_diagnostic_variants;
+        init_options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams;
+    options.use_native_opt0_reference_local_plan_context = init_options.diagnostics.use_native_opt0_reference_local_plan_context;
+    options.allow_native_opt0_diagnostic_variants = init_options.diagnostics.allow_native_opt0_diagnostic_variants;
     options.use_native_opt0_memory_feasibility_guard =
-        init_options.use_native_opt0_memory_feasibility_guard;
+        init_options.execution.use_native_opt0_memory_feasibility_guard;
     options.native_opt0_memory_feasibility_reserve_bytes =
-        init_options.native_opt0_memory_feasibility_reserve_bytes;
-    options.enable_local_fft_diagnostics = init_options.enable_local_fft_diagnostics;
-    options.enable_native_stage_timers = init_options.enable_native_stage_timers;
-    options.local_fft_diagnostics_directory = init_options.local_fft_diagnostics_directory;
+        init_options.execution.native_opt0_memory_feasibility_reserve_bytes;
+    options.enable_local_fft_diagnostics = init_options.diagnostics.enable_local_fft_diagnostics;
+    options.enable_native_stage_timers = init_options.diagnostics.enable_native_stage_timers;
+    options.local_fft_diagnostics_directory = init_options.diagnostics.local_fft_diagnostics_directory;
     options.pencil_layout = from_fftm_pencil_layout( init_options.pencil_layout_3d );
     options.pencil_pipeline = from_fftm_pencil_pipeline( init_options.pencil_pipeline_3d );
 }
@@ -1067,51 +1067,52 @@ inline fftm_3d_test_options parse_fftm_3d_test_options(
 inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_3d_test_options &options )
 {
     ::fftm::fftm_init_options init_options;
-    init_options.use_direct_backward_receive = options.use_direct_backward_receive;
-    init_options.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
-    init_options.use_p2p_send_thread         = options.use_p2p_send_thread;
-	    init_options.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
-	    init_options.use_persistent_p2p          = options.use_persistent_p2p;
-	    init_options.use_ready_p2p_send          = options.use_ready_p2p_send;
-    init_options.print_pencil_schedule       = options.print_pencil_schedule;
-    init_options.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
-    init_options.use_stable_forward_byte_send_buffer = options.use_stable_forward_byte_send_buffer;
-    init_options.use_ready_stable_forward_byte_send_buffer = options.use_ready_stable_forward_byte_send_buffer;
-    init_options.use_contiguous_forward_byte_send = options.use_contiguous_forward_byte_send;
-    init_options.use_physical_forward_peer_exchange = options.use_physical_forward_peer_exchange;
-    init_options.contiguous_forward_send_mode = options.contiguous_forward_send_mode;
-    init_options.contiguous_forward_send_chunk_bytes = options.contiguous_forward_send_chunk_bytes;
-    init_options.large_count_p2p_transport  = options.large_count_p2p_transport;
-    init_options.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
-    init_options.use_fft_exec_no_sync = options.use_fft_exec_no_sync;
-    init_options.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
-    init_options.use_3d_deferred_send_completion = options.use_3d_deferred_send_completion;
-    init_options.use_native_opt0_default_z_layout = options.use_native_opt0_default_z_layout;
-    init_options.use_native_opt0_reference_y_buffer_topology = options.use_native_opt0_reference_y_buffer_topology;
-    init_options.use_native_opt0_compact_y_workarea = options.use_native_opt0_compact_y_workarea;
-    init_options.use_native_opt0_tight_y_plan_sequence = options.use_native_opt0_tight_y_plan_sequence;
-    init_options.use_native_opt0_shared_y_plan_handles = options.use_native_opt0_shared_y_plan_handles;
-    init_options.use_native_opt0_y_group_device_sync = options.use_native_opt0_y_group_device_sync;
-    init_options.use_native_opt0_y_no_sync_exec = options.use_native_opt0_y_no_sync_exec;
-    init_options.use_native_opt0_raw_y_plan_array_executor = options.use_native_opt0_raw_y_plan_array_executor;
-    init_options.use_native_opt0_reference_y_plan_lifecycle =
+    init_options.reporting = ::fftm::profiling_reporting_options();
+    init_options.execution.use_direct_backward_receive = options.use_direct_backward_receive;
+    init_options.execution.direct_p2p_cuda_aware       = options.direct_p2p_cuda_aware;
+    init_options.diagnostics.use_p2p_send_thread         = options.use_p2p_send_thread;
+	    init_options.execution.use_p2p_byte_transfer       = options.use_p2p_byte_transfer;
+	    init_options.execution.use_persistent_p2p          = options.use_persistent_p2p;
+	    init_options.diagnostics.use_ready_p2p_send          = options.use_ready_p2p_send;
+    init_options.diagnostics.print_pencil_schedule       = options.print_pencil_schedule;
+    init_options.diagnostics.use_direct_forward_byte_receive = options.use_direct_forward_byte_receive;
+    init_options.diagnostics.use_stable_forward_byte_send_buffer = options.use_stable_forward_byte_send_buffer;
+    init_options.diagnostics.use_ready_stable_forward_byte_send_buffer = options.use_ready_stable_forward_byte_send_buffer;
+    init_options.diagnostics.use_contiguous_forward_byte_send = options.use_contiguous_forward_byte_send;
+    init_options.diagnostics.use_physical_forward_peer_exchange = options.use_physical_forward_peer_exchange;
+    init_options.diagnostics.contiguous_forward_send_mode = options.contiguous_forward_send_mode;
+    init_options.diagnostics.contiguous_forward_send_chunk_bytes = options.contiguous_forward_send_chunk_bytes;
+    init_options.execution.large_count_p2p_transport  = options.large_count_p2p_transport;
+    init_options.diagnostics.use_large_count_datatype_cache = options.use_large_count_datatype_cache;
+    init_options.diagnostics.use_fft_exec_no_sync = options.use_fft_exec_no_sync;
+    init_options.diagnostics.use_native_backward_second_peer_loop = options.use_native_backward_second_peer_loop;
+    init_options.diagnostics.use_3d_deferred_send_completion = options.use_3d_deferred_send_completion;
+    init_options.execution.use_native_opt0_default_z_layout = options.use_native_opt0_default_z_layout;
+    init_options.execution.use_native_opt0_reference_y_buffer_topology = options.use_native_opt0_reference_y_buffer_topology;
+    init_options.execution.use_native_opt0_compact_y_workarea = options.use_native_opt0_compact_y_workarea;
+    init_options.execution.use_native_opt0_tight_y_plan_sequence = options.use_native_opt0_tight_y_plan_sequence;
+    init_options.execution.use_native_opt0_shared_y_plan_handles = options.use_native_opt0_shared_y_plan_handles;
+    init_options.execution.use_native_opt0_y_group_device_sync = options.use_native_opt0_y_group_device_sync;
+    init_options.execution.use_native_opt0_y_no_sync_exec = options.use_native_opt0_y_no_sync_exec;
+    init_options.execution.use_native_opt0_raw_y_plan_array_executor = options.use_native_opt0_raw_y_plan_array_executor;
+    init_options.diagnostics.use_native_opt0_reference_y_plan_lifecycle =
         options.use_native_opt0_reference_y_plan_lifecycle;
-    init_options.use_native_opt0_reference_y_plan_bundle = options.use_native_opt0_reference_y_plan_bundle;
-    init_options.use_native_opt0_raw_y_plan_bundle = options.use_native_opt0_raw_y_plan_bundle;
-    init_options.use_native_opt0_y_plan_bundle_stream_first = options.use_native_opt0_y_plan_bundle_stream_first;
-    init_options.use_native_opt0_raw_y_plan_bundle_reference_streams =
+    init_options.diagnostics.use_native_opt0_reference_y_plan_bundle = options.use_native_opt0_reference_y_plan_bundle;
+    init_options.diagnostics.use_native_opt0_raw_y_plan_bundle = options.use_native_opt0_raw_y_plan_bundle;
+    init_options.diagnostics.use_native_opt0_y_plan_bundle_stream_first = options.use_native_opt0_y_plan_bundle_stream_first;
+    init_options.diagnostics.use_native_opt0_raw_y_plan_bundle_reference_streams =
         options.use_native_opt0_raw_y_plan_bundle_reference_streams;
-    init_options.use_native_opt0_reference_local_plan_context = options.use_native_opt0_reference_local_plan_context;
-    init_options.allow_native_opt0_diagnostic_variants = options.allow_native_opt0_diagnostic_variants;
-    init_options.use_native_opt0_memory_feasibility_guard =
+    init_options.diagnostics.use_native_opt0_reference_local_plan_context = options.use_native_opt0_reference_local_plan_context;
+    init_options.diagnostics.allow_native_opt0_diagnostic_variants = options.allow_native_opt0_diagnostic_variants;
+    init_options.execution.use_native_opt0_memory_feasibility_guard =
         options.use_native_opt0_memory_feasibility_guard;
-    init_options.native_opt0_memory_feasibility_reserve_bytes =
+    init_options.execution.native_opt0_memory_feasibility_reserve_bytes =
         options.native_opt0_memory_feasibility_reserve_bytes;
-    init_options.enable_local_fft_diagnostics = options.enable_local_fft_diagnostics;
-    init_options.enable_native_stage_timers = options.enable_native_stage_timers;
-    init_options.local_fft_diagnostics_directory =
+    init_options.diagnostics.enable_local_fft_diagnostics = options.enable_local_fft_diagnostics;
+    init_options.diagnostics.enable_native_stage_timers = options.enable_native_stage_timers;
+    init_options.diagnostics.local_fft_diagnostics_directory =
         options.local_fft_diagnostics_directory.empty() ? "." : options.local_fft_diagnostics_directory;
-    init_options.local_fft_diagnostics_label =
+    init_options.diagnostics.local_fft_diagnostics_label =
         "fftm-native_g" + std::to_string( static_cast<unsigned long long>( options.p1 * options.p2 ) ) + "_p" +
         std::to_string( static_cast<unsigned long long>( options.p1 ) ) + "x" +
         std::to_string( static_cast<unsigned long long>( options.p2 ) ) + "_" + pencil_layout_name( options.pencil_layout ) +

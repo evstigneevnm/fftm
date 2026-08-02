@@ -1,0 +1,115 @@
+#include <cassert>
+#include <stdexcept>
+
+#include <fftm_options.hpp>
+
+int main()
+{
+    {
+        const fftm::fftm_init_options options;
+        assert( options.reporting.profiling_key.empty() );
+        assert( options.reporting.memory_profiling_key.empty() );
+        assert( !options.reporting.verbose );
+        assert( !options.reporting.print_profile_summary_on_destroy );
+        assert( !options.diagnostics.enable_native_stage_timers );
+        assert( !options.diagnostics.allow_native_opt0_diagnostic_variants );
+    }
+
+    {
+        const auto reporting = fftm::profiling_reporting_options();
+        assert( reporting.profiling_key == "fftm_prof" );
+        assert( reporting.memory_profiling_key == "fftm_mem" );
+        assert( reporting.print_profile_summary_on_destroy );
+        assert( reporting.print_profile_totals_on_destroy );
+        assert( reporting.print_memory_profile_on_destroy );
+        assert( reporting.print_memory_totals_on_destroy );
+    }
+
+    {
+        const auto options = fftm::production_options_3d(
+            fftm::transform_strategy_3d::pencil_pencil, 8, true
+        );
+        assert( options.pencil_layout_3d == fftm::fftm_3d_pencil_layout::opt0 );
+        assert( options.pencil_pipeline_3d == fftm::fftm_3d_pencil_pipeline::reference_parity );
+        assert( options.execution.use_p2p_byte_transfer );
+        assert( options.execution.use_native_opt0_default_z_layout );
+        assert( options.execution.use_native_opt0_reference_y_buffer_topology );
+        assert( options.execution.use_native_opt0_tight_y_plan_sequence );
+        assert( options.execution.use_native_opt0_shared_y_plan_handles );
+        assert( options.execution.use_native_opt0_y_group_device_sync );
+        assert( options.execution.use_native_opt0_y_no_sync_exec );
+        assert( options.execution.use_native_opt0_raw_y_plan_array_executor );
+        assert( !options.diagnostics.use_fft_exec_no_sync );
+    }
+
+    {
+        const auto options = fftm::production_options_3d(
+            fftm::transform_strategy_3d::pencil_pencil, 6, true
+        );
+        assert( options.pencil_layout_3d == fftm::fftm_3d_pencil_layout::opt1 );
+        assert( !options.execution.use_native_opt0_default_z_layout );
+    }
+
+    {
+        const auto options = fftm::production_options_3d(
+            fftm::transform_strategy_3d::pencil_pencil, 8, false
+        );
+        assert( options.pencil_layout_3d == fftm::fftm_3d_pencil_layout::opt1 );
+        assert( options.pencil_pipeline_3d == fftm::fftm_3d_pencil_pipeline::reference );
+        assert( !options.execution.direct_p2p_cuda_aware );
+        assert( !options.execution.use_p2p_byte_transfer );
+    }
+
+    {
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true
+        );
+        assert( options.execution.use_4d_slab_native_xw_transpose );
+        assert( options.execution.use_4d_native_xw_direct_layout );
+        assert( options.execution.use_4d_native_xw_chunked_transport );
+        assert( options.execution.native_xw_chunk_window == 1 );
+        assert( options.execution.use_4d_native_xw_compact_staging );
+        assert( options.execution.use_4d_slab_native_work_area_alias );
+        assert( options.execution.use_4d_slab_native_wz_communication_layout );
+        assert( options.execution.slab_native_wz_plan_concurrency == 4 );
+        assert( options.execution.use_4d_slab_native_wz_ready_pipeline );
+    }
+
+    {
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::public_yzwx,
+            true
+        );
+        assert( options.execution.use_4d_slab_native_xw_transpose );
+        assert( !options.execution.use_4d_native_xw_direct_layout );
+        assert( !options.execution.use_4d_slab_native_wz_communication_layout );
+    }
+
+    {
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::pencil_pencil,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true
+        );
+        assert( options.execution.use_4d_pencil_same_zw_native_layout );
+        assert( options.execution.use_4d_pencil_degenerate_local_transposes );
+        assert( options.execution.use_4d_pencil_degenerate_same_xw_native );
+        assert( options.execution.use_4d_pencil_degenerate_wz_sliced_z_fft );
+        assert( !options.diagnostics.use_4d_pencil_degenerate_xw_slab_path );
+    }
+
+    bool rejected = false;
+    try
+    {
+        (void)fftm::production_options_3d( fftm::transform_strategy_3d::pencil_pencil, 0 );
+    }
+    catch ( const std::logic_error & )
+    {
+        rejected = true;
+    }
+    assert( rejected );
+    return 0;
+}
