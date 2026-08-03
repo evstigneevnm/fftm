@@ -22,6 +22,7 @@
 #include "../fft_direction.h"
 #include "../fft_partitioning.h"
 #include "../profiling.h"
+#include "device_aware_mpi_config.h"
 #include "mpi_transpose_3d.h"
 #include "mpi_transpose_3d_pencil_pencil_plan_state.h"
 

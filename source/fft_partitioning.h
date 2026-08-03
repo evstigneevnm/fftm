@@ -2,6 +2,7 @@
 #define __FFTM_FFT_PARTITIONING_H__
 
 
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 namespace fftm

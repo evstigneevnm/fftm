@@ -38,7 +38,7 @@
         }
 
         const std::string header =
-            "source,run_label,rank,plan_name,direction,cufft_type,rank_fft,default_layout,n0,n1,n2,inembed0,inembed1,inembed2,"
+            "source,run_label,rank,plan_name,direction,backend_fft_type,rank_fft,default_layout,n0,n1,n2,inembed0,inembed1,inembed2,"
             "istride,idist,onembed0,onembed1,onembed2,ostride,odist,batch,work_size_bytes,work_area_token,"
             "stream_token,directory";
         for ( const auto &plan : base_fft_.plan_descriptors() )
@@ -46,7 +46,7 @@
             const auto &desc = plan.second;
             std::ostringstream row;
             row << "fftm-native," << local_fft_diagnostics_label_ << ',' << mpi_.myid << ',' << plan.first << ','
-                << local_fft_direction_name_( desc.dir ) << ',' << desc.cufft_type << ',' << desc.rank << ','
+                << local_fft_direction_name_( desc.dir ) << ',' << desc.backend_type << ',' << desc.rank << ','
                 << ( desc.default_layout ? 1 : 0 );
             for ( int i = 0; i < 3; ++i )
             {

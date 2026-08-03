@@ -1,5 +1,5 @@
-#ifndef __FFTM_CUFFT_WRAP_H__
-#define __FFTM_CUFFT_WRAP_H__
+#ifndef __FFTM_HIPFFT_WRAP_H__
+#define __FFTM_HIPFFT_WRAP_H__
 
 #include <array>
 #include <cstdint>
@@ -9,17 +9,17 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-#include <cufft.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <scfd/backend/cuda.h>
-#include <scfd/memory/cuda.h>
-#include <scfd/utils/cuda_stream_wrap.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_version.h>
+#include <hipfft/hipfft.h>
+#include <scfd/backend/hip.h>
+#include <scfd/memory/hip.h>
 #include <scfd/utils/todo.h>
-#include <scfd/utils/cuda_safe_call.h>
-#include <scfd/utils/cufft_safe_call.h>
+#include <scfd/utils/hip_safe_call.h>
 
 #include "fft_plan_descriptor.h"
+#include "hip_stream_wrap.h"
+#include "hipfft_safe_call.h"
 #include "runtime_api_types.h"
 #include "../detail/runtime_hardware_identity.h"
 
@@ -28,27 +28,27 @@ namespace fftm
 namespace wrap
 {
 
-inline void cufft_check_no_sync( cufftResult status, const char *expr )
+inline void hipfft_check_no_sync( hipfftResult status, const char *expr )
 {
-    if ( status != CUFFT_SUCCESS )
+    if ( status != HIPFFT_SUCCESS )
     {
         throw std::runtime_error(
-            std::string( "CUFFT_NO_SYNC_CHECK: " ) + expr + " failed: " +
-            std::string( _cufftGetErrorEnum( status ) )
+            std::string( "HIPFFT_NO_SYNC_CHECK: " ) + expr + " failed: " +
+            std::string( ::fftm::wrap::detail::hipfft_error_string( status ) )
         );
     }
 }
 
-struct cuda_runtime_api
+struct hip_runtime_api
 {
-    using memory_type        = scfd::memory::cuda_device;
-    using device_memory_info_type = typename scfd::backend::cuda::device_memory_info_type;
-    using stream_wrap        = scfd::utils::cuda_stream_wrap;
-    using stream_t           = cudaStream_t;
+    using memory_type        = scfd::memory::hip_device;
+    using device_memory_info_type = typename scfd::backend::hip::device_memory_info_type;
+    using stream_wrap        = ::fftm::wrap::hip_stream_wrap;
+    using stream_t           = hipStream_t;
     using memcpy_kind_t      = memory_copy_kind;
     using memcpy_3d_params_t = memory_copy_3d_params;
-    using host_func_t        = cudaHostFn_t;
-    using event_t            = cudaEvent_t;
+    using host_func_t        = hipHostFn_t;
+    using event_t            = hipEvent_t;
     using pos_t              = memory_position_3d;
     using pitched_ptr_t      = pitched_memory_pointer;
     using extent_t           = memory_extent_3d;
@@ -90,95 +90,97 @@ struct cuda_runtime_api
 
     static void memcpy_3d_async( memcpy_3d_params_t *params, stream_t stream )
     {
-        cudaMemcpy3DParms native_params = {};
-        native_params.srcPos = make_cudaPos(
+        hipMemcpy3DParms native_params = {};
+        native_params.srcPos = make_hipPos(
             params->source_position.x, params->source_position.y, params->source_position.z
         );
-        native_params.srcPtr = make_cudaPitchedPtr(
+        native_params.srcPtr = make_hipPitchedPtr(
             params->source.pointer, params->source.pitch, params->source.x_size, params->source.y_size
         );
-        native_params.dstPos = make_cudaPos(
+        native_params.dstPos = make_hipPos(
             params->destination_position.x, params->destination_position.y, params->destination_position.z
         );
-        native_params.dstPtr = make_cudaPitchedPtr(
+        native_params.dstPtr = make_hipPitchedPtr(
             params->destination.pointer, params->destination.pitch, params->destination.x_size,
             params->destination.y_size
         );
-        native_params.extent = make_cudaExtent( params->extent.width, params->extent.height, params->extent.depth );
+        native_params.extent = make_hipExtent( params->extent.width, params->extent.height, params->extent.depth );
         native_params.kind   = native_copy_kind( params->kind );
-        CUDA_SAFE_CALL( cudaMemcpy3DAsync( &native_params, stream ) );
+        HIP_SAFE_CALL( hipMemcpy3DAsync( &native_params, stream ) );
     }
 
     static void memcpy_async( void *dst, const void *src, size_t bytes, memcpy_kind_t kind, stream_t stream )
     {
-        CUDA_SAFE_CALL( cudaMemcpyAsync( dst, src, bytes, native_copy_kind( kind ), stream ) );
+        HIP_SAFE_CALL( hipMemcpyAsync( dst, src, bytes, native_copy_kind( kind ), stream ) );
     }
 
     static void memcpy( void *dst, const void *src, size_t bytes, memcpy_kind_t kind )
     {
-        CUDA_SAFE_CALL( cudaMemcpy( dst, src, bytes, native_copy_kind( kind ) ) );
+        HIP_SAFE_CALL( hipMemcpy( dst, src, bytes, native_copy_kind( kind ) ) );
     }
 
     static void memset_zero( void *dst, size_t bytes )
     {
-        CUDA_SAFE_CALL( cudaMemset( dst, 0, bytes ) );
+        HIP_SAFE_CALL( hipMemset( dst, 0, bytes ) );
     }
 
     static void device_synchronize()
     {
-        CUDA_SAFE_CALL( cudaDeviceSynchronize() );
+        HIP_SAFE_CALL( hipDeviceSynchronize() );
     }
 
     static int get_device()
     {
         int device = 0;
-        CUDA_SAFE_CALL( cudaGetDevice( &device ) );
+        HIP_SAFE_CALL( hipGetDevice( &device ) );
         return device;
     }
 
     static device_memory_info_type get_device_memory_info()
     {
-        return scfd::backend::cuda::get_device_memory_info();
+        return scfd::backend::hip::get_device_memory_info();
     }
 
     static ::fftm::detail::runtime_hardware_identity get_hardware_identity()
     {
         ::fftm::detail::runtime_hardware_identity result;
-        result.backend = "cuda";
+        result.backend = "hip";
 
         const int device = get_device();
-        cudaDeviceProp properties{};
-        CUDA_SAFE_CALL( cudaGetDeviceProperties( &properties, device ) );
+        hipDeviceProp_t properties{};
+        HIP_SAFE_CALL( hipGetDeviceProperties( &properties, device ) );
         result.device_name       = properties.name;
-        result.architecture      = std::to_string( properties.major ) + "." + std::to_string( properties.minor );
+        result.architecture      = properties.gcnArchName;
         result.total_memory_bytes = static_cast<std::size_t>( properties.totalGlobalMem );
         result.total_memory_known = true;
 
         char pci_bus_id[32] = {};
-        CUDA_SAFE_CALL( cudaDeviceGetPCIBusId( pci_bus_id, static_cast<int>( sizeof( pci_bus_id ) ), device ) );
+        HIP_SAFE_CALL( hipDeviceGetPCIBusId( pci_bus_id, static_cast<int>( sizeof( pci_bus_id ) ), device ) );
         result.pci_bus_id = pci_bus_id;
 
-#if CUDART_VERSION >= 10000
+#if defined( HIP_VERSION_MAJOR ) && HIP_VERSION_MAJOR >= 5
+        hipUUID device_uuid{};
+        HIP_SAFE_CALL( hipDeviceGetUuid( &device_uuid, device ) );
         std::ostringstream uuid;
         uuid << std::hex << std::setfill( '0' );
-        for ( unsigned char byte : properties.uuid.bytes )
+        for ( unsigned char byte : device_uuid.bytes )
             uuid << std::setw( 2 ) << static_cast<unsigned int>( byte );
         result.device_uuid = uuid.str();
 #endif
 
-        CUDA_SAFE_CALL( cudaRuntimeGetVersion( &result.runtime_version ) );
-        CUDA_SAFE_CALL( cudaDriverGetVersion( &result.driver_version ) );
+        HIP_SAFE_CALL( hipRuntimeGetVersion( &result.runtime_version ) );
+        HIP_SAFE_CALL( hipDriverGetVersion( &result.driver_version ) );
         return result;
     }
 
     static void set_device( int device )
     {
-        CUDA_SAFE_CALL( cudaSetDevice( device ) );
+        HIP_SAFE_CALL( hipSetDevice( device ) );
     }
 
     static void stream_synchronize( stream_t stream )
     {
-        CUDA_SAFE_CALL( cudaStreamSynchronize( stream ) );
+        HIP_SAFE_CALL( hipStreamSynchronize( stream ) );
     }
 
     static stream_t default_stream()
@@ -189,62 +191,76 @@ struct cuda_runtime_api
     static event_t event_create()
     {
         event_t event = nullptr;
-        CUDA_SAFE_CALL( cudaEventCreate( &event ) );
+        HIP_SAFE_CALL( hipEventCreate( &event ) );
         return event;
     }
 
     static void event_destroy( event_t event )
     {
         if ( event != nullptr )
-            CUDA_SAFE_CALL( cudaEventDestroy( event ) );
+            HIP_SAFE_CALL( hipEventDestroy( event ) );
     }
 
     static void event_record( event_t event, stream_t stream )
     {
-        CUDA_SAFE_CALL( cudaEventRecord( event, stream ) );
+        HIP_SAFE_CALL( hipEventRecord( event, stream ) );
     }
 
     static void event_synchronize( event_t event )
     {
-        CUDA_SAFE_CALL( cudaEventSynchronize( event ) );
+        HIP_SAFE_CALL( hipEventSynchronize( event ) );
     }
 
     static double event_elapsed_time_ms( event_t start, event_t stop )
     {
         float ms = 0.0f;
-        CUDA_SAFE_CALL( cudaEventElapsedTime( &ms, start, stop ) );
+        HIP_SAFE_CALL( hipEventElapsedTime( &ms, start, stop ) );
         return static_cast<double>( ms );
     }
 
     static bool stream_ready( stream_t stream )
     {
-        const cudaError_t err = cudaStreamQuery( stream );
-        if ( err == cudaSuccess )
+        const hipError_t err = hipStreamQuery( stream );
+        if ( err == hipSuccess )
             return true;
-        if ( err == cudaErrorNotReady )
+        if ( err == hipErrorNotReady )
             return false;
-        CUDA_SAFE_CALL( err );
+        HIP_SAFE_CALL( err );
         return false;
     }
 
     static void launch_host_func( stream_t stream, host_func_t func, void *data )
     {
-        CUDA_SAFE_CALL( cudaLaunchHostFunc( stream, func, data ) );
+        HIP_SAFE_CALL( hipLaunchHostFunc( stream, func, data ) );
     }
 
 private:
-    static constexpr cudaMemcpyKind native_copy_kind( memcpy_kind_t kind )
+    static constexpr hipMemcpyKind native_copy_kind( memcpy_kind_t kind )
     {
         return kind == memcpy_kind_t::device_to_device
-                   ? cudaMemcpyDeviceToDevice
-                   : ( kind == memcpy_kind_t::device_to_host ? cudaMemcpyDeviceToHost : cudaMemcpyHostToDevice );
+                   ? hipMemcpyDeviceToDevice
+                   : ( kind == memcpy_kind_t::device_to_host ? hipMemcpyDeviceToHost : hipMemcpyHostToDevice );
     }
 };
 
-namespace cufft
+namespace hipfft
 {
 namespace detail
 {
+
+template <class Handle>
+inline typename std::enable_if<std::is_pointer<Handle>::value, std::uintptr_t>::type
+opaque_handle_token( Handle handle )
+{
+    return reinterpret_cast<std::uintptr_t>( handle );
+}
+
+template <class Handle>
+inline typename std::enable_if<std::is_integral<Handle>::value, std::uintptr_t>::type
+opaque_handle_token( Handle handle )
+{
+    return static_cast<std::uintptr_t>( handle );
+}
 
 
 template <typename T>
@@ -254,17 +270,17 @@ template <>
 struct fft_complex<float>
 {
     using complex = ::fftm::wrap::complex_value<float>;
-    static_assert( sizeof( complex ) == sizeof( cufftComplex ), "neutral and cuFFT complex sizes differ" );
-    static_assert( alignof( complex ) == alignof( cufftComplex ), "neutral and cuFFT complex alignments differ" );
+    static_assert( sizeof( complex ) == sizeof( hipfftComplex ), "neutral and hipFFT complex sizes differ" );
+    static_assert( alignof( complex ) == alignof( hipfftComplex ), "neutral and hipFFT complex alignments differ" );
 };
 
 template <>
 struct fft_complex<double>
 {
     using complex = ::fftm::wrap::complex_value<double>;
-    static_assert( sizeof( complex ) == sizeof( cufftDoubleComplex ), "neutral and cuFFT complex sizes differ" );
+    static_assert( sizeof( complex ) == sizeof( hipfftDoubleComplex ), "neutral and hipFFT complex sizes differ" );
     static_assert(
-        alignof( complex ) == alignof( cufftDoubleComplex ), "neutral and cuFFT complex alignments differ"
+        alignof( complex ) == alignof( hipfftDoubleComplex ), "neutral and hipFFT complex alignments differ"
     );
 };
 
@@ -274,26 +290,26 @@ struct fft_r2c;
 template <>
 struct fft_r2c<float>
 {
-    static constexpr cufftType type = CUFFT_R2C;
+    static constexpr hipfftType type = HIPFFT_R2C;
     using in_type                   = float;
-    using out_type                  = cufftComplex;
+    using out_type                  = hipfftComplex;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecR2C( plan, in, out );
+        return hipfftExecR2C( plan, in, out );
     }
 };
 
 template <>
 struct fft_r2c<double>
 {
-    static constexpr cufftType type = CUFFT_D2Z;
+    static constexpr hipfftType type = HIPFFT_D2Z;
     using in_type                   = double;
-    using out_type                  = cufftDoubleComplex;
+    using out_type                  = hipfftDoubleComplex;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecD2Z( plan, in, out );
+        return hipfftExecD2Z( plan, in, out );
     }
 };
 
@@ -304,26 +320,26 @@ struct fft_c2r;
 template <>
 struct fft_c2r<float>
 {
-    static constexpr cufftType type = CUFFT_C2R;
-    using in_type                   = cufftComplex;
+    static constexpr hipfftType type = HIPFFT_C2R;
+    using in_type                   = hipfftComplex;
     using out_type                  = float;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecC2R( plan, in, out );
+        return hipfftExecC2R( plan, in, out );
     }
 };
 
 template <>
 struct fft_c2r<double>
 {
-    static constexpr cufftType type = CUFFT_Z2D;
-    using in_type                   = cufftDoubleComplex;
+    static constexpr hipfftType type = HIPFFT_Z2D;
+    using in_type                   = hipfftDoubleComplex;
     using out_type                  = double;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecZ2D( plan, in, out );
+        return hipfftExecZ2D( plan, in, out );
     }
 };
 
@@ -334,26 +350,26 @@ struct fft_c2cf;
 template <>
 struct fft_c2cf<float>
 {
-    static constexpr cufftType type = CUFFT_C2C;
-    using in_type                   = cufftComplex;
-    using out_type                  = cufftComplex;
+    static constexpr hipfftType type = HIPFFT_C2C;
+    using in_type                   = hipfftComplex;
+    using out_type                  = hipfftComplex;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecC2C( plan, in, out, CUFFT_FORWARD );
+        return hipfftExecC2C( plan, in, out, HIPFFT_FORWARD );
     }
 };
 
 template <>
 struct fft_c2cf<double>
 {
-    static constexpr cufftType type = CUFFT_Z2Z;
-    using in_type                   = cufftDoubleComplex;
-    using out_type                  = cufftDoubleComplex;
+    static constexpr hipfftType type = HIPFFT_Z2Z;
+    using in_type                   = hipfftDoubleComplex;
+    using out_type                  = hipfftDoubleComplex;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecZ2Z( plan, in, out, CUFFT_FORWARD );
+        return hipfftExecZ2Z( plan, in, out, HIPFFT_FORWARD );
     }
 };
 
@@ -364,26 +380,26 @@ struct fft_c2cb;
 template <>
 struct fft_c2cb<float>
 {
-    static constexpr cufftType type = CUFFT_C2C;
-    using in_type                   = cufftComplex;
-    using out_type                  = cufftComplex;
+    static constexpr hipfftType type = HIPFFT_C2C;
+    using in_type                   = hipfftComplex;
+    using out_type                  = hipfftComplex;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecC2C( plan, in, out, CUFFT_INVERSE );
+        return hipfftExecC2C( plan, in, out, HIPFFT_BACKWARD );
     }
 };
 
 template <>
 struct fft_c2cb<double>
 {
-    static constexpr cufftType type = CUFFT_Z2Z;
-    using in_type                   = cufftDoubleComplex;
-    using out_type                  = cufftDoubleComplex;
+    static constexpr hipfftType type = HIPFFT_Z2Z;
+    using in_type                   = hipfftDoubleComplex;
+    using out_type                  = hipfftDoubleComplex;
 
-    static cufftResult exec( cufftHandle &plan, in_type *in, out_type *out )
+    static hipfftResult exec( hipfftHandle &plan, in_type *in, out_type *out )
     {
-        return cufftExecZ2Z( plan, in, out, CUFFT_INVERSE );
+        return hipfftExecZ2Z( plan, in, out, HIPFFT_BACKWARD );
     }
 };
 
@@ -393,10 +409,10 @@ struct fft_c2c_direct_raw;
 template <>
 struct fft_c2c_direct_raw<float>
 {
-    static cufftResult exec( cufftHandle plan, void *in, void *out, int direction )
+    static hipfftResult exec( hipfftHandle plan, void *in, void *out, int direction )
     {
-        return cufftExecC2C(
-            plan, static_cast<cufftComplex *>( in ), static_cast<cufftComplex *>( out ), direction
+        return hipfftExecC2C(
+            plan, static_cast<hipfftComplex *>( in ), static_cast<hipfftComplex *>( out ), direction
         );
     }
 };
@@ -404,10 +420,10 @@ struct fft_c2c_direct_raw<float>
 template <>
 struct fft_c2c_direct_raw<double>
 {
-    static cufftResult exec( cufftHandle plan, void *in, void *out, int direction )
+    static hipfftResult exec( hipfftHandle plan, void *in, void *out, int direction )
     {
-        return cufftExecZ2Z(
-            plan, static_cast<cufftDoubleComplex *>( in ), static_cast<cufftDoubleComplex *>( out ), direction
+        return hipfftExecZ2Z(
+            plan, static_cast<hipfftDoubleComplex *>( in ), static_cast<hipfftDoubleComplex *>( out ), direction
         );
     }
 };
@@ -446,12 +462,12 @@ class fft_base
 public:
     using plan_descriptor = fft_plan_descriptor;
     using complex     = typename detail::fft_complex<T>::complex;
-    using memory_type = typename cuda_runtime_api::memory_type;
-    using runtime_api = cuda_runtime_api;
+    using memory_type = typename hip_runtime_api::memory_type;
+    using runtime_api = hip_runtime_api;
     virtual ~fft_base()
     {
     }
-    // virtual cufftResult exec(void* in, void* out) = 0; //check error here
+    // virtual hipfftResult exec(void* in, void* out) = 0; //check error here
     virtual void        exec( void *in, void *out )      = 0;
     virtual void        exec_no_sync( void *in, void *out ) = 0;
     virtual void        exec_direction( direction exec_dir, void *in, void *out ) = 0;
@@ -476,11 +492,11 @@ public:
     using base_t   = fft_base<T>;
     using in_type  = typename traits::in_type;
     using out_type = typename traits::out_type;
-    using opaque_plan_handle_t = cufftHandle;
+    using opaque_plan_handle_t = hipfftHandle;
     struct minimal_reference_c2c_plan_array_t
     {
-        std::vector<cufftHandle> handles;
-        std::vector<cudaStream_t> streams;
+        std::vector<hipfftHandle> handles;
+        std::vector<hipStream_t> streams;
         std::vector<std::size_t>  offsets;
         fft_plan_descriptor       descriptor;
         std::size_t               work_stride_bytes = 0;
@@ -525,7 +541,7 @@ public:
     )
         : handle_( 0 ), work_size( 0 )
     {
-        static_assert( Rank >= 1 && Rank <= 3, "cufft::fft supports only 1D, 2D, and 3D plans" );
+        static_assert( Rank >= 1 && Rank <= 3, "hipfft::fft supports only 1D, 2D, and 3D plans" );
 
         auto n_local       = n;
         auto inembed_local = inembed;
@@ -556,7 +572,7 @@ public:
     explicit fft( const std::array<long long int, Rank> &n, long long int batch )
         : handle_( 0 ), work_size( 0 )
     {
-        static_assert( Rank >= 1 && Rank <= 3, "cufft::fft supports only 1D, 2D, and 3D plans" );
+        static_assert( Rank >= 1 && Rank <= 3, "hipfft::fft supports only 1D, 2D, and 3D plans" );
 
         auto n_local = n;
 
@@ -579,7 +595,7 @@ public:
     {
         if ( handle_ != 0 )
         {
-            cufftDestroy( handle_ );
+            hipfftDestroy( handle_ );
         }
     }
 
@@ -592,13 +608,13 @@ public:
     virtual void set_work_area( void *work_area ) override
     {
         descriptor_.work_area_token = reinterpret_cast<std::uintptr_t>( work_area );
-        CUFFT_SAFE_CALL( cufftSetWorkArea( handle_, work_area ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftSetWorkArea( handle_, work_area ) );
     }
 
     virtual void set_stream( typename base_t::runtime_api::stream_t stream ) override
     {
         descriptor_.stream_token = reinterpret_cast<std::uintptr_t>( stream );
-        CUFFT_SAFE_CALL( cufftSetStream( handle_, stream ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftSetStream( handle_, stream ) );
     }
 
     virtual void recreate_with_stream_and_work_area(
@@ -607,7 +623,7 @@ public:
     {
         if ( handle_ != 0 )
         {
-            CUFFT_SAFE_CALL( cufftDestroy( handle_ ) );
+            FFTM_HIPFFT_SAFE_CALL( hipfftDestroy( handle_ ) );
             handle_ = 0;
         }
 
@@ -635,14 +651,14 @@ public:
 
     void exec_typed( void *in, void *out )
     {
-        CUFFT_SAFE_CALL( traits::exec( handle_, static_cast<in_type *>( in ), static_cast<out_type *>( out ) ) );
+        FFTM_HIPFFT_SAFE_CALL( traits::exec( handle_, static_cast<in_type *>( in ), static_cast<out_type *>( out ) ) );
     }
 
     void exec_typed_no_sync( void *in, void *out )
     {
-        cufft_check_no_sync(
+        hipfft_check_no_sync(
             traits::exec( handle_, static_cast<in_type *>( in ), static_cast<out_type *>( out ) ),
-            "cufft_wrap::fft::exec_typed_no_sync"
+            "hipfft_wrap::fft::exec_typed_no_sync"
         );
     }
 
@@ -655,7 +671,7 @@ public:
         }
         if ( ( D == direction::C2CF || D == direction::C2CB ) && exec_dir == direction::C2CF )
         {
-            CUFFT_SAFE_CALL( detail::fft_c2cf<T>::exec(
+            FFTM_HIPFFT_SAFE_CALL( detail::fft_c2cf<T>::exec(
                 handle_, static_cast<typename detail::fft_c2cf<T>::in_type *>( in ),
                 static_cast<typename detail::fft_c2cf<T>::out_type *>( out )
             ) );
@@ -663,13 +679,13 @@ public:
         }
         if ( ( D == direction::C2CF || D == direction::C2CB ) && exec_dir == direction::C2CB )
         {
-            CUFFT_SAFE_CALL( detail::fft_c2cb<T>::exec(
+            FFTM_HIPFFT_SAFE_CALL( detail::fft_c2cb<T>::exec(
                 handle_, static_cast<typename detail::fft_c2cb<T>::in_type *>( in ),
                 static_cast<typename detail::fft_c2cb<T>::out_type *>( out )
             ) );
             return;
         }
-        throw std::logic_error( "cufft_wrap::fft::exec_typed_direction: incompatible execution direction" );
+        throw std::logic_error( "hipfft_wrap::fft::exec_typed_direction: incompatible execution direction" );
     }
 
     void exec_typed_direction_no_sync( direction exec_dir, void *in, void *out )
@@ -681,27 +697,27 @@ public:
         }
         if ( ( D == direction::C2CF || D == direction::C2CB ) && exec_dir == direction::C2CF )
         {
-            cufft_check_no_sync(
+            hipfft_check_no_sync(
                 detail::fft_c2cf<T>::exec(
                     handle_, static_cast<typename detail::fft_c2cf<T>::in_type *>( in ),
                     static_cast<typename detail::fft_c2cf<T>::out_type *>( out )
                 ),
-                "cufft_wrap::fft::exec_typed_direction_no_sync(C2CF)"
+                "hipfft_wrap::fft::exec_typed_direction_no_sync(C2CF)"
             );
             return;
         }
         if ( ( D == direction::C2CF || D == direction::C2CB ) && exec_dir == direction::C2CB )
         {
-            cufft_check_no_sync(
+            hipfft_check_no_sync(
                 detail::fft_c2cb<T>::exec(
                     handle_, static_cast<typename detail::fft_c2cb<T>::in_type *>( in ),
                     static_cast<typename detail::fft_c2cb<T>::out_type *>( out )
                 ),
-                "cufft_wrap::fft::exec_typed_direction_no_sync(C2CB)"
+                "hipfft_wrap::fft::exec_typed_direction_no_sync(C2CB)"
             );
             return;
         }
-        throw std::logic_error( "cufft_wrap::fft::exec_typed_direction_no_sync: incompatible execution direction" );
+        throw std::logic_error( "hipfft_wrap::fft::exec_typed_direction_no_sync: incompatible execution direction" );
     }
 
     opaque_plan_handle_t opaque_plan_handle() const
@@ -712,14 +728,14 @@ public:
     static opaque_plan_handle_t create_empty_opaque_plan()
     {
         opaque_plan_handle_t handle = 0;
-        CUFFT_SAFE_CALL( cufftCreate( &handle ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftCreate( &handle ) );
         try
         {
-            CUFFT_SAFE_CALL( cufftSetAutoAllocation( handle, 0 ) );
+            FFTM_HIPFFT_SAFE_CALL( hipfftSetAutoAllocation( handle, 0 ) );
         }
         catch ( ... )
         {
-            cufftDestroy( handle );
+            hipfftDestroy( handle );
             throw;
         }
         return handle;
@@ -731,7 +747,7 @@ public:
     {
         long long int n_local[1]  = { n };
         std::size_t   work_size_out = 0;
-        CUFFT_SAFE_CALL( cufftMakePlanMany64(
+        FFTM_HIPFFT_SAFE_CALL( hipfftMakePlanMany64(
             plan, 1, n_local, nullptr, 0, 0, nullptr, 0, 0, get_fft_direction_static_( D ), batch,
             &work_size_out
         ) );
@@ -748,7 +764,7 @@ public:
         long long int inembed_local[1] = { inembed };
         long long int onembed_local[1] = { onembed };
         std::size_t   work_size_out    = 0;
-        CUFFT_SAFE_CALL( cufftMakePlanMany64(
+        FFTM_HIPFFT_SAFE_CALL( hipfftMakePlanMany64(
             plan, 1, n_local, inembed_local, istride, idist, onembed_local, ostride, odist,
             get_fft_direction_static_( D ), batch, &work_size_out
         ) );
@@ -789,19 +805,19 @@ public:
         long long int        onembed_arr[1] = { onembed };
         work_size_out                         = 0;
 
-        CUFFT_SAFE_CALL( cufftCreate( &handle ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftCreate( &handle ) );
         try
         {
-            CUFFT_SAFE_CALL( cufftSetAutoAllocation( handle, 0 ) );
-            CUFFT_SAFE_CALL( cufftMakePlanMany64(
+            FFTM_HIPFFT_SAFE_CALL( hipfftSetAutoAllocation( handle, 0 ) );
+            FFTM_HIPFFT_SAFE_CALL( hipfftMakePlanMany64(
                 handle, 1, n_arr, inembed_arr, istride, idist, onembed_arr, ostride, odist,
                 detail::fft_c2cf<T>::type, batch, &work_size_out
             ) );
-            CUFFT_SAFE_CALL( cufftSetStream( handle, stream ) );
+            FFTM_HIPFFT_SAFE_CALL( hipfftSetStream( handle, stream ) );
         }
         catch ( ... )
         {
-            cufftDestroy( handle );
+            hipfftDestroy( handle );
             throw;
         }
         return handle;
@@ -837,20 +853,20 @@ public:
         {
             for ( std::size_t i = 0; i < offsets.size(); ++i )
             {
-                cudaStream_t stream = nullptr;
-                CUDA_SAFE_CALL( cudaStreamCreate( &stream ) );
+                hipStream_t stream = nullptr;
+                HIP_SAFE_CALL( hipStreamCreate( &stream ) );
                 bundle->streams.push_back( stream );
 
-                cufftHandle handle = 0;
-                CUFFT_SAFE_CALL( cufftCreate( &handle ) );
+                hipfftHandle handle = 0;
+                FFTM_HIPFFT_SAFE_CALL( hipfftCreate( &handle ) );
                 bundle->handles.push_back( handle );
-                CUFFT_SAFE_CALL( cufftSetAutoAllocation( handle, 0 ) );
+                FFTM_HIPFFT_SAFE_CALL( hipfftSetAutoAllocation( handle, 0 ) );
                 std::size_t work_size = 0;
-                CUFFT_SAFE_CALL( cufftMakePlanMany64(
+                FFTM_HIPFFT_SAFE_CALL( hipfftMakePlanMany64(
                     handle, 1, n_arr, inembed_arr, istride, idist, onembed_arr, ostride, odist,
                     detail::fft_c2cf<T>::type, batch, &work_size
                 ) );
-                CUFFT_SAFE_CALL( cufftSetStream( handle, stream ) );
+                FFTM_HIPFFT_SAFE_CALL( hipfftSetStream( handle, stream ) );
                 bundle->work_stride_bytes = std::max( bundle->work_stride_bytes, work_size );
             }
             bundle->descriptor.work_size = bundle->work_stride_bytes;
@@ -876,22 +892,22 @@ private:
         long long int        onembed_local[1] = { onembed };
         work_size_out                         = 0;
 
-        CUFFT_SAFE_CALL( cufftCreate( &handle ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftCreate( &handle ) );
         try
         {
-            CUFFT_SAFE_CALL( cufftSetAutoAllocation( handle, 0 ) );
-            CUFFT_SAFE_CALL( cufftMakePlanMany64(
+            FFTM_HIPFFT_SAFE_CALL( hipfftSetAutoAllocation( handle, 0 ) );
+            FFTM_HIPFFT_SAFE_CALL( hipfftMakePlanMany64(
                 handle, 1, n_local, inembed_local, istride, idist, onembed_local, ostride, odist,
                 detail::fft_c2cf<T>::type, batch, &work_size_out
             ) );
             if ( stream != nullptr )
             {
-                CUFFT_SAFE_CALL( cufftSetStream( handle, stream ) );
+                FFTM_HIPFFT_SAFE_CALL( hipfftSetStream( handle, stream ) );
             }
         }
         catch ( ... )
         {
-            cufftDestroy( handle );
+            hipfftDestroy( handle );
             throw;
         }
         return handle;
@@ -901,7 +917,7 @@ public:
     static void destroy_opaque_plan_noexcept( opaque_plan_handle_t plan )
     {
         if ( plan != 0 )
-            cufftDestroy( plan );
+            hipfftDestroy( plan );
     }
 
     static void destroy_minimal_reference_c2c_plan_array_noexcept(
@@ -910,15 +926,15 @@ public:
     {
         if ( bundle == nullptr )
             return;
-        for ( cufftHandle handle : bundle->handles )
+        for ( hipfftHandle handle : bundle->handles )
         {
             if ( handle != 0 )
-                cufftDestroy( handle );
+                hipfftDestroy( handle );
         }
-        for ( cudaStream_t stream : bundle->streams )
+        for ( hipStream_t stream : bundle->streams )
         {
             if ( stream != nullptr )
-                cudaStreamDestroy( stream );
+                hipStreamDestroy( stream );
         }
         delete bundle;
     }
@@ -942,7 +958,7 @@ public:
     )
     {
         if ( bundle == nullptr )
-            throw std::logic_error( "cufft_wrap::fft::minimal_reference_c2c_plan_array_descriptor: null bundle" );
+            throw std::logic_error( "hipfft_wrap::fft::minimal_reference_c2c_plan_array_descriptor: null bundle" );
         return bundle->descriptor;
     }
 
@@ -950,14 +966,14 @@ public:
         minimal_reference_c2c_plan_array_handle_t bundle
     )
     {
-        return bundle == nullptr || bundle->handles.empty() ? 0 : static_cast<std::uintptr_t>( bundle->handles.front() );
+        return bundle == nullptr || bundle->handles.empty() ? 0 : detail::opaque_handle_token( bundle->handles.front() );
     }
 
     static std::uintptr_t minimal_reference_c2c_plan_array_last_handle_token(
         minimal_reference_c2c_plan_array_handle_t bundle
     )
     {
-        return bundle == nullptr || bundle->handles.empty() ? 0 : static_cast<std::uintptr_t>( bundle->handles.back() );
+        return bundle == nullptr || bundle->handles.empty() ? 0 : detail::opaque_handle_token( bundle->handles.back() );
     }
 
     static std::uintptr_t minimal_reference_c2c_plan_array_first_stream_token(
@@ -983,12 +999,12 @@ public:
     )
     {
         if ( bundle == nullptr )
-            throw std::logic_error( "cufft_wrap::fft::bind_minimal_reference_c2c_plan_array_work_areas: null bundle" );
+            throw std::logic_error( "hipfft_wrap::fft::bind_minimal_reference_c2c_plan_array_work_areas: null bundle" );
         char *raw = static_cast<char *>( base_work_area );
         const std::size_t stride = std::max( work_stride_bytes, bundle->work_stride_bytes );
         for ( std::size_t i = 0; i < bundle->handles.size(); ++i )
         {
-            CUFFT_SAFE_CALL( cufftSetWorkArea( bundle->handles[i], static_cast<void *>( raw + i * stride ) ) );
+            FFTM_HIPFFT_SAFE_CALL( hipfftSetWorkArea( bundle->handles[i], static_cast<void *>( raw + i * stride ) ) );
         }
     }
 
@@ -997,33 +1013,33 @@ public:
     )
     {
         if ( bundle == nullptr )
-            throw std::logic_error( "cufft_wrap::fft::synchronize_minimal_reference_c2c_plan_array_streams: null bundle" );
-        for ( cudaStream_t stream : bundle->streams )
+            throw std::logic_error( "hipfft_wrap::fft::synchronize_minimal_reference_c2c_plan_array_streams: null bundle" );
+        for ( hipStream_t stream : bundle->streams )
         {
-            CUDA_SAFE_CALL( cudaStreamSynchronize( stream ) );
+            HIP_SAFE_CALL( hipStreamSynchronize( stream ) );
         }
     }
 
     static void set_opaque_stream( opaque_plan_handle_t plan, typename base_t::runtime_api::stream_t stream )
     {
-        CUFFT_SAFE_CALL( cufftSetStream( plan, stream ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftSetStream( plan, stream ) );
     }
 
     static void set_opaque_work_area( opaque_plan_handle_t plan, void *work_area )
     {
-        CUFFT_SAFE_CALL( cufftSetWorkArea( plan, work_area ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftSetWorkArea( plan, work_area ) );
     }
 
     static void set_direct_raw_work_area( opaque_plan_handle_t plan, void *work_area )
     {
-        CUFFT_SAFE_CALL( cufftSetWorkArea( plan, work_area ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftSetWorkArea( plan, work_area ) );
     }
 
     static void exec_opaque_c2c( opaque_plan_handle_t plan, direction exec_dir, void *in, void *out )
     {
         if ( exec_dir == direction::C2CF )
         {
-            CUFFT_SAFE_CALL( detail::fft_c2cf<T>::exec(
+            FFTM_HIPFFT_SAFE_CALL( detail::fft_c2cf<T>::exec(
                 plan, static_cast<typename detail::fft_c2cf<T>::in_type *>( in ),
                 static_cast<typename detail::fft_c2cf<T>::out_type *>( out )
             ) );
@@ -1031,76 +1047,76 @@ public:
         }
         if ( exec_dir == direction::C2CB )
         {
-            CUFFT_SAFE_CALL( detail::fft_c2cb<T>::exec(
+            FFTM_HIPFFT_SAFE_CALL( detail::fft_c2cb<T>::exec(
                 plan, static_cast<typename detail::fft_c2cb<T>::in_type *>( in ),
                 static_cast<typename detail::fft_c2cb<T>::out_type *>( out )
             ) );
             return;
         }
-        throw std::logic_error( "cufft_wrap::fft::exec_opaque_c2c: incompatible execution direction" );
+        throw std::logic_error( "hipfft_wrap::fft::exec_opaque_c2c: incompatible execution direction" );
     }
 
     static void exec_opaque_c2c_no_sync( opaque_plan_handle_t plan, direction exec_dir, void *in, void *out )
     {
         if ( exec_dir == direction::C2CF )
         {
-            cufft_check_no_sync(
+            hipfft_check_no_sync(
                 detail::fft_c2cf<T>::exec(
                     plan, static_cast<typename detail::fft_c2cf<T>::in_type *>( in ),
                     static_cast<typename detail::fft_c2cf<T>::out_type *>( out )
                 ),
-                "cufft_wrap::fft::exec_opaque_c2c_no_sync(C2CF)"
+                "hipfft_wrap::fft::exec_opaque_c2c_no_sync(C2CF)"
             );
             return;
         }
         if ( exec_dir == direction::C2CB )
         {
-            cufft_check_no_sync(
+            hipfft_check_no_sync(
                 detail::fft_c2cb<T>::exec(
                     plan, static_cast<typename detail::fft_c2cb<T>::in_type *>( in ),
                     static_cast<typename detail::fft_c2cb<T>::out_type *>( out )
                 ),
-                "cufft_wrap::fft::exec_opaque_c2c_no_sync(C2CB)"
+                "hipfft_wrap::fft::exec_opaque_c2c_no_sync(C2CB)"
             );
             return;
         }
-        throw std::logic_error( "cufft_wrap::fft::exec_opaque_c2c_no_sync: incompatible execution direction" );
+        throw std::logic_error( "hipfft_wrap::fft::exec_opaque_c2c_no_sync: incompatible execution direction" );
     }
 
     static void exec_direct_raw_c2c( opaque_plan_handle_t plan, direction exec_dir, void *in, void *out )
     {
         if ( exec_dir == direction::C2CF )
         {
-            CUFFT_SAFE_CALL( detail::fft_c2c_direct_raw<T>::exec( plan, in, out, CUFFT_FORWARD ) );
+            FFTM_HIPFFT_SAFE_CALL( detail::fft_c2c_direct_raw<T>::exec( plan, in, out, HIPFFT_FORWARD ) );
             return;
         }
         if ( exec_dir == direction::C2CB )
         {
-            CUFFT_SAFE_CALL( detail::fft_c2c_direct_raw<T>::exec( plan, in, out, CUFFT_INVERSE ) );
+            FFTM_HIPFFT_SAFE_CALL( detail::fft_c2c_direct_raw<T>::exec( plan, in, out, HIPFFT_BACKWARD ) );
             return;
         }
-        throw std::logic_error( "cufft_wrap::fft::exec_direct_raw_c2c: incompatible execution direction" );
+        throw std::logic_error( "hipfft_wrap::fft::exec_direct_raw_c2c: incompatible execution direction" );
     }
 
     static void exec_direct_raw_c2c_no_sync( opaque_plan_handle_t plan, direction exec_dir, void *in, void *out )
     {
         if ( exec_dir == direction::C2CF )
         {
-            cufft_check_no_sync(
-                detail::fft_c2c_direct_raw<T>::exec( plan, in, out, CUFFT_FORWARD ),
-                "cufft_wrap::fft::exec_direct_raw_c2c_no_sync(C2CF)"
+            hipfft_check_no_sync(
+                detail::fft_c2c_direct_raw<T>::exec( plan, in, out, HIPFFT_FORWARD ),
+                "hipfft_wrap::fft::exec_direct_raw_c2c_no_sync(C2CF)"
             );
             return;
         }
         if ( exec_dir == direction::C2CB )
         {
-            cufft_check_no_sync(
-                detail::fft_c2c_direct_raw<T>::exec( plan, in, out, CUFFT_INVERSE ),
-                "cufft_wrap::fft::exec_direct_raw_c2c_no_sync(C2CB)"
+            hipfft_check_no_sync(
+                detail::fft_c2c_direct_raw<T>::exec( plan, in, out, HIPFFT_BACKWARD ),
+                "hipfft_wrap::fft::exec_direct_raw_c2c_no_sync(C2CB)"
             );
             return;
         }
-        throw std::logic_error( "cufft_wrap::fft::exec_direct_raw_c2c_no_sync: incompatible execution direction" );
+        throw std::logic_error( "hipfft_wrap::fft::exec_direct_raw_c2c_no_sync: incompatible execution direction" );
     }
 
     static void exec_minimal_reference_c2c_plan_array(
@@ -1108,25 +1124,25 @@ public:
     )
     {
         if ( bundle == nullptr )
-            throw std::logic_error( "cufft_wrap::fft::exec_minimal_reference_c2c_plan_array: null bundle" );
-        int cufft_direction = 0;
+            throw std::logic_error( "hipfft_wrap::fft::exec_minimal_reference_c2c_plan_array: null bundle" );
+        int hipfft_direction = 0;
         if ( exec_dir == direction::C2CF )
-            cufft_direction = CUFFT_FORWARD;
+            hipfft_direction = HIPFFT_FORWARD;
         else if ( exec_dir == direction::C2CB )
-            cufft_direction = CUFFT_INVERSE;
+            hipfft_direction = HIPFFT_BACKWARD;
         else
             throw std::logic_error(
-                "cufft_wrap::fft::exec_minimal_reference_c2c_plan_array: incompatible execution direction"
+                "hipfft_wrap::fft::exec_minimal_reference_c2c_plan_array: incompatible execution direction"
             );
         if ( bundle->offsets.size() != bundle->handles.size() )
-            throw std::logic_error( "cufft_wrap::fft::exec_minimal_reference_c2c_plan_array: offset count mismatch" );
+            throw std::logic_error( "hipfft_wrap::fft::exec_minimal_reference_c2c_plan_array: offset count mismatch" );
         for ( std::size_t i = 0; i < bundle->handles.size(); ++i )
         {
-            CUFFT_SAFE_CALL( detail::fft_c2c_direct_raw<T>::exec(
+            FFTM_HIPFFT_SAFE_CALL( detail::fft_c2c_direct_raw<T>::exec(
                 bundle->handles[i],
                 static_cast<void *>( static_cast<typename base_t::complex *>( in ) + bundle->offsets[i] ),
                 static_cast<void *>( static_cast<typename base_t::complex *>( out ) + bundle->offsets[i] ),
-                cufft_direction
+                hipfft_direction
             ) );
         }
     }
@@ -1136,30 +1152,30 @@ public:
     )
     {
         if ( bundle == nullptr )
-            throw std::logic_error( "cufft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync: null bundle" );
-        int cufft_direction = 0;
+            throw std::logic_error( "hipfft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync: null bundle" );
+        int hipfft_direction = 0;
         if ( exec_dir == direction::C2CF )
-            cufft_direction = CUFFT_FORWARD;
+            hipfft_direction = HIPFFT_FORWARD;
         else if ( exec_dir == direction::C2CB )
-            cufft_direction = CUFFT_INVERSE;
+            hipfft_direction = HIPFFT_BACKWARD;
         else
             throw std::logic_error(
-                "cufft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync: incompatible execution direction"
+                "hipfft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync: incompatible execution direction"
             );
         if ( bundle->offsets.size() != bundle->handles.size() )
             throw std::logic_error(
-                "cufft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync: offset count mismatch"
+                "hipfft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync: offset count mismatch"
             );
         for ( std::size_t i = 0; i < bundle->handles.size(); ++i )
         {
-            cufft_check_no_sync(
+            hipfft_check_no_sync(
                 detail::fft_c2c_direct_raw<T>::exec(
                     bundle->handles[i],
                     static_cast<void *>( static_cast<typename base_t::complex *>( in ) + bundle->offsets[i] ),
                     static_cast<void *>( static_cast<typename base_t::complex *>( out ) + bundle->offsets[i] ),
-                    cufft_direction
+                    hipfft_direction
                 ),
-                "cufft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync"
+                "hipfft_wrap::fft::exec_minimal_reference_c2c_plan_array_no_sync"
             );
         }
     }
@@ -1217,7 +1233,7 @@ public:
     }
 
 private:
-    cufftHandle handle_;
+    hipfftHandle handle_;
     std::size_t work_size;
     fft_plan_descriptor descriptor_;
 
@@ -1226,12 +1242,12 @@ private:
         long long int *onembed, long long int ostride, long long int odist, long long int batch
     )
     {
-        CUFFT_SAFE_CALL( cufftCreate( &handle_ ) );
+        FFTM_HIPFFT_SAFE_CALL( hipfftCreate( &handle_ ) );
 
         try
         {
-            CUFFT_SAFE_CALL( cufftSetAutoAllocation( handle_, 0 ) );
-            CUFFT_SAFE_CALL( cufftMakePlanMany64(
+            FFTM_HIPFFT_SAFE_CALL( hipfftSetAutoAllocation( handle_, 0 ) );
+            FFTM_HIPFFT_SAFE_CALL( hipfftMakePlanMany64(
                 handle_, rank, n, inembed, istride, idist, onembed, ostride, odist, get_fft_direction( D ), batch,
                 &work_size
             ) );
@@ -1239,18 +1255,18 @@ private:
         }
         catch ( ... )
         {
-            cufftDestroy( handle_ );
+            hipfftDestroy( handle_ );
             handle_ = 0;
             throw;
         }
     }
 
-    cufftType get_fft_direction( direction dir )
+    hipfftType get_fft_direction( direction dir )
     {
         return get_fft_direction_static_( dir );
     }
 
-    static cufftType get_fft_direction_static_( direction dir )
+    static hipfftType get_fft_direction_static_( direction dir )
     {
         switch ( dir )
         {
@@ -1273,4 +1289,4 @@ private:
 }
 
 
-#endif // __FFTM_CUFFT_WRAP_H__
+#endif // __FFTM_HIPFFT_WRAP_H__

@@ -12,6 +12,8 @@ execution lifetimes remain explicit and performance-regressed together:
 
 | Header | Current responsibility | Planned extraction boundary |
 | --- | --- | --- |
+| `device_aware_mpi_config.h` | Translation of SCFD's legacy CUDA-named MPI capability into FFTM's backend-neutral build capability | Sole production compatibility boundary for the historical SCFD macro |
+| `runtime_memcpy_4d_slab_transposer.h` | Backend-neutral 4D local transpose using runtime copy descriptors | Consumes only the selected runtime wrapper API |
 | `mpi_transpose_3d.h` | Compatibility umbrella for generic 3D transposes | Keep include compatibility only |
 | `mpi_transpose_3d_common.h` | MPI integer checks and persistent request ownership | Stable transport primitives |
 | `mpi_transpose_3d_same_x.h` | Generic same-X transpose | Pack, transport, and unpack execution |
@@ -41,7 +43,7 @@ execution lifetimes remain explicit and performance-regressed together:
 | `mpi_transpose_3d_pencil_pencil_reference_owned_local_fft_execution.inc` | Single-plan, offset-sequence, and plan-array execution dispatch | Private class-body fragment preserving production no-sync and diagnostic timing branches |
 | `mpi_transpose_3d_pencil_pencil_reference_owned_local_fft_synchronization.inc` | Native-opt0 Y-plan stream/device synchronization and receive-layout query | Private class-body fragment using only FFT/runtime abstractions |
 | `mpi_transpose_3d_pencil_pencil_reference_owned_pipeline_execution.inc` | Generic and native-opt0 forward/backward pipeline orchestration | Public class-body fragment preserving FFT, transpose, timer, and deferred-send ordering |
-| `mpi_transpose_3d_pencil_pencil_reference_owned_transport_synchronization.inc` | Byte-request profiling and CUDA-aware send/FFT boundary synchronization | Private class-body fragment preserving reference-parity synchronization semantics |
+| `mpi_transpose_3d_pencil_pencil_reference_owned_transport_synchronization.inc` | Byte-request profiling and device-aware send/FFT boundary synchronization | Private class-body fragment preserving reference-parity synchronization semantics |
 | `mpi_transpose_3d_pencil_pencil_reference_owned_schedule_reporting.inc` | Per-stage schedule summaries, per-peer diagnostics, and selected transport reporting | Private class-body fragment fully gated by schedule-print controls |
 | `mpi_transpose_3d_pencil_pencil_reference_owned_redistribution_extents.inc` | Maximum first/second transpose send, receive, and shared redistribution extents | Private class-body sizing fragment; no allocation or execution ownership |
 | `mpi_transpose_3d_pencil_pencil_reference_owned_configuration_state.inc` | Backend references and validated production/diagnostic configuration state | Private member-state fragment preserving declaration order |
@@ -57,6 +59,11 @@ execution lifetimes remain explicit and performance-regressed together:
 | `mpi_transpose_4d_same_zw.h` | Same-ZW transpose | Pencil transport and native-layout execution |
 
 CUDA, HIP, cuFFT, and hipFFT operations must remain in `../external_wrap` or
-the SCFD backend. Transpose and plan code consumes only wrapper/runtime types.
+the SCFD backend. `../fftm_backend.hpp` is the only production compile-time
+backend selector. Transpose and plan code consumes neutral wrapper/runtime
+types; vendor copy descriptors and complex storage types cannot cross this
+boundary. From the repository root, run
+`make -C source/tests check-abstraction-boundaries` after changing a
+backend.
 The unused historical raw-CUDA distributor was removed after confirming that
 no active library, example, or test target included it.

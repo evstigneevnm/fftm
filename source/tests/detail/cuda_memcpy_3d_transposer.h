@@ -73,12 +73,12 @@ private:
     {
         typename runtime_api_t::memcpy_3d_params_t params = {};
 
-        params.srcPos = runtime_api_t::make_pos( 0, 0, 0 );
-        params.srcPtr =
+        params.source_position = runtime_api_t::make_pos( 0, 0, 0 );
+        params.source =
             runtime_api_t::make_pitched_ptr( const_cast<ValueType *>( src_ptr ), ny_ * sizeof( ValueType ), ny_, nx_ );
 
-        params.dstPos = runtime_api_t::make_pos( 0, 0, 0 );
-        params.dstPtr = runtime_api_t::make_pitched_ptr( dst_ptr, ny_ * sizeof( ValueType ), ny_, nx_ );
+        params.destination_position = runtime_api_t::make_pos( 0, 0, 0 );
+        params.destination = runtime_api_t::make_pitched_ptr( dst_ptr, ny_ * sizeof( ValueType ), ny_, nx_ );
 
         // All compatible permutation-aware arrays preserve the same physical Y-X-Z packing.
         params.extent = runtime_api_t::make_extent( ny_ * sizeof( ValueType ), nx_, nz_ );

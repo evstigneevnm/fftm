@@ -3,21 +3,18 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
-#include <scfd/backend/cuda.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/system_timer_event.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 
+#include "detail/fft_test_backend.h"
 #include "detail/fftm_4d_test_options.h"
-#include "detail/mpi_cuda_test_init.h"
 #include "detail/poisson_4d_fft_common.h"
 #include "detail/poisson_4d_problem.h"
 
@@ -25,9 +22,9 @@ namespace
 {
 
 using T             = double;
-using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
+using base_fft_t    = fftm::test::detail::fft_test_wrap_many<T>;
 using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t     = scfd::backend::cuda;
+using backend_t     = fftm::test::detail::fft_test_backend;
 using reduce_t      = backend_t::reduce_type;
 using for_each_t    = backend_t::template for_each_nd_type<4, int>;
 using idx_t         = scfd::static_vec::vec<int, 4>;
@@ -374,7 +371,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
+        fftm::test::detail::init_fft_test_mpi( log, comm_info );
 
         const test_options options =
             fftm::test::detail::parse_fftm_4d_test_options( argc, argv, "test_4D_poisson_mpi.bin", true, true, false );
@@ -388,6 +385,14 @@ int main( int argc, char *argv[] )
         else
         {
             failed = dispatch_mode( options.strategy, log, options, comm_info );
+        }
+
+        if ( comm_info.myid == 0 )
+        {
+            if ( failed == 0 )
+                log.info( "PASSED" );
+            else
+                log.error( "FAILED" );
         }
 
         return failed;

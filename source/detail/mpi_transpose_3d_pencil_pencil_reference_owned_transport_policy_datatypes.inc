@@ -14,7 +14,7 @@
 
     bool cuda_aware_byte_p2p_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return use_p2p_byte_transfer_;
 #else
         return false;
@@ -28,7 +28,7 @@
 
     bool persistent_byte_p2p_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return use_persistent_p2p_ && cuda_aware_byte_p2p_enabled_();
 #else
         return false;
@@ -37,7 +37,7 @@
 
     bool direct_backward_receive_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return direct_p2p_cuda_aware_ && use_direct_backward_receive_;
 #else
         return false;
@@ -46,7 +46,7 @@
 
 	    bool direct_forward_value_receive_enabled_() const
 	    {
-	#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+	#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
 	        return direct_p2p_cuda_aware_ && use_direct_backward_receive_ && !cuda_aware_byte_p2p_enabled_();
 	#else
 	        return false;
@@ -55,7 +55,7 @@
 
     bool direct_reference_opt1_forward_byte_receive_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return !native_opt0_default_z_layout_ && use_direct_forward_byte_receive_ && direct_p2p_cuda_aware_ && reference_parity_byte_path_enabled_() &&
                pencil_layout_selector_ == 2;
 #else
@@ -70,7 +70,7 @@
 
     bool reference_byte_sync_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         /*
          * Baseline path intended to match reference's stable Peer2Peer_Sync
          * communication pattern: contiguous MPI_BYTE transfers, one logical
@@ -105,7 +105,7 @@
 
     bool direct_reference_byte_backward_receive_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         /*
          * The backward owned-reference byte path receives contiguous peer blocks
          * that are already laid out for the next local FFT stage.  Receiving
@@ -120,7 +120,7 @@
 
     void validate_large_count_p2p_transport_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( large_count_p2p_transport_ == ::fftm::fftm_3d_large_count_p2p_transport::mpi_count &&
              !mpi_count_large_count_available_() )
         {
@@ -136,14 +136,14 @@
     {
         if ( use_deferred_send_completion_ )
         {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-            throw std::logic_error( "owned deferred send completion requires CUDA-aware MPI" );
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
+            throw std::logic_error( "owned deferred send completion requires device-aware MPI" );
 #else
             if ( !reference_parity_enabled_ || mode_ != mpi_transpose_3d_mode::p2p_waitany ||
                  !use_p2p_byte_transfer_ || use_persistent_p2p_ )
             {
                 throw std::logic_error(
-                    "owned deferred send completion requires reference-parity, p2p-waitany, CUDA-aware byte "
+                    "owned deferred send completion requires reference-parity, p2p-waitany, device-aware byte "
                     "transfers, and nonpersistent requests"
                 );
             }
@@ -151,7 +151,7 @@
         }
         if ( !reference_parity_enabled_ )
             return;
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         throw std::logic_error( "owned reference parity requires device-aware MPI byte transfers" );
 #else
         if ( !use_p2p_byte_transfer_ || use_persistent_p2p_ || use_ready_p2p_send_ ||
@@ -180,7 +180,7 @@
 
     bool large_count_byte_requests_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return cuda_aware_byte_p2p_enabled_() && !persistent_byte_p2p_enabled_() &&
                large_count_p2p_transport_ != ::fftm::fftm_3d_large_count_p2p_transport::chunked;
 #else
@@ -234,7 +234,7 @@
 
     bool peer_paired_large_count_byte_schedule_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return large_count_byte_requests_enabled_() && reference_parity_byte_path_enabled_();
 #else
         return false;
@@ -248,7 +248,7 @@
 
     bool contiguous_forward_byte_send_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return use_contiguous_forward_byte_send_ && use_stable_forward_byte_send_buffer_ &&
                cuda_aware_byte_p2p_enabled_();
 #else
@@ -258,14 +258,14 @@
 
     bool physical_forward_peer_exchange_enabled_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         /*
          * Experimental reference-like forward path:
          * - send directly from peer-contiguous forward stage blocks;
          * - use value-count MPI requests from/to contiguous buffers;
          * - keep final stage-layout reshaping as explicit runtime_api_t copies.
          *
-         * This deliberately avoids direct strided CUDA-aware receives, which
+         * This deliberately avoids direct strided device-aware receives, which
          * have stalled on the A100/HPCX stack.
          */
         return !native_opt0_default_z_layout_ && use_physical_forward_peer_exchange_ && reference_parity_byte_path_enabled_() &&

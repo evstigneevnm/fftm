@@ -1,5 +1,5 @@
-#ifndef __FFTM_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
-#define __FFTM_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
+#ifndef FFTM_DETAIL_RUNTIME_MEMCPY_4D_SLAB_TRANSPOSER_H
+#define FFTM_DETAIL_RUNTIME_MEMCPY_4D_SLAB_TRANSPOSER_H
 
 #include <cstddef>
 
@@ -9,13 +9,13 @@ namespace detail
 {
 
 template <class ValueType, class RuntimeAPI>
-class cuda_memcpy_4d_slab_transposer
+class runtime_memcpy_4d_slab_transposer
 {
 public:
     using runtime_api_t = RuntimeAPI;
     using stream_t      = typename runtime_api_t::stream_t;
 
-    cuda_memcpy_4d_slab_transposer( std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw_half )
+    runtime_memcpy_4d_slab_transposer( std::size_t nx, std::size_t ny, std::size_t nz, std::size_t nw_half )
         : nx_( nx ), ny_( ny ), nz_( nz ), nw_half_( nw_half )
     {
     }
@@ -87,12 +87,12 @@ private:
         for ( std::size_t z = 0; z < nz_; ++z )
         {
             typename runtime_api_t::memcpy_3d_params_t params = {};
-            params.srcPos                                     = runtime_api_t::make_pos( 0, z * ny_, 0 );
-            params.dstPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-            params.srcPtr                                     = runtime_api_t::make_pitched_ptr(
+            params.source_position = runtime_api_t::make_pos( 0, z * ny_, 0 );
+            params.destination_position = runtime_api_t::make_pos( 0, 0, 0 );
+            params.source = runtime_api_t::make_pitched_ptr(
                 const_cast<ValueType *>( src.raw_ptr() ), nx_ * sizeof( ValueType ), nx_, ny_ * nz_
             );
-            params.dstPtr = runtime_api_t::make_pitched_ptr(
+            params.destination = runtime_api_t::make_pitched_ptr(
                 dst.raw_ptr() + dst.calc_lin_index( 0, 0, 0, z ), nx_ * sizeof( ValueType ), nx_, ny_
             );
             params.extent = runtime_api_t::make_extent( nx_ * sizeof( ValueType ), ny_, nw_half_ );
@@ -108,13 +108,13 @@ private:
         for ( std::size_t z = 0; z < nz_; ++z )
         {
             typename runtime_api_t::memcpy_3d_params_t params = {};
-            params.srcPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-            params.dstPos                                     = runtime_api_t::make_pos( 0, z * ny_, 0 );
-            params.srcPtr                                     = runtime_api_t::make_pitched_ptr(
+            params.source_position = runtime_api_t::make_pos( 0, 0, 0 );
+            params.destination_position = runtime_api_t::make_pos( 0, z * ny_, 0 );
+            params.source = runtime_api_t::make_pitched_ptr(
                 const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, 0, 0, z ) ), nx_ * sizeof( ValueType ),
                 nx_, ny_
             );
-            params.dstPtr = runtime_api_t::make_pitched_ptr( dst.raw_ptr(), nx_ * sizeof( ValueType ), nx_, ny_ * nz_ );
+            params.destination = runtime_api_t::make_pitched_ptr( dst.raw_ptr(), nx_ * sizeof( ValueType ), nx_, ny_ * nz_ );
             params.extent = runtime_api_t::make_extent( nx_ * sizeof( ValueType ), ny_, nw_half_ );
             params.kind   = runtime_api_t::device_to_device_kind();
 
@@ -128,13 +128,13 @@ private:
         for ( std::size_t y = 0; y < ny_; ++y )
         {
             typename runtime_api_t::memcpy_3d_params_t params = {};
-            params.srcPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-            params.dstPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-            params.srcPtr                                     = runtime_api_t::make_pitched_ptr(
+            params.source_position = runtime_api_t::make_pos( 0, 0, 0 );
+            params.destination_position = runtime_api_t::make_pos( 0, 0, 0 );
+            params.source = runtime_api_t::make_pitched_ptr(
                 const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, y, 0, 0 ) ),
                 nx_ * ny_ * sizeof( ValueType ), nx_, nw_half_
             );
-            params.dstPtr = runtime_api_t::make_pitched_ptr(
+            params.destination = runtime_api_t::make_pitched_ptr(
                 dst.raw_ptr() + dst.calc_lin_index( 0, 0, 0, y ), nx_ * sizeof( ValueType ), nx_, nw_half_
             );
             params.extent = runtime_api_t::make_extent( nx_ * sizeof( ValueType ), nw_half_, nz_ );
@@ -150,13 +150,13 @@ private:
         for ( std::size_t y = 0; y < ny_; ++y )
         {
             typename runtime_api_t::memcpy_3d_params_t params = {};
-            params.srcPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-            params.dstPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-            params.srcPtr                                     = runtime_api_t::make_pitched_ptr(
+            params.source_position = runtime_api_t::make_pos( 0, 0, 0 );
+            params.destination_position = runtime_api_t::make_pos( 0, 0, 0 );
+            params.source = runtime_api_t::make_pitched_ptr(
                 const_cast<ValueType *>( src.raw_ptr() + src.calc_lin_index( 0, 0, 0, y ) ), nx_ * sizeof( ValueType ),
                 nx_, nw_half_
             );
-            params.dstPtr = runtime_api_t::make_pitched_ptr(
+            params.destination = runtime_api_t::make_pitched_ptr(
                 dst.raw_ptr() + dst.calc_lin_index( 0, y, 0, 0 ), nx_ * ny_ * sizeof( ValueType ), nx_, nw_half_
             );
             params.extent = runtime_api_t::make_extent( nx_ * sizeof( ValueType ), nw_half_, nz_ );
@@ -170,12 +170,12 @@ private:
     void copy_step_full_buffer( const SrcArray &src, DstArray &dst, stream_t stream ) const
     {
         typename runtime_api_t::memcpy_3d_params_t params = {};
-        params.srcPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-        params.dstPos                                     = runtime_api_t::make_pos( 0, 0, 0 );
-        params.srcPtr                                     = runtime_api_t::make_pitched_ptr(
+        params.source_position = runtime_api_t::make_pos( 0, 0, 0 );
+        params.destination_position = runtime_api_t::make_pos( 0, 0, 0 );
+        params.source = runtime_api_t::make_pitched_ptr(
             const_cast<ValueType *>( src.raw_ptr() ), nx_ * sizeof( ValueType ), nx_, nw_half_
         );
-        params.dstPtr = runtime_api_t::make_pitched_ptr( dst.raw_ptr(), nx_ * sizeof( ValueType ), nx_, nw_half_ );
+        params.destination = runtime_api_t::make_pitched_ptr( dst.raw_ptr(), nx_ * sizeof( ValueType ), nx_, nw_half_ );
         params.extent = runtime_api_t::make_extent( nx_ * sizeof( ValueType ), nw_half_, nz_ * ny_ );
         params.kind   = runtime_api_t::device_to_device_kind();
 
@@ -200,4 +200,4 @@ private:
 } // namespace detail
 } // namespace fftm
 
-#endif // __FFTM_DETAIL_CUDA_MEMCPY_4D_SLAB_TRANSPOSER_H__
+#endif // FFTM_DETAIL_RUNTIME_MEMCPY_4D_SLAB_TRANSPOSER_H

@@ -274,9 +274,11 @@ inline std::string hardware_transport_policy( const config_map &config, int num_
         return "local";
     const auto direct = config.find( "FFTM_DIRECT_P2P_CUDA_AWARE" );
     const auto bytes  = config.find( "FFTM_USE_P2P_BYTE_TRANSFER" );
-    const bool cuda_aware = direct != config.end() && truthy( direct->second );
+    const bool device_aware = direct != config.end() && truthy( direct->second );
     const bool byte_transfer = bytes != config.end() && truthy( bytes->second );
-    return std::string( cuda_aware ? "cuda-aware" : "host-staged" ) +
+    // Preserve the historical serialized value so existing CUDA benchmark
+    // caches remain comparable. The capability is device-aware on HIP too.
+    return std::string( device_aware ? "cuda-aware" : "host-staged" ) +
            ( byte_transfer ? "-byte" : "-element" );
 }
 

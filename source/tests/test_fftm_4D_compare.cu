@@ -5,34 +5,28 @@
 #include <tuple>
 
 
-#include <cuda_runtime.h>
-
-#include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
-#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/scalar_traits.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 #include <ffts.hpp>
 
+#include "detail/fft_test_backend.h"
 #include "detail/fftm_4d_test_options.h"
-#include "detail/mpi_cuda_test_init.h"
 
 namespace
 {
 
 using T             = double;
-using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
-using backend_t     = scfd::backend::cuda;
+using base_fft_t    = fftm::test::detail::fft_test_wrap_many<T>;
+using backend_t     = fftm::test::detail::fft_test_backend;
 using memory_t      = backend_t::memory_type;
 using reduce_t      = backend_t::reduce_type;
 using for_each_t    = backend_t::template for_each_nd_type<4, int>;
@@ -332,7 +326,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
+        fftm::test::detail::init_fft_test_mpi( log, comm_info );
 
         const test_options options =
             fftm::test::detail::parse_fftm_4d_test_options( argc, argv, "test_fftm_4D_compare.bin", true, true, false );

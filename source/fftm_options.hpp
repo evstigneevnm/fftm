@@ -179,6 +179,8 @@ namespace detail
 struct fftm_execution_options
 {
     bool        use_direct_backward_receive = false;
+    // Legacy benchmark/cache spelling. This capability means device-aware MPI
+    // for either the CUDA or HIP backend.
     bool        direct_p2p_cuda_aware       = true;
     bool        use_p2p_byte_transfer       = false;
     bool        use_persistent_p2p          = false;
@@ -274,23 +276,23 @@ struct fftm_init_options
 };
 
 inline fftm_init_options production_options_3d(
-    transform_strategy_3d strategy, int num_procs, bool cuda_aware_mpi = true
+    transform_strategy_3d strategy, int num_procs, bool device_aware_mpi = true
 )
 {
     if ( num_procs <= 0 )
         throw std::logic_error( "fftm::production_options_3d requires a positive process count" );
 
     fftm_init_options options;
-    options.execution.direct_p2p_cuda_aware = cuda_aware_mpi;
+    options.execution.direct_p2p_cuda_aware = device_aware_mpi;
     if ( strategy != transform_strategy_3d::pencil_pencil || num_procs == 1 )
         return options;
 
     options.pencil_pipeline_3d =
-        cuda_aware_mpi ? fftm_3d_pencil_pipeline::reference_parity : fftm_3d_pencil_pipeline::reference;
-    options.execution.use_p2p_byte_transfer = cuda_aware_mpi;
+        device_aware_mpi ? fftm_3d_pencil_pipeline::reference_parity : fftm_3d_pencil_pipeline::reference;
+    options.execution.use_p2p_byte_transfer = device_aware_mpi;
     options.execution.large_count_p2p_transport = fftm_3d_large_count_p2p_transport::hindexed;
 
-    const bool use_opt0 = cuda_aware_mpi && ( num_procs == 7 || num_procs == 8 );
+    const bool use_opt0 = device_aware_mpi && ( num_procs == 7 || num_procs == 8 );
     options.pencil_layout_3d = use_opt0 ? fftm_3d_pencil_layout::opt0 : fftm_3d_pencil_layout::opt1;
     if ( use_opt0 )
     {
@@ -308,17 +310,17 @@ inline fftm_init_options production_options_3d(
 inline fftm_init_options production_options_4d(
     transform_strategy_4d_mpi strategy,
     fftm_4d_spectral_layout spectral_layout = fftm_4d_spectral_layout::public_yzwx,
-    bool cuda_aware_mpi = true
+    bool device_aware_mpi = true
 )
 {
     fftm_init_options options;
     options.spectral_layout_4d = spectral_layout;
-    options.execution.direct_p2p_cuda_aware = cuda_aware_mpi;
+    options.execution.direct_p2p_cuda_aware = device_aware_mpi;
 
     if ( strategy == transform_strategy_4d_mpi::slab_slab )
     {
         options.execution.use_4d_slab_native_xw_transpose = true;
-        if ( spectral_layout == fftm_4d_spectral_layout::native_xzwy && cuda_aware_mpi )
+        if ( spectral_layout == fftm_4d_spectral_layout::native_xzwy && device_aware_mpi )
         {
             options.execution.use_4d_native_xw_direct_layout = true;
             options.execution.use_4d_native_xw_chunked_transport = true;

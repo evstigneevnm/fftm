@@ -314,7 +314,7 @@
             "source,run_label,rank,profile_name,plan_label,sequence_id,sequence_kind,executor,sync_mode,exec_check,"
             "plan_index,plan_name,offset_elems,input_base_token,output_base_token,input_token,output_token,"
             "work_area_token,work_area_offset_bytes,stream_token,handle_mode,plan_direction,exec_direction,"
-            "cufft_type,rank_fft,n0,inembed0,"
+            "backend_fft_type,rank_fft,n0,inembed0,"
             "istride,idist,onembed0,ostride,odist,batch,work_size_bytes,directory";
 
         const std::uintptr_t input_base  = reinterpret_cast<std::uintptr_t>( in );
@@ -358,7 +358,7 @@
                 << static_cast<unsigned long long>( desc.work_area_token ) << ',' << work_area_offset << ','
                 << static_cast<unsigned long long>( desc.stream_token ) << ',' << handle_mode << ','
                 << local_fft_direction_name_( desc.dir ) << ',' << exec_dir_label
-                << ',' << desc.cufft_type << ',' << desc.rank << ',' << desc.n[0] << ',' << desc.inembed[0] << ','
+                << ',' << desc.backend_type << ',' << desc.rank << ',' << desc.n[0] << ',' << desc.inembed[0] << ','
                 << desc.istride << ',' << desc.idist << ',' << desc.onembed[0] << ',' << desc.ostride << ','
                 << desc.odist << ',' << desc.batch << ',' << desc.work_size << ',' << local_fft_diagnostics_dir_;
             append_local_fft_diagnostics_row_( "native_opt0_y_execution", header, row.str() );

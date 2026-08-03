@@ -92,7 +92,7 @@ private:
             send_buffer_.init( send_buffer_elems_ );
             recv_buffer_.init( recv_buffer_elems_ );
         }
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( !use_external_host_work_area_ )
         {
             host_send_buffer_.init( host_send_buffer_elems_ );

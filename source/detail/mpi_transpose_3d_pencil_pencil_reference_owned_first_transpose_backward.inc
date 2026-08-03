@@ -20,7 +20,7 @@
     template <class Stage1Complex3>
     void pack_first_backward_chunk_( int p, const Stage1Complex3 &in )
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         value_type *dst  = native_backward_first_device_send_buffer_ptr_( p );
         auto        kind = runtime_api_t::device_to_device_kind();
 #else
@@ -86,7 +86,7 @@
     template <class Stage0Complex3>
     void copy_first_backward_host_recv_to_out_( int p, Stage0Complex3 &out )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( native_opt0_default_z_layout_ )
         {
             copy_first_backward_zfast_recv_to_default_z_async_(
@@ -117,7 +117,7 @@
     {
         const int row_size = row_comm_info_.num_procs;
         (void)row_size;
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         int persistent_byte_recv_index = 0;
         detail::persistent_recv_requests<mpi_request_t> *persistent_byte_recv_state = nullptr;
         if ( persistent_byte_p2p_enabled_() )
@@ -137,7 +137,7 @@
 #endif
         for ( const int p : row_comm_order_ )
         {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             value_type *recv_ptr = native_backward_first_recv_target_ptr_( p, out );
             if ( cuda_aware_byte_p2p_enabled_() )
             {
@@ -176,7 +176,7 @@
 
     void prepare_first_backward_send_state_()
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( persistent_byte_p2p_enabled_() )
             detail::reset_persistent_send_requests( persistent_first_backward_send_, first_backward_byte_send_chunks_() );
         else
@@ -189,7 +189,7 @@
         int p, std::vector<mpi_request_t> &byte_send_requests, int &persistent_byte_index
     )
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         const value_type *send_ptr = native_backward_first_device_send_buffer_ptr_( p );
         if ( cuda_aware_byte_p2p_enabled_() )
         {
@@ -289,7 +289,7 @@
         std::vector<int> *byte_recv_remaining = nullptr
     )
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         prepare_first_backward_send_state_();
         profile_chunk_count_( "first_backward", first_backward_byte_send_chunks_(), first_backward_byte_recv_chunks_() );
         int persistent_byte_index      = 0;
@@ -372,7 +372,7 @@
         }
         {
             auto phase = profile_scope_( "first_backward/wait_recv" );
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             if ( cuda_aware_byte_p2p_enabled_() )
                 waitall_vector_( row_comm_info_, byte_recv_requests, "owned first byte backward recv requests" );
             else
@@ -381,13 +381,13 @@
         }
         if ( !backward_receive_lands_in_output_() )
         {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
             auto phase = profile_scope_( "first_backward/stage_recv_to_device" );
 #else
             auto phase = profile_scope_( "first_backward/unpack_recv" );
 #endif
             for ( const int p : row_comm_order_ )
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
                 copy_first_backward_host_recv_to_out_( p, out );
 #else
                 copy_first_backward_recv_to_out_( p, out );
@@ -449,7 +449,7 @@
             copy_first_backward_self_( in, out );
         }
 
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( cuda_aware_byte_p2p_enabled_() )
         {
             const int total =
@@ -491,7 +491,7 @@
                 row_recv_requests_[p] = mpi_request_t();
                 if ( !backward_receive_lands_in_output_() )
                 {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
                     auto phase = profile_scope_( "first_backward/stage_recv_chunk_to_device" );
                     copy_first_backward_host_recv_to_out_( p, out );
 #else

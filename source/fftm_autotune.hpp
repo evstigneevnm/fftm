@@ -798,7 +798,7 @@ inline void init_autotuned_3d_data_arrays(
     const std::size_t spectrum_bytes = checked_local_3d_bytes(
         spectrum_sizes, sizeof( typename SpectrumArray::value_type ), "spectrum buffer"
     );
-    // The real input is not exposed to CUDA-aware MPI in the validated 3D
+    // The real input is not exposed to device-aware MPI in the validated 3D
     // candidates and releases cleanly. Keep its normal SCFD ownership and only
     // retain the communication-visible spectrum allocation between candidates.
     input.init( std::get<0>( input_sizes ), std::get<1>( input_sizes ), std::get<2>( input_sizes ) );
@@ -877,7 +877,11 @@ inline bool apply_config_3d(
     options.execution.use_direct_backward_receive = bool_value(
         config, "FFTM_USE_DIRECT_BACKWARD_RECEIVE", options.execution.use_direct_backward_receive
     );
-    options.execution.direct_p2p_cuda_aware = bool_value( config, "FFTM_DIRECT_P2P_CUDA_AWARE", options.execution.direct_p2p_cuda_aware );
+    // Keep the historical key as a cache/config compatibility alias. It means
+    // direct device-aware MPI for whichever backend was selected at compile time.
+    options.execution.direct_p2p_cuda_aware = bool_value(
+        config, "FFTM_DIRECT_P2P_CUDA_AWARE", options.execution.direct_p2p_cuda_aware
+    );
     options.diagnostics.use_p2p_send_thread = bool_value( config, "FFTM_USE_P2P_SEND_THREAD", options.diagnostics.use_p2p_send_thread );
     options.execution.use_p2p_byte_transfer = bool_value( config, "FFTM_USE_P2P_BYTE_TRANSFER", options.execution.use_p2p_byte_transfer );
     options.execution.use_persistent_p2p = bool_value( config, "FFTM_USE_PERSISTENT_P2P", options.execution.use_persistent_p2p );

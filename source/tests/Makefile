@@ -6,13 +6,16 @@ BUILD_DIR := $(abspath $(BUILD_DIR))
 
 TARGET_GCC = -O3# -g
 TARGET_NVCC = -O3#-g -G #-O3
+TARGET_HIP = -O3
 CPPSTD = c++14
 
-cuda_dir=/usr/local/cuda
-mpi_dir=/usr/local/mpi
+cuda_dir ?= /usr/local/cuda
+mpi_dir ?= /usr/local/mpi
 NVCC ?= $(cuda_dir)/bin/nvcc
 MPICXX ?= $(mpi_dir)/bin/mpicxx
 CXX ?= g++
+ROCM_DIR ?= /opt/rocm
+HIPCC ?= $(ROCM_DIR)/bin/hipcc
 source=$(PROJECT_ROOT)/source
 contrib=$(source)/contrib/scfd/include
 include_cuda=$(cuda_dir)/include
@@ -28,6 +31,11 @@ SCFD_DEVICE_AWARE = -DSCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 SCFD_FLAGS_CA = $(SCFD_FLAGS) $(SCFD_DEVICE_AWARE)
 SCFD_FLAGS_NCA = $(SCFD_FLAGS)
 NVCCFLAGS_NO_DEVICE_DEBUG = $(filter-out -G,$(NVCCFLAGS))
+HIP_ARCH ?=
+HIP_ARCH_FLAGS = $(if $(strip $(HIP_ARCH)),--offload-arch=$(HIP_ARCH),)
+HIPFLAGS ?= -std=$(CPPSTD) $(TARGET_HIP) $(HIP_ARCH_FLAGS)
+HIP_PLATFORM_FLAGS = -DPLATFORM_HIP -DFFTM_PLATFORM_HIP -DSCFD_BACKEND_ENABLE_MPI
+HIP_DEVICE_AWARE = -DSCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
 
 FFTM3D_DIR := $(PROJECT_ROOT)/fftm3d
 EGGER_ROOT ?= $(PROJECT_ROOT)/fft_Egger
@@ -121,12 +129,30 @@ ALL_BINS = \
 	test_ffts_v4_4D.bin
 
 BIN_TARGETS = $(ALL_BINS) test_cudaMemcpy3DAsync.bin
+HIP_BINS = \
+	test_fftm_3D_compare_hip.bin \
+	test_fftm_3D_compare_hip_nca.bin \
+	test_fftm_4D_compare_hip.bin \
+	test_fftm_4D_compare_hip_nca.bin \
+	test_benchmark_fftm_3D_hip.bin \
+	test_benchmark_fftm_3D_hip_nca.bin \
+	test_benchmark_fftm_4D_hip.bin \
+	test_benchmark_fftm_4D_hip_nca.bin \
+	test_4D_poisson_mpi_hip.bin \
+	test_4D_poisson_mpi_hip_nca.bin
 
-.PHONY: all test $(BIN_TARGETS)
+.PHONY: all hip test check-abstraction-boundaries $(BIN_TARGETS) $(HIP_BINS)
 
 all: $(addprefix $(BUILD_DIR)/,$(ALL_BINS))
 
+hip: $(addprefix $(BUILD_DIR)/,$(HIP_BINS))
+
+check-abstraction-boundaries:
+	$(PROJECT_ROOT)/scripts/check_backend_abstraction_boundaries.sh
+
 $(BIN_TARGETS): %: $(BUILD_DIR)/%
+
+$(HIP_BINS): %: $(BUILD_DIR)/%
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -150,6 +176,15 @@ endef
 define BUILD_CUDA_MPI_TEST
 $(BUILD_DIR)/$1: $(TEST_DIR)/$2 | $(BUILD_DIR)
 	$(NVCC) $3 -I$(source) -I$(include_cuda) -I$(include_mpi) -I$(contrib) $4 $$< -L$(lib_cuda) -L$(lib_mpi) $5 -o $$@
+
+endef
+
+define BUILD_HIP_MPI_TEST
+$(BUILD_DIR)/$1: $(TEST_DIR)/$2 | $(BUILD_DIR)
+	$(HIPCC) $(HIPFLAGS) -x hip -I$(source) -I$(include_mpi) -I$(contrib) \
+		$(SCFD_FLAGS) $(HIP_PLATFORM_FLAGS) $3 $$< \
+		-L$(lib_mpi) -L$(ROCM_DIR)/lib -Wl,-rpath,$(lib_mpi) -Wl,-rpath,$(ROCM_DIR)/lib \
+		-lmpi -lhipfft -lpthread -o $$@
 
 endef
 
@@ -178,6 +213,17 @@ $(eval $(call BUILD_MPI_TEST,test_fftm_3D_compare_nca.bin,test_fftm_3D_compare.c
 
 $(eval $(call BUILD_MPI_TEST,test_fftm_4D_compare.bin,test_fftm_4D_compare.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_4D_compare.o,-lcudart -lcufft -lmpi))
 $(eval $(call BUILD_MPI_TEST,test_fftm_4D_compare_nca.bin,test_fftm_4D_compare.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_NCA),test_fftm_4D_compare_nca.o,-lcudart -lcufft -lmpi))
+
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_3D_compare_hip.bin,test_fftm_3D_compare.cu,$(HIP_DEVICE_AWARE)))
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_3D_compare_hip_nca.bin,test_fftm_3D_compare.cu,))
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_4D_compare_hip.bin,test_fftm_4D_compare.cu,$(HIP_DEVICE_AWARE)))
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_4D_compare_hip_nca.bin,test_fftm_4D_compare.cu,))
+$(eval $(call BUILD_HIP_MPI_TEST,test_benchmark_fftm_3D_hip.bin,test_benchmark_fftm_3D.cu,$(HIP_DEVICE_AWARE)))
+$(eval $(call BUILD_HIP_MPI_TEST,test_benchmark_fftm_3D_hip_nca.bin,test_benchmark_fftm_3D.cu,))
+$(eval $(call BUILD_HIP_MPI_TEST,test_benchmark_fftm_4D_hip.bin,test_benchmark_fftm_4D.cu,$(HIP_DEVICE_AWARE)))
+$(eval $(call BUILD_HIP_MPI_TEST,test_benchmark_fftm_4D_hip_nca.bin,test_benchmark_fftm_4D.cu,))
+$(eval $(call BUILD_HIP_MPI_TEST,test_4D_poisson_mpi_hip.bin,test_4D_poisson_mpi.cu,$(HIP_DEVICE_AWARE)))
+$(eval $(call BUILD_HIP_MPI_TEST,test_4D_poisson_mpi_hip_nca.bin,test_4D_poisson_mpi.cu,))
 
 $(eval $(call BUILD_MPI_TEST,test_3D_poisson_mpi.bin,test_3D_poisson_mpi.cu,$(NVCCFLAGS),$(SCFD_FLAGS_CA),test_3D_poisson_mpi.o,-lcudart -lcufft -lmpi))
 $(eval $(call BUILD_MPI_TEST,test_3D_poisson_mpi_nca.bin,test_3D_poisson_mpi.cu,$(NVCCFLAGS),$(SCFD_FLAGS_NCA),test_3D_poisson_mpi_nca.o,-lcudart -lcufft -lmpi))

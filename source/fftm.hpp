@@ -25,6 +25,7 @@
 
 #include "fftm_options.hpp"
 #include "detail/array_arrangers.h"
+#include "detail/device_aware_mpi_config.h"
 #include "detail/direct_transpose_4d.h"
 #include "detail/memory_profile_utils.h"
 #include "detail/mpi_transpose_3d.h"
@@ -821,7 +822,7 @@ private:
 
     complex *native_opt0_reference_backward_y_output_ptr_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return reinterpret_cast<complex *>( shared_work_ptr_( native_opt0_reference_backward_y_output_offset_bytes_() ) );
 #else
         return native_opt0_reference_slot_ptr_( 0 );
@@ -830,7 +831,7 @@ private:
 
     std::size_t native_opt0_reference_workspace_slot_offset_( bool compact_y_workarea ) const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( native_opt0_reference_y_buffer_topology_enabled_() && compact_y_workarea )
             return 1;
         return 3;
@@ -864,7 +865,7 @@ private:
     std::size_t native_opt0_reference_backward_y_output_offset_bytes_( bool compact_y_workarea ) const
     {
         const std::size_t work_total = native_opt0_y_reference_workspace_total_bytes_( compact_y_workarea );
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( compact_y_workarea )
         {
             const std::size_t domain_bytes = native_opt0_reference_domain_bytes_();
@@ -2001,8 +2002,8 @@ private:
         {
             throw std::logic_error( "FFTM 4D native XW direct layout requires p2p-waitany mode." );
         }
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
-        throw std::logic_error( "FFTM 4D native XW direct layout requires CUDA-aware MPI." );
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
+        throw std::logic_error( "FFTM 4D native XW direct layout requires device-aware MPI." );
 #endif
     }
 
@@ -3032,10 +3033,10 @@ private:
         {
             throw std::logic_error( "FFTM 4D slab WZ communication layout requires p2p-waitany" );
         }
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( init_options_.execution.use_4d_slab_native_wz_communication_layout )
         {
-            throw std::logic_error( "FFTM 4D slab WZ communication layout requires CUDA-aware MPI" );
+            throw std::logic_error( "FFTM 4D slab WZ communication layout requires device-aware MPI" );
         }
 #endif
         if ( init_options_.execution.use_4d_native_xw_direct_layout && !slab_4d_native_xw_transpose_enabled_() )
@@ -3614,7 +3615,7 @@ private:
                     /*
                      * The reference pipeline's datatype-direct variant is meant for
                      * the owned non-degenerate pencil schedule.  For degenerate
-                     * shortcut routes, CUDA-aware strided receive datatypes in
+                     * shortcut routes, device-aware strided receive datatypes in
                      * the generic transpose can stall on some MPI stacks; keep
                      * these shortcut paths on the packed value transfer.
                      */

@@ -5,33 +5,27 @@
 #include <tuple>
 
 
-#include <cuda_runtime.h>
-
-#include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>
 #include <scfd/arrays/tensor_array_nd.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
-#include <scfd/utils/cuda_safe_call.h>
 #include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/scalar_traits.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 #include <ffts.hpp>
 
-#include "detail/mpi_cuda_test_init.h"
+#include "detail/fft_test_backend.h"
 
 namespace
 {
 
 using T          = double;
-using base_fft_t = fftm::wrap::cufft_wrap_many<T>;
-using backend_t  = scfd::backend::cuda;
+using base_fft_t = fftm::test::detail::fft_test_wrap_many<T>;
+using backend_t  = fftm::test::detail::fft_test_backend;
 using memory_t   = backend_t::memory_type;
 using reduce_t   = backend_t::reduce_type;
 using for_each_t = backend_t::template for_each_nd_type<3, int>;
@@ -440,11 +434,13 @@ struct compare_output_functor
     ErrorArray ref_sq;
     int        y_start;
     int        z_start;
+    bool       output_is_xyz;
 
     __DEVICE_TAG__ void operator()( const idx_t &idx ) const
     {
         const auto actual   = local( idx );
-        const auto expected = reference( idx[0], y_start + idx[2], z_start + idx[1] );
+        const auto expected = output_is_xyz ? reference( idx[0], y_start + idx[1], z_start + idx[2] )
+                                            : reference( idx[0], y_start + idx[2], z_start + idx[1] );
 
         const T diff_re = actual.x - expected.x;
         const T diff_im = actual.y - expected.y;
@@ -564,7 +560,9 @@ int run_compare(
     for_each(
         compare_output_functor<local_hat_t, ref_hat_t, err_hat_array_t>{
             local_out, ref_out, forward_diff_sq, forward_ref_sq, static_cast<int>( output_part.start_y[myid_i] ),
-            static_cast<int>( output_part.start_z[myid_j] ) },
+            static_cast<int>( output_part.start_z[myid_j] ),
+            fftm_t::strategy_family_3d == fftm::transform_strategy_3d::pencil_pencil &&
+                fftm_t::strategy_3d_optimized_layout },
         make_range( local_out )
     );
     for_each.wait();
@@ -658,7 +656,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
+        fftm::test::detail::init_fft_test_mpi( log, comm_info );
 
         const test_options options = parse_options( argc, argv, comm_info.num_procs );
 

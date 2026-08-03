@@ -18,7 +18,7 @@
 
     bool deferred_send_completion_active_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return use_deferred_send_completion_ && reference_parity_enabled_ &&
                mode_ == mpi_transpose_3d_mode::p2p_waitany && cuda_aware_byte_p2p_enabled_() &&
                !use_persistent_p2p_;
@@ -200,7 +200,7 @@
         const char *persistent_what
     )
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( cuda_aware_byte_p2p_enabled_() )
         {
             if ( persistent_byte_p2p_enabled_() )

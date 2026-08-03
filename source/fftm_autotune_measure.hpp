@@ -679,7 +679,7 @@ private:
         try
         {
             const auto result = evaluate_strategy_body_<Strategy>( selected, options );
-            // CUDA-aware MPI may retain peer CUDA-IPC mappings until every
+            // Device-aware MPI may retain peer device-IPC mappings until every
             // rank has released or quiesced the corresponding allocation and
             // progressed the communicator. Do not sample while peers can
             // still hold a candidate pool registration open.
@@ -825,8 +825,8 @@ private:
     void collective_memory_boundary_() const
     {
         // The first barrier ensures all peer-visible buffers have been freed.
-        // The second gives CUDA-aware MPI another collective progress point
-        // after local device teardown before cudaMemGetInfo is queried.
+        // The second gives device-aware MPI another collective progress point
+        // after local device teardown before free device memory is queried.
         comm_.barrier();
         runtime_api_t::device_synchronize();
         comm_.barrier();

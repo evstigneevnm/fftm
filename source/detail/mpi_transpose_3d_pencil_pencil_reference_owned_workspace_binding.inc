@@ -27,7 +27,7 @@
 
     std::size_t native_opt0_reference_workspace_slot_offset_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( native_opt0_reference_y_buffer_topology_enabled_() && use_native_opt0_compact_y_workarea_ )
             return 1;
         return 3;
@@ -56,7 +56,7 @@
 
     value_type *native_opt0_reference_backward_y_output_ptr_() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( use_native_opt0_compact_y_workarea_ )
             return native_opt0_reference_slot_ptr_( 3 );
         return native_opt0_reference_slot_ptr_( 2 );
@@ -79,7 +79,7 @@
         char *raw = static_cast<char *>( external_work_area_ );
         if ( native_opt0_reference_y_buffer_topology_enabled_() )
         {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             const std::size_t domain_bytes = native_opt0_reference_domain_size_bytes_();
             send_buffer_.init_by_raw_data(
                 reinterpret_cast<value_type *>( raw + 2 * domain_bytes ), send_buffer_elems_
@@ -103,7 +103,7 @@
 
     void bind_external_host_work_area_()
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( external_host_work_area_ == nullptr )
         {
             return;
@@ -137,7 +137,7 @@
         );
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/host_send_buffer",
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             0
 #else
             use_external_host_work_area_
@@ -148,7 +148,7 @@
         );
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/host_recv_buffer",
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             0
 #else
             use_external_host_work_area_

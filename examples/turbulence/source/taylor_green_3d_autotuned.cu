@@ -4,15 +4,13 @@
 #include <string>
 #include <tuple>
 
-#include <scfd/backend/cuda.h>
 #include <scfd/communication/mpi_wrap.h>
-#include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 #include <fftm_autotune.hpp>
+#include <fftm_backend.hpp>
 
 #include "taylor_green_solver.h"
 #include "turbulence_options.h"
@@ -26,9 +24,9 @@ using real_t = float;
 using real_t = double;
 #endif
 
-using fft_backend_t = fftm::wrap::cufft_wrap_many<real_t>;
+using fft_backend_t = fftm::device_backend::fft<real_t>;
 using runtime_api_t = typename fft_backend_t::runtime_api;
-using backend_t     = scfd::backend::cuda;
+using backend_t     = fftm::device_backend::scfd_backend;
 
 bool wrap_mpi_processes_over_gpus_enabled()
 {
@@ -203,7 +201,7 @@ int main( int argc, char **argv )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info, 0, wrap_mpi_processes_over_gpus_enabled() );
+        fftm::device_backend::init_mpi( log, comm_info, 0, wrap_mpi_processes_over_gpus_enabled() );
         const auto app_options = fftm::examples::turbulence::parse_options( argc, argv );
         const auto sizes       = make_global_sizes( app_options );
 

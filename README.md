@@ -1,7 +1,8 @@
 # FFTM
 
-`fftm` is an experimental CUDA/MPI FFT project for real-to-complex 3D and 4D
-transforms on one or many GPUs.
+`fftm` is an experimental CUDA/HIP MPI FFT project for real-to-complex 3D and
+4D transforms on one or many GPUs. CUDA/cuFFT is the production and
+performance-qualified backend; HIP/hipFFT currently has correctness coverage.
 
 The project contains two closely related transform frontends:
 
@@ -10,9 +11,12 @@ The project contains two closely related transform frontends:
 | `ffts` | Single-process, single-GPU FFT wrapper. It is used as the serial/reference implementation and as the one-GPU performance baseline. |
 | `fftm` | MPI distributed multi-GPU FFT wrapper. It partitions the domain across MPI ranks and performs local FFTs plus MPI transpositions. |
 
-The current backend is CUDA/cuFFT. CUDA-specific calls are intended to remain
-inside `source/external_wrap/`; higher-level FFT and transpose code uses wrapper
-types so that HIP, SYCL, or CPU/FFTW backends can be added later.
+CUDA and HIP runtime/FFT calls remain inside `source/external_wrap/`.
+`source/fftm_backend.hpp` is the single compile-time backend selector.
+Higher-level FFT, transpose, and example code uses backend-neutral wrapper and
+SCFD interfaces; vendor runtime types, copy descriptors, and FFT complex types
+do not cross those boundaries. Verify this rule with
+`make -C source/tests check-abstraction-boundaries`.
 
 ## Repository Layout
 
@@ -20,7 +24,8 @@ types so that HIP, SYCL, or CPU/FFTW backends can be added later.
 | --- | --- |
 | `source/ffts.hpp` | Single-GPU FFT frontend. |
 | `source/fftm.hpp` | MPI multi-GPU FFT frontend. |
-| `source/external_wrap/` | Backend wrappers around cuFFT and CUDA runtime functionality. |
+| `source/fftm_backend.hpp` | Compile-time CUDA/HIP backend selection facade. |
+| `source/external_wrap/` | Backend wrappers around cuFFT/CUDA and hipFFT/HIP runtime functionality. |
 | `source/detail/` | Transpose kernels, MPI transpose classes, profiling, and shared implementation details. |
 | `source/tests/` | Unit tests, Poisson examples, comparison tests, versioned tests, and benchmark binaries. |
 | `examples/poisson/` | Minimal periodic 3D autotuning and 4D native-spectral Poisson applications. |
@@ -31,7 +36,7 @@ types so that HIP, SYCL, or CPU/FFTW backends can be added later.
 
 ## Requirements
 
-The default build assumes:
+The default CUDA build assumes:
 
 | Component | Default path |
 | --- | --- |
@@ -68,13 +73,63 @@ directory with `BUILD_FOLDER`:
 make -C source/tests all BUILD_FOLDER="$PWD/build/fftm_tests" -j8
 ```
 
+### HIP/hipFFT correctness targets
+
+HIP targets require ROCm, hipFFT, and an MPI installation. The build is kept
+separate from CUDA targets and does not change CUDA compilation flags or code
+paths:
+
+```bash
+make -C source/tests hip \
+  BUILD_FOLDER="$PWD/build/fftm_hip_tests" \
+  ROCM_DIR=/opt/rocm \
+  mpi_dir=/path/to/mpi \
+  HIP_ARCH=gfx90a \
+  -j4
+```
+
+The reusable correctness runner checks both GPUs individually, then checks 3D
+and 4D slab and pencil decompositions with `alltoallv` and `p2p-waitany`.
+When device-aware MPI is enabled, it also validates the optimized 4D
+`native_xzwy` WZ-plan pipeline with a distributed Poisson solve:
+
+```bash
+FFTM_HIP_MPI_DIR=/path/to/mpi \
+FFTM_HIP_ARCH=gfx90a \
+FFTM_HIP_TEST_HOST_STAGED=1 \
+FFTM_HIP_TEST_DEVICE_AWARE=1 \
+scripts/run_hip_correctness.sh
+```
+
+Set `FFTM_HIP_TEST_DEVICE_AWARE=0` when MPI cannot communicate with ROCm device
+pointers. That still exercises the same hipFFT and HIP runtime implementation,
+with MPI traffic staged through pinned host buffers.
+
+The HIP build also includes the production benchmark drivers. A compact
+same-host comparison against direct FFTW-MPI is available for machines with two
+GPUs and 40 physical CPU cores:
+
+```bash
+scripts/run_hip_fftw_comparison.sh
+
+python3 scripts/analyze_hip_fftw_comparison.py \
+  build_hip/fftm_vs_fftw_TIMESTAMP
+```
+
+The default matrix compares `256^3` and `64^4`, which contain the same number
+of real samples. FFTM records one- and two-GPU host-staged paths; FFTW records
+one, two, and four MPI ranks while keeping the total at 40 physical CPU cores.
+Override the paths, sizes, iteration counts, CPU masks, and planner limits with
+the `FFTM_COMPARE_*` environment variables in the runner when using a different
+host topology.
+
 ## CUDA-Aware and Non-CUDA-Aware MPI Builds
 
 Most MPI test targets are built in two variants:
 
 | Suffix | Meaning |
 | --- | --- |
-| `.bin` | Built with `SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI`; MPI may communicate directly with device pointers. |
+| `.bin` | Built with SCFD's legacy-named `SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI` capability; MPI may communicate directly with CUDA or HIP device pointers. |
 | `_nca.bin` | Built without CUDA-aware MPI; communication stages through host memory. |
 
 Use `_nca.bin` on clusters where GPU-aware MPI is unavailable or unreliable.
@@ -104,16 +159,17 @@ The 4D `ffts` implementation supports these local strategies:
 | Strategy | Description |
 | --- | --- |
 | `pencil-direct` | 1D FFT stages with direct local transpose kernels. |
-| `pencil-memcpy` | 1D FFT stages with CUDA memcpy-based local transposes. |
+| `pencil-memcpy` | 1D FFT stages with runtime-copy-based local transposes. |
 | `slab-direct` | 2D FFT stages with direct local transpose kernels. |
-| `slab-memcpy` | 2D FFT stages with CUDA memcpy-based local transposes. |
+| `slab-memcpy` | 2D FFT stages with runtime-copy-based local transposes. |
 
 The `ffts` benchmarks are the preferred one-GPU baseline for performance plots.
 
 ## `fftm`: MPI Multi-GPU FFT
 
-`fftm` distributes the transform over MPI ranks. Each MPI rank selects one CUDA
-device through `scfd::utils::init_cuda_mpi`.
+`fftm` distributes the transform over MPI ranks. Each MPI rank selects one
+backend device through `fftm::device_backend::init_mpi`; the selection facade
+delegates to the corresponding SCFD initializer.
 
 ### Production configuration
 
@@ -124,13 +180,13 @@ transport and plan-execution switches individually:
 auto options_3d = fftm::production_options_3d(
     fftm::transform_strategy_3d::pencil_pencil,
     comm.num_procs,
-    true // CUDA-aware MPI
+    true // device-aware MPI
 );
 
 auto options_4d = fftm::production_options_4d(
     fftm::transform_strategy_4d_mpi::slab_slab,
     fftm::fftm_4d_spectral_layout::native_xzwy,
-    true // CUDA-aware MPI
+    true // device-aware MPI
 );
 ```
 
@@ -194,7 +250,7 @@ selection. Plan construction is outside the timed section; the benchmarked
 quantity is a synchronized forward/backward transform pair. During a measured
 sweep, candidates lease backend-neutral SCFD pools for the FFT workspace and
 the communication-visible complex spectrum. These allocations are reused
-without freeing and reallocating CUDA-aware MPI-registered storage, then
+without freeing and reallocating device-aware MPI-registered storage, then
 transferred to the selected application plan and its spectrum view. The real
 input retains normal SCFD ownership because it is not registered by the
 validated communication paths. Applications using a measured
@@ -557,7 +613,7 @@ are:
 | `FFTM_INCLUDE_VERSIONED` | Set to `1` to run versioned analytical tests. |
 | `FFTM_VERSIONED_FULL_MATRIX` | Set to `1` to run versioned FFTM tests for all selected modes. |
 | `FFTM_USE_DIRECT_BACKWARD_RECEIVE` | Enables or disables direct backward receive optimization. |
-| `FFTM_DIRECT_P2P_CUDA_AWARE` | Enables or disables direct CUDA-aware p2p receive targets. |
+| `FFTM_DIRECT_P2P_CUDA_AWARE` | Legacy compatibility name for direct device-aware p2p receive targets on CUDA or HIP. |
 | `FFTM_USE_P2P_SEND_THREAD` | Enables or disables sender-thread p2p posting. |
 | `FFTM_USE_P2P_BYTE_TRANSFER` | Enables or disables chunked `MPI_BYTE` p2p transfer variants. |
 | `FFTM_P2P_VARIANTS` | `configured`, `all`, or a comma-separated subset of `value-packed,datatype-direct,byte-packed,byte-direct`. |

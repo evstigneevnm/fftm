@@ -44,7 +44,7 @@
         {
             throw std::logic_error( "owned reference pencil pipeline external work area is not bound" );
         }
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( use_external_host_work_area_ && get_host_work_size_bytes() != 0 && external_host_work_area_ == nullptr )
         {
             throw std::logic_error( "owned reference pencil pipeline external host work area is not bound" );

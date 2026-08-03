@@ -510,12 +510,12 @@ void copy_block_xyz(
 )
 {
     typename runtime_api_t::memcpy_3d_params_t params = {};
-    params.srcPos = runtime_api_t::make_pos( src_z * sizeof( complex_t ), src_y, src_x );
-    params.srcPtr = runtime_api_t::make_pitched_ptr(
+    params.source_position = runtime_api_t::make_pos( src_z * sizeof( complex_t ), src_y, src_x );
+    params.source = runtime_api_t::make_pitched_ptr(
         const_cast<complex_t *>( src ), src_dims.z * sizeof( complex_t ), src_dims.z, src_dims.y
     );
-    params.dstPos = runtime_api_t::make_pos( dst_z * sizeof( complex_t ), dst_y, dst_x );
-    params.dstPtr = runtime_api_t::make_pitched_ptr( dst, dst_dims.z * sizeof( complex_t ), dst_dims.z, dst_dims.y );
+    params.destination_position = runtime_api_t::make_pos( dst_z * sizeof( complex_t ), dst_y, dst_x );
+    params.destination = runtime_api_t::make_pitched_ptr( dst, dst_dims.z * sizeof( complex_t ), dst_dims.z, dst_dims.y );
     params.extent = runtime_api_t::make_extent( count_z * sizeof( complex_t ), count_y, count_x );
     params.kind   = runtime_api_t::device_to_device_kind();
     runtime_api_t::memcpy_3d_async( &params, stream );
@@ -532,12 +532,12 @@ void copy_pitched_xyz(
 )
 {
     typename runtime_api_t::memcpy_3d_params_t params = {};
-    params.srcPos = runtime_api_t::make_pos( src_x * sizeof( complex_t ), src_y, src_z );
-    params.srcPtr = runtime_api_t::make_pitched_ptr(
+    params.source_position = runtime_api_t::make_pos( src_x * sizeof( complex_t ), src_y, src_z );
+    params.source = runtime_api_t::make_pitched_ptr(
         const_cast<complex_t *>( src ), src_pitch_elems * sizeof( complex_t ), src_pitch_elems, src_height_elems
     );
-    params.dstPos = runtime_api_t::make_pos( dst_x * sizeof( complex_t ), dst_y, dst_z );
-    params.dstPtr = runtime_api_t::make_pitched_ptr(
+    params.destination_position = runtime_api_t::make_pos( dst_x * sizeof( complex_t ), dst_y, dst_z );
+    params.destination = runtime_api_t::make_pitched_ptr(
         dst, dst_pitch_elems * sizeof( complex_t ), dst_pitch_elems, dst_height_elems
     );
     params.extent = runtime_api_t::make_extent( count_x * sizeof( complex_t ), count_y, count_z );

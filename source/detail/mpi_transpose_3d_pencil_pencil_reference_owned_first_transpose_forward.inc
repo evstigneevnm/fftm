@@ -20,7 +20,7 @@
     template <class Stage0Complex3>
     void pack_first_forward_chunk_( int p, const Stage0Complex3 &in )
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         value_type *dst  = native_forward_first_device_send_buffer_ptr_( p );
         auto        kind = runtime_api_t::device_to_device_kind();
 #else
@@ -50,7 +50,7 @@
 
     void prepare_first_forward_send_state_()
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( persistent_byte_p2p_enabled_() )
             detail::reset_persistent_send_requests( persistent_first_forward_send_, first_forward_byte_send_chunks_() );
         else
@@ -63,7 +63,7 @@
         int p, std::vector<mpi_request_t> &byte_send_requests, int &persistent_byte_index
     )
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         const value_type *send_ptr = native_forward_first_device_send_buffer_ptr_( p );
         if ( cuda_aware_byte_p2p_enabled_() )
         {
@@ -118,7 +118,7 @@
         int p, const value_type *send_ptr, std::vector<mpi_request_t> &byte_send_requests
     )
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         const std::size_t elems = first_forward_send_elems_( p );
         if ( !can_use_physical_forward_value_send_( elems ) )
         {
@@ -203,7 +203,7 @@
     void prepare_first_forward_recv_state_()
     {
         const int row_size = row_comm_info_.num_procs;
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( persistent_byte_p2p_enabled_() )
             detail::reset_persistent_recv_requests( persistent_first_forward_recv_, first_forward_byte_recv_chunks_() );
         else if ( use_persistent_p2p_ )
@@ -221,14 +221,14 @@
     )
     {
         prepare_first_forward_recv_state_();
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         int persistent_byte_recv_index = 0;
         detail::persistent_recv_requests<mpi_request_t> *persistent_byte_recv_state =
             persistent_byte_p2p_enabled_() ? &persistent_first_forward_recv_ : nullptr;
 #endif
         for ( const int p : row_comm_order_ )
         {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
 	            value_type *recv_ptr = native_forward_first_recv_target_ptr_( p, out );
 	            if ( cuda_aware_byte_p2p_enabled_() )
 	            {
@@ -282,7 +282,7 @@
     {
         const int row_size = row_comm_info_.num_procs;
         (void)row_size;
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         int persistent_byte_index = 0;
         detail::persistent_send_requests<mpi_request_t> *persistent_byte_state = nullptr;
         if ( persistent_byte_p2p_enabled_() )
@@ -315,7 +315,7 @@
             detail::reset_persistent_recv_requests( persistent_first_forward_recv_, row_size );
 #endif
         profile_chunk_count_( "first", first_forward_byte_send_chunks_(), first_forward_byte_recv_chunks_() );
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( peer_paired_large_count_byte_schedule_enabled_() )
         {
             synchronize_before_direct_byte_sends_( "first/pre_send_stream_sync" );
@@ -442,7 +442,7 @@
 #endif
         for ( const int p : row_comm_order_ )
         {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
 	            value_type *recv_ptr = native_forward_first_recv_target_ptr_( p, out );
 	            if ( cuda_aware_byte_p2p_enabled_() )
 	            {
@@ -489,7 +489,7 @@
 
         for ( const int p : row_comm_order_ )
         {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             if ( cuda_aware_byte_p2p_enabled_() )
             {
                 auto phase = profile_scope_( "first/mpi_post_send" );
@@ -571,7 +571,7 @@
     template <class Stage1Complex3>
     void unpack_first_forward_host_recv_( int p, Stage1Complex3 &out )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( native_opt0_default_z_layout_ )
         {
             copy_first_forward_zfast_recv_to_stage1_async_(
@@ -628,7 +628,7 @@
         }
         {
             auto phase = profile_scope_( "first/wait_recv" );
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             if ( cuda_aware_byte_p2p_enabled_() )
                 waitall_vector_( row_comm_info_, byte_recv_requests, "owned first byte forward recv requests" );
             else
@@ -637,14 +637,14 @@
         }
 	        if ( !forward_receive_lands_in_stage_() )
 	        {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
             auto phase = profile_scope_( "first/stage_recv_to_device" );
 #else
             auto phase = profile_scope_( "first/unpack_recv" );
 #endif
             for ( const int p : row_comm_order_ )
             {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
                 unpack_first_forward_host_recv_( p, out );
 #else
                 unpack_first_forward_recv_( p, out );
@@ -701,7 +701,7 @@
             copy_first_forward_self_( in, out );
         }
 
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( cuda_aware_byte_p2p_enabled_() )
         {
             const int total =
@@ -743,7 +743,7 @@
                 row_recv_requests_[p] = mpi_request_t();
 			                if ( !forward_receive_lands_in_stage_() )
                 {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
                     auto phase = profile_scope_( "first/stage_recv_chunk_to_device" );
                     unpack_first_forward_host_recv_( p, out );
 #else

@@ -12,27 +12,27 @@
 
 #include <unistd.h>
 
-#include <cufft.h>
-#include <cuda_runtime.h>
-
-#include <scfd/backend/cuda.h>
 #include <scfd/arrays/array_nd.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/system_timer_event.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 
+#include "detail/fft_test_backend.h"
 #include "detail/fft_benchmark_common.h"
 #include "detail/fft_benchmark_options.h"
+#if !defined( FFTM_PLATFORM_HIP )
+#include <cufft.h>
+#include <cuda_runtime.h>
+
 #include "detail/fftm_3d_native_pencil_schedule_check.h"
 #include "detail/mpi_cuda_test_init.h"
+#endif
 #include "detail/test_memory_profile_helpers.h"
 
 #if defined(FFTM_ENABLE_FFTM3D_SCFD_FFT_BACKEND)
@@ -43,9 +43,9 @@ namespace
 {
 
 using T             = double;
-using base_fft_t    = fftm::wrap::cufft_wrap_many<T>;
+using base_fft_t    = fftm::test::detail::fft_test_wrap_many<T>;
 using runtime_api_t = typename base_fft_t::runtime_api;
-using backend_t     = scfd::backend::cuda;
+using backend_t     = fftm::test::detail::fft_test_backend;
 using memory_t      = backend_t::memory_type;
 using reduce_t      = backend_t::reduce_type;
 using for_each_t    = backend_t::template for_each_nd_type<3, int>;
@@ -56,6 +56,7 @@ using strategy_kind = fftm::test::detail::fftm_3d_strategy_kind;
 
 const char *stage_timer_strategy_name( strategy_kind strategy );
 
+#if !defined( FFTM_PLATFORM_HIP )
 std::string to_arg( std::size_t value )
 {
     return std::to_string( static_cast<unsigned long long>( value ) );
@@ -1169,6 +1170,7 @@ int run_fftm3d_scfd_fft_facade_backend(
     );
 #endif
 }
+#endif
 
 std::string native_stage_times_filename( int rank )
 {
@@ -1421,6 +1423,9 @@ int run_benchmark_case(
 
     if ( options.native_opt0_y_microbench )
     {
+#if defined( FFTM_PLATFORM_HIP )
+        throw std::logic_error( "native opt0 Y microbench is unavailable in the HIP benchmark binary" );
+#else
         runtime_api_t::device_synchronize();
         distributed_fft.run_native_opt0_y_same_buffer_microbench(
             hat, static_cast<std::size_t>( options.native_opt0_y_microbench_iterations ),
@@ -1437,6 +1442,7 @@ int run_benchmark_case(
             );
         }
         return 0;
+#endif
     }
 
     for_each_t for_each;
@@ -1739,7 +1745,7 @@ int main( int argc, char *argv[] )
 
     try
     {
-        fftm::test::detail::init_cuda_mpi_for_tests( log, comm_info );
+        fftm::test::detail::init_fft_test_mpi( log, comm_info );
         const options_t options = fftm::test::detail::parse_fftm_3d_benchmark_options<T>(
             argc, argv, comm_info.num_procs, "test_benchmark_fftm_3D.bin"
         );
@@ -1747,6 +1753,16 @@ int main( int argc, char *argv[] )
         if ( options.p1 * options.p2 != static_cast<std::size_t>( comm_info.num_procs ) )
             throw std::logic_error( "P1*P2 must equal the number of MPI processes" );
 
+        int status = 0;
+#if defined( FFTM_PLATFORM_HIP )
+        if ( options.native_pencil_schedule_check_only || options.native_opt0_y_cross_microbench ||
+             options.backend != fftm::test::detail::fftm_3d_backend_kind::native )
+        {
+            throw std::logic_error(
+                "CUDA-only schedule/reference diagnostics were requested from the HIP benchmark binary"
+            );
+        }
+#else
         const int native_schedule_status =
             fftm::test::detail::native_pencil_schedule::run( log, options, comm_info );
         if ( native_schedule_status != 0 )
@@ -1756,7 +1772,6 @@ int main( int argc, char *argv[] )
 
         append_gpu_telemetry_row( options, comm_info, "pre" );
 
-        int status = 0;
         if ( options.native_opt0_y_cross_microbench )
         {
             status = run_native_opt0_y_cross_microbench( log, options, comm_info );
@@ -1770,18 +1785,23 @@ int main( int argc, char *argv[] )
             append_gpu_telemetry_row( options, comm_info, "post" );
             return status;
         }
+#endif
 
         if ( options.run_all )
         {
             status |= dispatch_strategy( strategy_kind::slab_pencil, log, options, comm_info );
             status |= dispatch_strategy( strategy_kind::pencil_slab, log, options, comm_info );
             status |= dispatch_strategy( strategy_kind::pencil_pencil, log, options, comm_info );
+#if !defined( FFTM_PLATFORM_HIP )
             append_gpu_telemetry_row( options, comm_info, "post" );
+#endif
             return status;
         }
 
         status = dispatch_strategy( options.strategy, log, options, comm_info );
+#if !defined( FFTM_PLATFORM_HIP )
         append_gpu_telemetry_row( options, comm_info, "post" );
+#endif
         return status;
     }
     catch ( const std::exception &ex )

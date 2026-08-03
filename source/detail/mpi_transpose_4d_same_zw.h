@@ -1,6 +1,7 @@
 #ifndef __FFTM_DETAIL_MPI_TRANSPOSE_4D_SAME_ZW_H__
 #define __FFTM_DETAIL_MPI_TRANSPOSE_4D_SAME_ZW_H__
 
+#include "device_aware_mpi_config.h"
 #include "mpi_transpose_4d_common.h"
 
 namespace fftm
@@ -35,7 +36,7 @@ public:
     {
         static_assert(
             std::is_same<memory_t, typename runtime_api_t::memory_type>::value,
-            "mpi_transpose_4d_same_zw currently requires a CUDA backend memory "
+            "mpi_transpose_4d_same_zw requires the selected runtime backend memory "
             "type"
         );
         for_each_.block_size = 128;
@@ -108,7 +109,7 @@ public:
 
     std::size_t get_host_work_size_bytes() const
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return 0;
 #else
         return bytes_from_elems_( host_send_buffer_elems_ ) + bytes_from_elems_( host_recv_buffer_elems_ );
@@ -176,7 +177,7 @@ public:
             send_buffer_.init( send_buffer_elems_ );
             recv_buffer_.init( recv_buffer_elems_ );
         }
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( !use_external_host_work_area_ )
         {
             host_send_buffer_.init( host_send_buffer_elems_ );
@@ -199,7 +200,7 @@ public:
         verify_forward_shapes_( in, out );
         reset_requests_();
         stage_timing_direction_ = "forward";
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( peer_paired_p2p_enabled_ && mode == mpi_transpose_3d_mode::p2p_waitany )
         {
             forward_p2p_waitany_peer_paired_( in, out );
@@ -275,7 +276,7 @@ public:
         verify_backward_shapes_( in, out );
         reset_requests_();
         stage_timing_direction_ = "backward";
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( peer_paired_p2p_enabled_ && mode == mpi_transpose_3d_mode::p2p_waitany )
         {
             backward_p2p_waitany_peer_paired_( in, out );
@@ -501,7 +502,7 @@ private:
         {
             throw std::logic_error( "mpi_transpose_4d_same_zw: external work area was not bound." );
         }
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         if ( use_external_host_work_area_ && get_host_work_size_bytes() != 0 && external_host_work_area_ == nullptr )
         {
             throw std::logic_error( "mpi_transpose_4d_same_zw: external host work area was not bound." );
@@ -530,7 +531,7 @@ private:
         );
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/host_send_buffer",
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             0
 #else
             use_external_host_work_area_ ? 0
@@ -540,7 +541,7 @@ private:
         );
         memory_profiler_->set_bytes(
             memory_profile_prefix_ + "/host_recv_buffer",
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             0
 #else
             use_external_host_work_area_ ? 0
@@ -565,7 +566,7 @@ private:
 
     void bind_external_host_work_area_()
     {
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         return;
 #else
         if ( external_host_work_area_ == nullptr )
@@ -662,7 +663,7 @@ private:
 
     void copy_send_buffer_to_host_()
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         runtime_api_t::memcpy(
             host_send_buffer_.raw_ptr(), send_buffer_.raw_ptr(), bytes_from_elems_( send_buffer_elems_ ),
             runtime_api_t::device_to_host_kind()
@@ -672,7 +673,7 @@ private:
 
     void copy_recv_buffer_from_host_()
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr(), host_recv_buffer_.raw_ptr(), bytes_from_elems_( recv_buffer_elems_ ),
             runtime_api_t::host_to_device_kind()
@@ -682,7 +683,7 @@ private:
 
     void copy_host_forward_chunk_to_device_( int source_i )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + forward_recv_offsets_[source_i],
             host_recv_buffer_.raw_ptr() + forward_recv_offsets_[source_i],
@@ -693,7 +694,7 @@ private:
 
     void copy_host_backward_chunk_to_device_( int source_i )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         runtime_api_t::memcpy(
             recv_buffer_.raw_ptr() + backward_recv_offsets_[source_i],
             host_recv_buffer_.raw_ptr() + backward_recv_offsets_[source_i],
@@ -1084,7 +1085,7 @@ private:
             unpack_backward_chunk_( source_i, out );
     }
 
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
     template <class ArrayIn, class ArrayOut>
     void forward_p2p_waitany_peer_paired_( const ArrayIn &in, ArrayOut &out )
     {
@@ -1297,7 +1298,7 @@ private:
     template <class ArrayOut>
     void forward_p2p_waitall_( ArrayOut &out, bool native_output, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto      scope     = profile_scope_( "forward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         {
@@ -1413,7 +1414,7 @@ private:
     template <class ArrayOut>
     void forward_p2p_waitany_( ArrayOut &out, bool native_output, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto      scope     = profile_scope_( "forward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         {
@@ -1551,7 +1552,7 @@ private:
     template <class ArrayOut>
     void forward_alltoallv_( ArrayOut &out, bool native_output, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallv" );
         {
             auto phase = profile_scope_( "stage_send_to_host" );
@@ -1615,7 +1616,7 @@ private:
     template <class ArrayOut>
     void forward_alltoallw_( ArrayOut &out, bool native_output, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto scope = profile_scope_( "forward_alltoallw" );
         {
             auto phase = profile_scope_( "prepare_alltoallw_layout" );
@@ -1683,7 +1684,7 @@ private:
     template <class ArrayOut>
     void backward_p2p_waitall_( ArrayOut &out, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto      scope     = profile_scope_( "backward_p2p_waitall" );
         const int comm_size = line_comm_info_.num_procs;
         {
@@ -1793,7 +1794,7 @@ private:
     template <class ArrayOut>
     void backward_p2p_waitany_( ArrayOut &out, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto      scope     = profile_scope_( "backward_p2p_waitany" );
         const int comm_size = line_comm_info_.num_procs;
         {
@@ -1925,7 +1926,7 @@ private:
     template <class ArrayOut>
     void backward_alltoallv_( ArrayOut &out, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallv" );
         {
             auto phase = profile_scope_( "stage_send_to_host" );
@@ -1983,7 +1984,7 @@ private:
     template <class ArrayOut>
     void backward_alltoallw_( ArrayOut &out, bool native_message_layout )
     {
-#ifndef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
         auto scope = profile_scope_( "backward_alltoallw" );
         {
             auto phase = profile_scope_( "prepare_alltoallw_layout" );

@@ -17,7 +17,7 @@
 #include <scfd/memory/shared_buffer.h>
 
 #include "detail/array_arrangers.h"
-#include "detail/cuda_memcpy_4d_slab_transposer.h"
+#include "detail/runtime_memcpy_4d_slab_transposer.h"
 #include "detail/direct_transpose_4d.h"
 #include "detail/memory_profile_utils.h"
 #include "fft_direction.h"
@@ -206,6 +206,21 @@ public:
         catch ( ... )
         {
         }
+
+        // Plans retain the external work-area pointer. Destroy them before
+        // shared_work_buffer_ releases that allocation during member teardown.
+        try
+        {
+            base_fft_.release();
+            // base_fft_ is declared before memory_profiler_ and is therefore
+            // destroyed after it. Detach the non-owning profiler pointer so
+            // fft_wrap_many's idempotent destructor cannot report through a
+            // profiler that has already been released.
+            base_fft_.set_memory_profiler( nullptr, std::string() );
+        }
+        catch ( ... )
+        {
+        }
     }
 
     template <std::size_t Dim>
@@ -379,7 +394,7 @@ private:
     using stage1_complex_array_t = typename traits_4d_t::stage1_complex_array_t;
     using stage2_complex_array_t = typename traits_4d_t::stage2_complex_array_t;
     using direct_transposer_t    = detail::direct_transpose_4d;
-    using memcpy_transposer_t    = detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>;
+    using memcpy_transposer_t    = detail::runtime_memcpy_4d_slab_transposer<complex, runtime_api_t>;
     using shared_buffer_t        = scfd::memory::shared_buffer<memory_t>;
 
     struct ostream_log_t
@@ -787,7 +802,7 @@ private:
     void init_memcpy_transposer_( std::integral_constant<transpose_backend, transpose_backend::memcpy> )
     {
         memcpy_transposer_.reset(
-            new detail::cuda_memcpy_4d_slab_transposer<complex, runtime_api_t>( nx_, ny_, nz_, nw_half_ )
+            new detail::runtime_memcpy_4d_slab_transposer<complex, runtime_api_t>( nx_, ny_, nz_, nw_half_ )
         );
     }
 

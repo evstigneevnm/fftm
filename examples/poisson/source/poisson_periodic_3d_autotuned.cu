@@ -6,27 +6,25 @@
 #include <tuple>
 
 #include <scfd/arrays/tensor_array_nd.h>
-#include <scfd/backend/cuda.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
 #include <scfd/static_vec/vec.h>
 #include <scfd/utils/device_tag.h>
-#include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/system_timer_event.h>
 
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
 #include <fftm_autotune_measure.hpp>
+#include <fftm_backend.hpp>
 
 namespace
 {
 
 using real_t        = double;
-using fft_backend_t = fftm::wrap::cufft_wrap_many<real_t>;
+using fft_backend_t = fftm::device_backend::fft<real_t>;
 using runtime_api_t = typename fft_backend_t::runtime_api;
-using backend_t     = scfd::backend::cuda;
+using backend_t     = fftm::device_backend::scfd_backend;
 using memory_t      = typename backend_t::memory_type;
 using reduce_t      = typename backend_t::reduce_type;
 using for_each_t    = typename backend_t::template for_each_nd_type<3, int>;
@@ -465,7 +463,7 @@ int main( int argc, char **argv )
 
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm_info, 0, wrap_mpi_processes_over_gpus_enabled() );
+        fftm::device_backend::init_mpi( log, comm_info, 0, wrap_mpi_processes_over_gpus_enabled() );
 
         const example_options app_options = parse_options( argc, argv );
         const fftm::global_sizes sizes = make_global_sizes( app_options );

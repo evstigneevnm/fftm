@@ -13,17 +13,15 @@
 #include <vector>
 
 #include <scfd/arrays/tensor_array_nd.h>
-#include <scfd/backend/cuda.h>
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/static_vec/rect.h>
-#include <scfd/utils/init_cuda_mpi.h>
 #include <scfd/utils/log_mpi.h>
 #include <scfd/utils/nested_exception_to_multistring.h>
 #include <scfd/utils/system_timer_event.h>
 
 #include <detail/array_arrangers.h>
-#include <external_wrap/cufft_wrap_many.h>
 #include <fftm.hpp>
+#include <fftm_backend.hpp>
 
 #include "snapshot_writer.h"
 #include "spacetime_kernels.h"
@@ -33,9 +31,9 @@ namespace
 {
 
 using real_t        = double;
-using fft_backend_t = fftm::wrap::cufft_wrap_many<real_t>;
+using fft_backend_t = fftm::device_backend::fft<real_t>;
 using runtime_api_t = typename fft_backend_t::runtime_api;
-using backend_t     = scfd::backend::cuda;
+using backend_t     = fftm::device_backend::scfd_backend;
 using memory_t      = typename backend_t::memory_type;
 using reduce_t      = typename backend_t::reduce_type;
 using for_each_3d_t = typename backend_t::template for_each_nd_type<3, int>;
@@ -537,7 +535,7 @@ int main( int argc, char **argv )
     scfd::utils::log_mpi          log;
     try
     {
-        scfd::utils::init_cuda_mpi( log, comm, 0, wrap_mpi_processes_over_gpus_enabled() );
+        fftm::device_backend::init_mpi( log, comm, 0, wrap_mpi_processes_over_gpus_enabled() );
         const auto options = fftm::examples::turbulence::parse_spacetime_options( argc, argv );
         return run_analysis( options, comm, log );
     }

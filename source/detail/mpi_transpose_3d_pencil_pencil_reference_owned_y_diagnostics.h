@@ -92,7 +92,7 @@ void mpi_transpose_3d_pencil_pencil_reference_owned<BaseFFT, ValueType, Backend,
             );
             const std::size_t after_ywork      = align_up_bytes_( y_work_end, 256 );
             reference_slot0_ptr                    = native_opt0_reference_slot_ptr_( 0 );
-#ifdef SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
             reference_slot2_ptr = native_opt0_reference_slot_ptr_( 2 );
 #endif
             if ( production_bwd_y_ptr == nullptr )
