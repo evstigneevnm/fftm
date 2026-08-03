@@ -451,8 +451,10 @@ scripts/run_final_paper_verification.sh multinode
 scripts/run_final_paper_verification.sh validate
 ```
 
-`api` checks public presets, quiet defaults, hardware-aware C++ autotuning,
-resource release, cache reuse, and the reader-facing 3D/4D Poisson examples.
+`api` checks public presets, quiet defaults, the backend abstraction boundary,
+small CUDA-aware and host-staged 3D/4D numerical transforms, hardware-aware
+C++ autotuning, resource release, cache reuse, and the reader-facing 3D/4D
+Poisson examples.
 `production` runs the validated 6-8 GPU `2048^3` and `320^4` configurations.
 `multinode` runs `2048^3` on the explicit `4x4` 3D grid and `320^4` on the 4D
 slab-native path using 16 GPUs and HCA rank affinity. Each target writes a

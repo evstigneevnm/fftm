@@ -313,6 +313,10 @@ verify_image()
         test_fftm_quiet_default.bin
         test_fftm_autotune_hardware.bin
         test_fftm_resource_lifecycle.bin
+        test_fftm_3D_compare.bin
+        test_fftm_3D_compare_nca.bin
+        test_fftm_4D_compare.bin
+        test_fftm_4D_compare_nca.bin
         poisson_periodic_3d_autotuned.bin
         poisson_periodic_4d.bin
     )
@@ -322,6 +326,7 @@ verify_image()
     local check="set -e; cat /opt/fftm/bin/fftm_build_info.txt"
     check+="; grep -Eq '^git_commit=[0-9a-f]{40}$' /opt/fftm/bin/fftm_build_info.txt"
     check+="; grep -Fxq 'git_dirty=0' /opt/fftm/bin/fftm_build_info.txt"
+    check+="; grep -Fxq 'backend_abstraction_boundaries=passed' /opt/fftm/bin/fftm_build_info.txt"
     if [[ "${EXPECTED_COMMIT}" != "embedded-image" ]]; then
         check+="; grep -Fx 'git_commit=${EXPECTED_COMMIT}' /opt/fftm/bin/fftm_build_info.txt"
     fi
@@ -358,6 +363,44 @@ EOF
     fi
 }
 
+run_backend_compatibility()
+{
+    local output_dir="${TARGET_DIR}/backend_compatibility"
+    mkdir -p "${output_dir}"
+
+    run_compare()
+    {
+        local label=$1
+        local binary=$2
+        shift 2
+        local command=(
+            srun -N 1 -n 2 -G 2 --ntasks-per-node=2 --gpus-per-node=2
+            --cpus-per-task=2 --exclusive --distribution=block:block
+            --kill-on-bad-exit=1 --time=00:10:00
+            --container-image "${IMAGE}"
+            --container-workdir /opt/fftm/bin
+            --container-entrypoint /usr/bin/env
+            FFTM_WRAP_PROCS_GPUS=0
+            "/opt/fftm/bin/${binary}"
+            "$@"
+        )
+        run_logged "${label}" "${output_dir}/${label}.log" "${command[@]}"
+    }
+
+    run_compare cuda-aware-3d test_fftm_3D_compare.bin \
+        --strategy slab-pencil --mode p2p-waitany --threshold 1.0e-11 \
+        64 64 64 || return 1
+    run_compare host-staged-3d test_fftm_3D_compare_nca.bin \
+        --strategy slab-pencil --mode alltoallv --threshold 1.0e-11 \
+        64 64 64 || return 1
+    run_compare cuda-aware-4d test_fftm_4D_compare.bin \
+        --strategy slab-slab --mode p2p-waitany --threshold 1.0e-11 \
+        32 32 32 32 || return 1
+    run_compare host-staged-4d test_fftm_4D_compare_nca.bin \
+        --strategy pencil-pencil --mode alltoallv --threshold 1.0e-11 \
+        32 32 32 32 || return 1
+}
+
 run_api()
 {
     verify_image || return 1
@@ -377,6 +420,8 @@ run_api()
         --container-entrypoint /opt/fftm/bin/test_fftm_quiet_default.bin
     )
     run_logged quiet-default "${TARGET_DIR}/quiet_default.log" "${quiet_cmd[@]}" || return 1
+
+    run_backend_compatibility || return 1
 
     mkdir -p "${TARGET_DIR}/cpp_autotune"
     local tune_cmd=(
@@ -455,6 +500,10 @@ run_api()
     {
         grep -q ',validate,passed,0,' "${TARGET_DIR}/cpp_autotune/status.csv"
         ! grep -q ',failed,' "${TARGET_DIR}/cpp_autotune/status.csv"
+        local compatibility_log
+        for compatibility_log in "${TARGET_DIR}"/backend_compatibility/*.log; do
+            grep -q 'PASSED' "${compatibility_log}"
+        done
         for ranks in 1 2; do
             grep -q 'source=created' "${reader}/3d_r${ranks}/create.log"
             grep -q 'source=cache' "${reader}/3d_r${ranks}/reuse.log"

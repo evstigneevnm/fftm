@@ -15,7 +15,8 @@ RUN apt-get update && \
     ca-certificates \
     g++ \
     make \
-    python3 && \
+    python3 \
+    ripgrep && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/fftm_src
@@ -30,8 +31,11 @@ COPY scripts /opt/fftm_src/scripts
 # COPY fftm3d /opt/fftm_src/fftm3d
 COPY README.md LICENSE /opt/fftm_src/
 
-RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.bin \
+RUN make -C source/tests check-abstraction-boundaries && \
+    make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.bin \
     test_benchmark_fftm_4D.bin test_benchmark_fftm_4D_nca.bin \
+    test_fftm_3D_compare.bin test_fftm_3D_compare_nca.bin \
+    test_fftm_4D_compare.bin test_fftm_4D_compare_nca.bin \
     test_fftm_options.bin test_fftm_quiet_default.bin \
     test_fftm_autotune_hardware.bin test_fftm_resource_lifecycle.bin \
     test_scfd_mpi_transport.bin \
@@ -47,6 +51,10 @@ RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.b
     test -x /opt/fftm/bin/test_benchmark_fftm_3D_nca.bin && \
     test -x /opt/fftm/bin/test_benchmark_fftm_4D.bin && \
     test -x /opt/fftm/bin/test_benchmark_fftm_4D_nca.bin && \
+    test -x /opt/fftm/bin/test_fftm_3D_compare.bin && \
+    test -x /opt/fftm/bin/test_fftm_3D_compare_nca.bin && \
+    test -x /opt/fftm/bin/test_fftm_4D_compare.bin && \
+    test -x /opt/fftm/bin/test_fftm_4D_compare_nca.bin && \
     test -x /opt/fftm/bin/test_fftm_options.bin && \
     test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
     test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
@@ -58,7 +66,7 @@ RUN make -C source/tests test_benchmark_fftm_3D.bin test_benchmark_fftm_3D_nca.b
     test -x /opt/fftm/bin/poisson_periodic_4d.bin && \
     test -x /opt/fftm/bin/taylor_green_3d_autotuned.bin && \
     test -x /opt/fftm/bin/taylor_green_spacetime_4d.bin && \
-    printf 'git_commit=%s\ngit_dirty=%s\n' \
+    printf 'git_commit=%s\ngit_dirty=%s\nbackend_abstraction_boundaries=passed\n' \
         "${FFTM_GIT_COMMIT}" "${FFTM_GIT_DIRTY}" \
         > /opt/fftm/bin/fftm_build_info.txt
 
@@ -127,9 +135,14 @@ RUN test -x /opt/fftm/bin/test_scfd_mpi_transport.bin && \
     test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
     test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
     test -x /opt/fftm/bin/test_fftm_resource_lifecycle.bin && \
+    test -x /opt/fftm/bin/test_fftm_3D_compare.bin && \
+    test -x /opt/fftm/bin/test_fftm_3D_compare_nca.bin && \
+    test -x /opt/fftm/bin/test_fftm_4D_compare.bin && \
+    test -x /opt/fftm/bin/test_fftm_4D_compare_nca.bin && \
     test -x /opt/fftm/bin/poisson_periodic_3d_autotuned.bin && \
     test -x /opt/fftm/bin/poisson_periodic_4d.bin && \
     test -s /opt/fftm/bin/fftm_build_info.txt && \
+    grep -Fxq 'backend_abstraction_boundaries=passed' /opt/fftm/bin/fftm_build_info.txt && \
     test -x /opt/fftm/scripts/run_scfd_mpi_transport_diagnostic.sh && \
     test -x /opt/fftm/scripts/run_cpp_autotune_validation.sh && \
     test -x /opt/fftm/bin/taylor_green_3d_autotuned.bin && \
