@@ -321,7 +321,7 @@ verify_image()
     fi
     local check="set -e; cat /opt/fftm/bin/fftm_build_info.txt"
     check+="; grep -Eq '^git_commit=[0-9a-f]{40}$' /opt/fftm/bin/fftm_build_info.txt"
-    check+="; grep -Fx 'git_dirty=0' /opt/fftm/bin/fftm_build_info.txt"
+    check+="; grep -Fxq 'git_dirty=0' /opt/fftm/bin/fftm_build_info.txt"
     if [[ "${EXPECTED_COMMIT}" != "embedded-image" ]]; then
         check+="; grep -Fx 'git_commit=${EXPECTED_COMMIT}' /opt/fftm/bin/fftm_build_info.txt"
     fi
@@ -389,6 +389,7 @@ run_api()
         FFTM_CPP_TUNE_TIMES=2
         FFTM_CPP_TUNE_APPLICATION_WARMUP=0
         FFTM_CPP_TUNE_APPLICATION_TIMES=1
+        FFTM_CPP_TUNE_STRICT_DEVICE_IDENTITY=0
         FFTM_CPP_TUNE_USE_SINGLE_ALLOCATION=0
         FFTM_CPP_TUNE_SRUN_EXTRA_ARGS=
         bash "${SCRIPT_DIR}/run_cpp_autotune_validation.sh" smoke

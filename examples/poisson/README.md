@@ -91,6 +91,13 @@ scripts/run_cpp_autotune_validation.sh smoke
 scripts/run_cpp_autotune_validation.sh production
 ```
 
+The launcher validates the compatibility signature by default. This permits a
+cache to be reused when Slurm assigns a different physical subset of equivalent
+GPUs on the same hardware class. Set
+`FFTM_CPP_TUNE_STRICT_DEVICE_IDENTITY=1` only when the allocation pins the same
+GPU UUIDs and PCI bus IDs across every measurement and reuse step. Strict
+identity rejection is covered separately by the hardware-signature unit test.
+
 Each target requests one Slurm allocation unless it is already running inside
 one. The result directory contains one short subdirectory per GPU count,
 `status.csv`, the generated caches, and a compact selected-configuration log.
