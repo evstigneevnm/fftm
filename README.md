@@ -404,10 +404,16 @@ short status file and a `PASSED` marker only after numerical, configuration,
 telemetry, and regression-limit checks succeed.
 
 Build the SQSH from the clean commit being verified. `make_docker.sh` records
-the Git commit and tracked dirty state in `fftm_build_info.txt`; the launcher
-rejects an image that does not identify the current clean commit. A plan can be
+the Git commit and tracked dirty state in `fftm_build_info.txt`. The launcher
+checks the host checkout when Git metadata is available. On a cluster copy
+without `.git`, it instead requires a valid embedded commit, requires the
+embedded dirty state to be zero, and records the SQSH SHA-256. A plan can be
 inspected without requesting an allocation by setting
 `FFTM_FINAL_DRY_RUN=1 FFTM_FINAL_REQUIRE_CLEAN=0`.
+The `all` target stops after the first failed target by default so an invalid
+image cannot consume additional allocations. Set
+`FFTM_FINAL_CONTINUE_ON_TARGET_FAILURE=1` only when later targets are known to
+be independent and should still run.
 
 Poisson tutorial timing example:
 

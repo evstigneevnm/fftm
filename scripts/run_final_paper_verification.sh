@@ -12,9 +12,9 @@ SALLOC_EXTRA_ARGS=${FFTM_FINAL_SALLOC_EXTRA_ARGS:---exclude=cn13}
 DRY_RUN=${FFTM_FINAL_DRY_RUN:-0}
 REQUIRE_CLEAN=${FFTM_FINAL_REQUIRE_CLEAN:-1}
 HASH_IMAGE=${FFTM_FINAL_HASH_IMAGE:-1}
-EXPECTED_COMMIT=${FFTM_FINAL_EXPECTED_GIT_COMMIT:-$(
-    git -C "${ROOT_DIR}" rev-parse --verify HEAD 2>/dev/null || printf unknown
-)}
+CONTINUE_ON_TARGET_FAILURE=${FFTM_FINAL_CONTINUE_ON_TARGET_FAILURE:-0}
+HOST_GIT_COMMIT=$(git -C "${ROOT_DIR}" rev-parse --verify HEAD 2>/dev/null || true)
+EXPECTED_COMMIT=${FFTM_FINAL_EXPECTED_GIT_COMMIT:-${HOST_GIT_COMMIT:-embedded-image}}
 
 case "${TARGET}" in
     api|production|multinode|all|validate)
@@ -37,18 +37,18 @@ is_true()
 }
 
 if [[ "${TARGET}" != "validate" ]] && is_true "${REQUIRE_CLEAN}"; then
-    if [[ "${EXPECTED_COMMIT}" == "unknown" ]]; then
-        echo "ERROR: cannot identify the Git commit for final verification" >&2
-        exit 2
-    fi
-    if ! git -C "${ROOT_DIR}" diff --quiet --ignore-submodules -- ||
-       ! git -C "${ROOT_DIR}" diff --cached --quiet --ignore-submodules --; then
-        cat >&2 <<EOF
+    if [[ -n "${HOST_GIT_COMMIT}" ]]; then
+        if ! git -C "${ROOT_DIR}" diff --quiet --ignore-submodules -- ||
+           ! git -C "${ROOT_DIR}" diff --cached --quiet --ignore-submodules --; then
+            cat >&2 <<EOF
 ERROR: tracked source changes are not committed.
 The final paper image and verification data must be tied to one Git commit.
 Commit the intended source, rebuild the SQSH, and rerun this target.
 EOF
-        exit 2
+            exit 2
+        fi
+    else
+        echo "Host Git metadata is unavailable; using embedded SQSH provenance."
     fi
 fi
 
@@ -62,12 +62,12 @@ write_provenance()
     local provenance="${DATA_ROOT}/provenance.env"
     if [[ ! -f "${provenance}" ]]; then
         {
-            printf 'git_commit=%s\n' "${EXPECTED_COMMIT}"
+            printf 'git_commit_expectation=%s\n' "${EXPECTED_COMMIT}"
             printf 'container_image=%s\n' "${IMAGE}"
             printf 'created_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         } > "${provenance}"
     else
-        grep -Fx "git_commit=${EXPECTED_COMMIT}" "${provenance}" >/dev/null || {
+        grep -Fx "git_commit_expectation=${EXPECTED_COMMIT}" "${provenance}" >/dev/null || {
             echo "ERROR: data root belongs to a different Git commit: ${provenance}" >&2
             return 2
         }
@@ -96,8 +96,10 @@ run_all()
     local status="${DATA_ROOT}/targets.csv"
     printf '%s\n' 'target,status,returncode' > "${status}"
     local overall=0
-    local item rc state
-    for item in api production multinode; do
+    local items=(api production multinode)
+    local item rc state index skipped_index
+    for index in "${!items[@]}"; do
+        item=${items[${index}]}
         printf '\n=== Final paper verification target: %s ===\n' "${item}"
         set +e
         env \
@@ -107,6 +109,7 @@ run_all()
             FFTM_FINAL_DRY_RUN="${DRY_RUN}" \
             FFTM_FINAL_REQUIRE_CLEAN="${REQUIRE_CLEAN}" \
             FFTM_FINAL_HASH_IMAGE="${HASH_IMAGE}" \
+            FFTM_FINAL_CONTINUE_ON_TARGET_FAILURE="${CONTINUE_ON_TARGET_FAILURE}" \
             FFTM_FINAL_EXPECTED_GIT_COMMIT="${EXPECTED_COMMIT}" \
             bash "${SELF}" "${item}"
         rc=$?
@@ -117,9 +120,17 @@ run_all()
             overall=1
         }
         printf '%s,%s,%d\n' "${item}" "${state}" "${rc}" >> "${status}"
+        if (( rc != 0 )) && ! is_true "${CONTINUE_ON_TARGET_FAILURE}"; then
+            for (( skipped_index=index + 1; skipped_index<${#items[@]}; ++skipped_index )); do
+                printf '%s,skipped,0\n' "${items[${skipped_index}]}" >> "${status}"
+            done
+            echo "Stopping final verification after ${item} failed."
+            echo "Set FFTM_FINAL_CONTINUE_ON_TARGET_FAILURE=1 to run independent later targets."
+            break
+        fi
     done
 
-    if ! is_true "${DRY_RUN}"; then
+    if (( overall == 0 )) && ! is_true "${DRY_RUN}"; then
         set +e
         env FFTM_FINAL_DATA_DIR="${DATA_ROOT}" bash "${SELF}" validate
         rc=$?
@@ -197,6 +208,7 @@ request_allocation()
         FFTM_FINAL_DRY_RUN=0 \
         FFTM_FINAL_REQUIRE_CLEAN="${REQUIRE_CLEAN}" \
         FFTM_FINAL_HASH_IMAGE="${HASH_IMAGE}" \
+        FFTM_FINAL_CONTINUE_ON_TARGET_FAILURE="${CONTINUE_ON_TARGET_FAILURE}" \
         FFTM_FINAL_EXPECTED_GIT_COMMIT="${EXPECTED_COMMIT}" \
         salloc \
         --job-name="fftm-final-${TARGET}" \
@@ -244,7 +256,7 @@ STATUS_FILE="${TARGET_DIR}/status.csv"
 printf '%s\n' 'stage,status,returncode,log' > "${STATUS_FILE}"
 {
     printf 'target=%s\n' "${TARGET}"
-    printf 'git_commit=%s\n' "${EXPECTED_COMMIT}"
+    printf 'git_commit_expectation=%s\n' "${EXPECTED_COMMIT}"
     printf 'container_image=%s\n' "${IMAGE}"
     printf 'slurm_job_id=%s\n' "${SLURM_JOB_ID:-dry-run}"
     printf 'slurm_job_nodelist=%s\n' "${SLURM_JOB_NODELIST:-dry-run}"
@@ -308,8 +320,11 @@ verify_image()
         required+=( test_benchmark_fftm_3D.bin test_benchmark_fftm_4D.bin )
     fi
     local check="set -e; cat /opt/fftm/bin/fftm_build_info.txt"
-    check+="; grep -Fx 'git_commit=${EXPECTED_COMMIT}' /opt/fftm/bin/fftm_build_info.txt"
+    check+="; grep -Eq '^git_commit=[0-9a-f]{40}$' /opt/fftm/bin/fftm_build_info.txt"
     check+="; grep -Fx 'git_dirty=0' /opt/fftm/bin/fftm_build_info.txt"
+    if [[ "${EXPECTED_COMMIT}" != "embedded-image" ]]; then
+        check+="; grep -Fx 'git_commit=${EXPECTED_COMMIT}' /opt/fftm/bin/fftm_build_info.txt"
+    fi
     local binary
     for binary in "${required[@]}"; do
         check+="; test -x '/opt/fftm/bin/${binary}'"
@@ -322,7 +337,25 @@ verify_image()
         --container-workdir /opt/fftm/bin
         --container-entrypoint /bin/bash -lc "${check}"
     )
-    run_logged image-preflight "${TARGET_DIR}/image_preflight.log" "${command[@]}"
+    if ! run_logged image-preflight "${TARGET_DIR}/image_preflight.log" "${command[@]}"; then
+        if grep -Fxq 'git_dirty=1' "${TARGET_DIR}/image_preflight.log"; then
+            cat >&2 <<EOF
+ERROR: the SQSH was built from a tracked dirty source tree.
+Commit the intended source locally, rebuild the Docker image and SQSH, copy the
+new SQSH to the cluster, and rerun with a new FFTM_FINAL_DATA_DIR.
+EOF
+        fi
+        return 1
+    fi
+    if ! is_true "${DRY_RUN}"; then
+        local embedded_commit
+        embedded_commit=$(sed -n 's/^git_commit=\([0-9a-f]\{40\}\)$/\1/p' "${TARGET_DIR}/image_preflight.log" | head -n 1)
+        [[ -n "${embedded_commit}" ]] || {
+            echo "ERROR: failed to record the embedded SQSH commit" >&2
+            return 1
+        }
+        printf 'image_git_commit=%s\n' "${embedded_commit}" >> "${TARGET_DIR}/config.env"
+    fi
 }
 
 run_api()
