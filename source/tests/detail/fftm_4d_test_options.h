@@ -62,6 +62,7 @@ struct fftm_4d_test_options
     bool                          use_4d_slab_native_wz_ready_pipeline = false;
     bool                          use_4d_pencil_same_zw_peer_paired = false;
     bool                          use_4d_pencil_same_zw_native_layout = true;
+    bool                          use_4d_pencil_p3_degenerate_wz_pipeline = false;
     bool                          use_4d_pencil_degenerate_xw_slab_path = false;
     bool                          use_4d_pencil_degenerate_local_transposes = false;
     bool                          use_4d_pencil_degenerate_same_xw_native = false;
@@ -163,6 +164,7 @@ usage_fftm_4d_test( const std::string &binary_name, bool allow_strategy_all, boo
     usage += " [--use-4d-slab-native-wz-communication-layout|--no-4d-slab-native-wz-communication-layout]";
     usage += " [--use-4d-pencil-same-zw-peer-paired|--no-4d-pencil-same-zw-peer-paired]";
     usage += " [--use-4d-pencil-same-zw-native-layout|--no-4d-pencil-same-zw-native-layout]";
+    usage += " [--use-4d-pencil-node-aligned-wz-pipeline|--no-4d-pencil-node-aligned-wz-pipeline]";
     usage += " [--use-4d-pencil-degenerate-xw-slab-path|--no-4d-pencil-degenerate-xw-slab-path]";
     usage += " [--use-4d-pencil-degenerate-local-transposes|--no-4d-pencil-degenerate-local-transposes]";
     usage += " [--use-4d-pencil-degenerate-same-xw-native|--no-4d-pencil-degenerate-same-xw-native]";
@@ -501,6 +503,18 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.use_4d_pencil_same_zw_native_layout = false;
             argi += 1;
         }
+        else if ( arg == "--use-4d-pencil-node-aligned-wz-pipeline" ||
+                  arg == "--use-4d-pencil-p3-degenerate-wz-pipeline" )
+        {
+            options.use_4d_pencil_p3_degenerate_wz_pipeline = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-pencil-node-aligned-wz-pipeline" ||
+                  arg == "--no-4d-pencil-p3-degenerate-wz-pipeline" )
+        {
+            options.use_4d_pencil_p3_degenerate_wz_pipeline = false;
+            argi += 1;
+        }
         else if ( arg == "--use-4d-pencil-degenerate-xw-slab-path" )
         {
             options.use_4d_pencil_degenerate_xw_slab_path = true;
@@ -605,6 +619,8 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_test_opti
     init_options.execution.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
     init_options.diagnostics.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
     init_options.execution.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
+    init_options.execution.use_4d_pencil_node_aligned_wz_pipeline =
+        options.use_4d_pencil_p3_degenerate_wz_pipeline;
     init_options.diagnostics.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
     init_options.execution.use_4d_pencil_degenerate_local_transposes =
         options.use_4d_pencil_degenerate_local_transposes;

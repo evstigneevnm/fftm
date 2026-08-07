@@ -64,6 +64,7 @@ endif
 
 ALL_BINS = \
 	test_fftm_options.bin \
+	test_fft_benchmark_reporting.bin \
 	test_fftm_autotune_hardware.bin \
 	test_fftm_resource_lifecycle.bin \
 	test_fftm_quiet_default.bin \
@@ -159,6 +160,9 @@ $(BUILD_DIR):
 
 $(BUILD_DIR)/test_fftm_options.bin: $(TEST_DIR)/test_fftm_options.cpp $(source)/fftm_options.hpp | $(BUILD_DIR)
 	$(CXX) $(GCCFLAGS) -I$(source) $< -o $@
+
+$(BUILD_DIR)/test_fft_benchmark_reporting.bin: $(TEST_DIR)/test_fft_benchmark_reporting.cpp $(TEST_DIR)/detail/fft_benchmark_common.h | $(BUILD_DIR)
+	$(MPICXX) $(GCCFLAGS) -I$(source) -I$(include_mpi) -I$(contrib) $< -L$(lib_mpi) -lmpi -o $@
 
 define BUILD_MPI_TEST
 $(BUILD_DIR)/$1: $(TEST_DIR)/$2 | $(BUILD_DIR)

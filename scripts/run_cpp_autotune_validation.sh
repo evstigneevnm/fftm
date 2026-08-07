@@ -295,9 +295,9 @@ for gpus in "${GPU_VALUES[@]}"; do
         if ! grep -q 'source=measured' "${CREATE_LOG}" ||
            ! grep -q 'source=cache' "${REUSE_LOG}" ||
            ! grep -q 'strategy=pencil-pencil.*source=cache' "${CONSTRAINED_LOG}" ||
-           [[ "${RESULT_COUNT}" -ne 2 ]] ||
-           [[ "${RELEASE_COUNT}" -ne 2 ]] ||
-           [[ "${RECOVERY_COUNT}" -ne 2 ]] ||
+           [[ "${RESULT_COUNT}" -ne 6 ]] ||
+           [[ "${RELEASE_COUNT}" -ne 6 ]] ||
+           [[ "${RECOVERY_COUNT}" -ne 6 ]] ||
            ! grep -q 'workspace_pool_mib=' "${CREATE_LOG}" ||
            ! grep -q 'input_pool_mib=' "${CREATE_LOG}" ||
            ! grep -q 'spectrum_pool_mib=' "${CREATE_LOG}" ||
@@ -306,9 +306,10 @@ for gpus in "${GPU_VALUES[@]}"; do
            ! grep -Eq 'spectrum_pool_mib=[1-9][0-9]*' "${CREATE_LOG}" ||
            grep -q 'retained .*after plan destruction' "${CREATE_LOG}" ||
            ! grep -q '^FFTM_AUTOTUNE_SCHEMA=2$' "${CACHE_FILE}" ||
-           ! grep -q '^FFTM_AUTOTUNE_SOURCE=cpp-measured-v1$' "${CACHE_FILE}" ||
+           ! grep -q '^FFTM_AUTOTUNE_SOURCE=cpp-measured-v2$' "${CACHE_FILE}" ||
+           ! grep -q '^FFTM_AUTOTUNE_CANDIDATE_POLICY_VERSION=2$' "${CACHE_FILE}" ||
            ! grep -q '^FFTM_AUTOTUNE_PRODUCTION_CANDIDATES_ONLY=1$' "${CACHE_FILE}" ||
-           ! grep -q '^FFTM_AUTOTUNE_CANDIDATE_COUNT=2$' "${CACHE_FILE}" ||
+           ! grep -q '^FFTM_AUTOTUNE_CANDIDATE_COUNT=6$' "${CACHE_FILE}" ||
            ! grep -q "^FFTM_AUTOTUNE_RANKS_PER_NODE=${gpus}$" "${CACHE_FILE}" ||
            ! grep -q "^FFTM_AUTOTUNE_DEVICES_PER_NODE=${gpus}$" "${CACHE_FILE}"; then
             echo "Validation failed for ${gpus} GPUs; inspect ${CASE_DIR}" >&2

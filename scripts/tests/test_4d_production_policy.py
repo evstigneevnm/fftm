@@ -24,6 +24,13 @@ def main() -> int:
     assert benchmarks.parse_fftm_4d_slab_native_wz_communication_layouts( "production" ) == [True]
     assert benchmarks.parse_fftm_4d_slab_native_wz_plan_concurrencies( "production" ) == [4]
     assert benchmarks.parse_fftm_4d_slab_native_wz_ready_pipelines( "production" ) == [True]
+    assert benchmarks.parse_fftm_4d_pencil_p3_degenerate_wz_pipelines( "production" ) == [True]
+    assert benchmarks.parse_fftm_4d_pencil_p3_degenerate_wz_pipelines( "standard" ) == [False]
+    assert benchmarks.parse_fftm_4d_pencil_p3_degenerate_wz_pipelines( "matrix" ) == [False, True]
+    explicit = benchmarks.parse_4d_pencil_grid_orientations( "explicit:2x8x1,4x8x1" )
+    assert benchmarks.grid_orientations_4d_for_spec( 16, explicit ) == [(2, 8, 1)]
+    assert benchmarks.grid_orientations_4d_for_spec( 32, explicit ) == [(4, 8, 1)]
+    assert benchmarks.grid_orientations_4d_for_spec( 24, explicit ) == []
     assert benchmarks.fftm_4d_native_xw_direct_layouts_for_transport(
         "cuda_aware", [True]
     ) == [True]

@@ -69,14 +69,14 @@ WARMUP="${FFTM_SCFD_MPI_WARMUP:-3}"
 UCX_LOG_LEVEL_VALUE="${FFTM_SCFD_MPI_UCX_LOG_LEVEL:-warn}"
 UCX_PROTO_INFO_VALUE="${FFTM_SCFD_MPI_UCX_PROTO_INFO:-n}"
 SRUN_TIME="${FFTM_SRUN_TIME:-00:30:00}"
-SRUN_EXTRA_TEXT="${FFTM_SRUN_EXTRA_ARGS:---exclude=cn13}"
+SRUN_EXTRA_TEXT="${FFTM_SRUN_EXTRA_ARGS---exclude=cn13}"
 DRY_RUN="${FFTM_DRY_RUN:-0}"
 AFFINITY_MODE="${FFTM_SCFD_MPI_AFFINITY_MODE:-auto}"
 CPU_BIND_MAP="${FFTM_SCFD_MPI_CPU_BIND_MAP:-1,1,0,0,3,3,2,2,1,1,0,0,3,3,2,2}"
 AFFINITY_WRAPPER="${SCRIPT_DIR}/run_mpi_rank_affinity.sh"
 
-if [[ "${NODES}" -ne 2 ]]; then
-    echo "This diagnostic currently requires exactly two nodes." >&2
+if [[ "${NODES}" -ne 1 && "${NODES}" -ne 2 ]]; then
+    echo "This diagnostic requires one node or exactly two nodes." >&2
     exit 2
 fi
 
@@ -230,7 +230,7 @@ fi
 test -x /opt/fftm/bin/test_scfd_mpi_transport.bin
 '
 
-    echo "Collecting two-node GPU/HCA/UCX inventory..."
+    echo "Collecting ${NODES}-node GPU/HCA/UCX inventory..."
     if [[ "${DRY_RUN}" == "1" ]]; then
         print_command \
             "${COMMON_SRUN[@]}" \
@@ -300,6 +300,31 @@ run_bandwidth()
     grep -q "SCFD_MPI_TRANSPORT PASSED" "${ROOT}/transport.log"
 }
 
+print_summary()
+{
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        return
+    fi
+
+    if [[ -s "${ROOT}/inventory.log" ]]; then
+        echo
+        echo "GPU inventory exposed inside the container:"
+        awk '
+            /^--- GPU topology ---$/ { printing = 1; next }
+            /^--- InfiniBand devices ---$/ { printing = 0 }
+            printing
+        ' "${ROOT}/inventory.log"
+    fi
+
+    if [[ -s "${ROOT}/transport.log" ]]; then
+        echo
+        echo "SCFD rank-to-device binding and result:"
+        grep -E \
+            "SCFD_CUDA_BIND|SCFD_MPI_TOPOLOGY|SCFD_MPI_TRANSPORT PASSED" \
+            "${ROOT}/transport.log" || true
+    fi
+}
+
 case "${TARGET}" in
     all)
         run_inventory
@@ -312,6 +337,8 @@ case "${TARGET}" in
         run_bandwidth
         ;;
 esac
+
+print_summary
 
 cat <<EOF
 

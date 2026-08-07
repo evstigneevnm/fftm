@@ -1510,15 +1510,20 @@ int run_benchmark_case(
 	        const T local_wall_ms = static_cast<T>( t1.elapsed_time( t0 ) );
             const T global_wall_ms = comm_info.all_reduce_max( local_wall_ms );
             local_wall_times.push_back( local_wall_ms );
-	        wall_times.push_back( global_wall_ms );
+            wall_times.push_back( global_wall_ms );
             if ( options.enable_native_stage_timers )
             {
-                append_native_stage_timer_rows(
-                    options, comm_info.num_procs, comm_info.myid, iter, static_cast<double>( global_wall_ms ),
-                    distributed_fft.native_opt0_compact_y_workarea_effective(),
-                    distributed_fft.native_opt0_auto_compact_y_workarea_effective(),
-                    distributed_fft.native_opt0_default_z_scratch_aliased(),
-                    distributed_fft.native_stage_timings()
+                fftm::test::detail::run_collective_reporting_step(
+                    comm_info, "3D native stage-timer CSV reporting", [&]() {
+                        append_native_stage_timer_rows(
+                            options, comm_info.num_procs, comm_info.myid, iter,
+                            static_cast<double>( global_wall_ms ),
+                            distributed_fft.native_opt0_compact_y_workarea_effective(),
+                            distributed_fft.native_opt0_auto_compact_y_workarea_effective(),
+                            distributed_fft.native_opt0_default_z_scratch_aliased(),
+                            distributed_fft.native_stage_timings()
+                        );
+                    }
                 );
                 distributed_fft.end_native_stage_timing_iteration();
             }
@@ -1554,8 +1559,12 @@ int run_benchmark_case(
             validation_failed = true;
     }
 
-    append_3d_wall_time_rows(
-        options, comm_info.num_procs, comm_info.myid, local_wall_times, wall_times
+    fftm::test::detail::run_collective_reporting_step(
+        comm_info, "3D wall-time CSV reporting", [&]() {
+            append_3d_wall_time_rows(
+                options, comm_info.num_procs, comm_info.myid, local_wall_times, wall_times
+            );
+        }
     );
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
     fftm::test::detail::log_tracked_memory_with_external_mpi(
@@ -1566,6 +1575,7 @@ int run_benchmark_case(
             fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) )
     );
 
+    std::string summary_csv_row;
     if ( comm_info.myid == 0 )
     {
         const bool native_opt0_compact_y_workarea_effective =
@@ -1675,13 +1685,22 @@ int run_benchmark_case(
             << stats.stddev << ',' << max_norm << ','
             << fftm::test::detail::csv_quote( options.directory );
 
-        fftm::test::detail::append_csv_row(
-            options.directory, "benchmark_fftm_3d.csv",
-            "benchmark,num_gpus,strategy,mode,pencil_layout,pencil_pipeline,persistent_p2p,ready_p2p_send,large_count_p2p_transport,fft_exec_no_sync,stable_forward_byte_send_buffer,ready_stable_forward_byte_send_buffer,contiguous_forward_byte_send,physical_forward_peer_exchange,native_backward_second_peer_loop,deferred_send_completion,native_opt0_default_z_layout,native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,native_opt0_compact_y_workarea_effective,native_opt0_auto_compact_y_workarea,native_opt0_default_z_scratch_aliased,native_opt0_tight_y_plan_sequence,native_opt0_shared_y_plan_handles,native_opt0_y_group_device_sync,native_opt0_y_no_sync_exec,native_opt0_raw_y_plan_array_executor,native_opt0_reference_y_plan_lifecycle,native_opt0_reference_y_plan_bundle,native_opt0_raw_y_plan_bundle,native_opt0_y_plan_bundle_stream_first,native_opt0_raw_y_plan_bundle_reference_streams,native_opt0_reference_local_plan_context,contiguous_forward_send_mode,contiguous_forward_send_chunk_mib,contiguous_forward_send_registration_warmups,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,wall_time_scope,avg_wall_ms,stddev_wall_ms,"
-            "max_l2_diff,directory",
-            row.str()
-        );
+        summary_csv_row = row.str();
     }
+
+    fftm::test::detail::run_collective_reporting_step(
+        comm_info, "3D summary CSV reporting", [&]() {
+            if ( comm_info.myid == 0 )
+            {
+                fftm::test::detail::append_csv_row(
+                    options.directory, "benchmark_fftm_3d.csv",
+                    "benchmark,num_gpus,strategy,mode,pencil_layout,pencil_pipeline,persistent_p2p,ready_p2p_send,large_count_p2p_transport,fft_exec_no_sync,stable_forward_byte_send_buffer,ready_stable_forward_byte_send_buffer,contiguous_forward_byte_send,physical_forward_peer_exchange,native_backward_second_peer_loop,deferred_send_completion,native_opt0_default_z_layout,native_opt0_reference_y_buffer_topology,native_opt0_compact_y_workarea,native_opt0_compact_y_workarea_effective,native_opt0_auto_compact_y_workarea,native_opt0_default_z_scratch_aliased,native_opt0_tight_y_plan_sequence,native_opt0_shared_y_plan_handles,native_opt0_y_group_device_sync,native_opt0_y_no_sync_exec,native_opt0_raw_y_plan_array_executor,native_opt0_reference_y_plan_lifecycle,native_opt0_reference_y_plan_bundle,native_opt0_raw_y_plan_bundle,native_opt0_y_plan_bundle_stream_first,native_opt0_raw_y_plan_bundle_reference_streams,native_opt0_reference_local_plan_context,contiguous_forward_send_mode,contiguous_forward_send_chunk_mib,contiguous_forward_send_registration_warmups,p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,wall_time_scope,avg_wall_ms,stddev_wall_ms,"
+                    "max_l2_diff,directory",
+                    summary_csv_row
+                );
+            }
+        }
+    );
 
     if ( validation_failed && comm_info.myid == 0 )
     {

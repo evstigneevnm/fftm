@@ -188,7 +188,24 @@ auto options_4d = fftm::production_options_4d(
     fftm::fftm_4d_spectral_layout::native_xzwy,
     true // device-aware MPI
 );
+
+// For an explicitly selected 4D pencil strategy, provide the rank topology.
+// A nodes x ranks-per-node x 1 grid selects the node-aligned WZ pipeline.
+fftm::fftm_4d_production_topology topology(
+    comm.num_procs, 8, grid.p1, grid.p2, grid.p3
+);
+auto pencil_options_4d = fftm::production_options_4d(
+    fftm::transform_strategy_4d_mpi::pencil_pencil,
+    fftm::fftm_4d_spectral_layout::native_xzwy,
+    true,
+    topology
+);
 ```
+
+Set the topology policy to `fftm::fftm_4d_pencil_pipeline::standard` to retain
+the standard pencil path explicitly. An explicitly requested
+`node_aligned_wz` policy fails if the process grid, layout, or transport does
+not satisfy its prerequisites.
 
 The top-level `fftm_init_options` contains layout selection and three grouped
 option sets:

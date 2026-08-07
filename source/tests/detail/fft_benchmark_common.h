@@ -168,6 +168,36 @@ inline void append_csv_rows(
         out << row << '\n';
 }
 
+template <class Comm, class Writer>
+inline void run_collective_reporting_step(
+    const Comm &comm, const std::string &description, Writer writer
+)
+{
+    std::string local_error;
+    try
+    {
+        writer();
+    }
+    catch ( const std::exception &ex )
+    {
+        local_error = ex.what();
+    }
+    catch ( ... )
+    {
+        local_error = "unknown exception";
+    }
+
+    const int failed_ranks = comm.all_reduce_sum( local_error.empty() ? 0 : 1 );
+    if ( failed_ranks == 0 )
+        return;
+
+    std::ostringstream message;
+    message << description << " failed on " << failed_ranks << " of " << comm.num_procs << " MPI ranks";
+    if ( !local_error.empty() )
+        message << "; rank " << comm.myid << ": " << local_error;
+    throw std::runtime_error( message.str() );
+}
+
 __DEVICE_TAG__ inline unsigned long long splitmix64( unsigned long long x )
 {
     x += 0x9E3779B97F4A7C15ull;

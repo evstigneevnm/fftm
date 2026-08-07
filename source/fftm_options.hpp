@@ -51,6 +51,52 @@ enum class fftm_4d_spectral_layout
     native_xzwy
 };
 
+enum class fftm_4d_pencil_pipeline
+{
+    auto_select,
+    standard,
+    node_aligned_wz
+};
+
+inline const char *fftm_4d_pencil_pipeline_name( fftm_4d_pencil_pipeline pipeline )
+{
+    switch ( pipeline )
+    {
+    case fftm_4d_pencil_pipeline::auto_select:
+        return "auto";
+    case fftm_4d_pencil_pipeline::standard:
+        return "standard";
+    case fftm_4d_pencil_pipeline::node_aligned_wz:
+        return "node-aligned-wz";
+    }
+    return "unknown";
+}
+
+struct fftm_4d_production_topology
+{
+    std::size_t             num_procs;
+    std::size_t             procs_per_node;
+    std::size_t             p1;
+    std::size_t             p2;
+    std::size_t             p3;
+    fftm_4d_pencil_pipeline pencil_pipeline;
+
+    fftm_4d_production_topology()
+        : num_procs( 1 ), procs_per_node( 1 ), p1( 1 ), p2( 1 ), p3( 1 ),
+          pencil_pipeline( fftm_4d_pencil_pipeline::auto_select )
+    {
+    }
+
+    fftm_4d_production_topology(
+        std::size_t num_procs_, std::size_t procs_per_node_, std::size_t p1_, std::size_t p2_,
+        std::size_t p3_, fftm_4d_pencil_pipeline pencil_pipeline_ = fftm_4d_pencil_pipeline::auto_select
+    )
+        : num_procs( num_procs_ ), procs_per_node( procs_per_node_ ), p1( p1_ ), p2( p2_ ), p3( p3_ ),
+          pencil_pipeline( pencil_pipeline_ )
+    {
+    }
+};
+
 inline const char *fftm_4d_spectral_layout_name( fftm_4d_spectral_layout layout )
 {
     switch ( layout )
@@ -211,6 +257,7 @@ struct fftm_execution_options
     std::size_t slab_native_wz_plan_concurrency = 1;
     bool        use_4d_slab_native_wz_ready_pipeline = false;
     bool        use_4d_pencil_same_zw_native_layout = true;
+    bool        use_4d_pencil_node_aligned_wz_pipeline = false;
     bool        use_4d_pencil_degenerate_local_transposes = false;
     bool        use_4d_pencil_degenerate_same_xw_native = false;
     bool        use_4d_pencil_degenerate_wz_sliced_z_fft = true;
@@ -255,6 +302,9 @@ struct fftm_diagnostic_options
     bool        use_4d_slab_native_xw_tiled_kernels = false;
     bool        use_4d_slab_native_xw_layout_stage = false;
     bool        use_4d_pencil_same_zw_peer_paired = false;
+    // Deprecated benchmark compatibility alias. Prefer the production-owned
+    // use_4d_pencil_node_aligned_wz_pipeline execution option.
+    bool        use_4d_pencil_p3_degenerate_wz_pipeline = false;
     bool        use_4d_pencil_degenerate_xw_slab_path = false;
 
     // Deprecated benchmark compatibility alias. Prefer fftm_init_options::spectral_layout_4d.
@@ -307,10 +357,56 @@ inline fftm_init_options production_options_3d(
     return options;
 }
 
+inline bool is_4d_node_aligned_pencil_topology( const fftm_4d_production_topology &topology )
+{
+    if ( topology.num_procs == 0 || topology.procs_per_node == 0 || topology.p1 == 0 || topology.p2 == 0 ||
+         topology.p3 == 0 )
+    {
+        throw std::logic_error( "fftm 4D production topology dimensions must be positive" );
+    }
+    if ( topology.p1 > topology.num_procs / topology.p2 ||
+         topology.p1 * topology.p2 > topology.num_procs / topology.p3 ||
+         topology.p1 * topology.p2 * topology.p3 != topology.num_procs )
+    {
+        throw std::logic_error( "fftm 4D production process grid does not match the process count" );
+    }
+
+    return topology.num_procs > topology.procs_per_node &&
+           topology.num_procs % topology.procs_per_node == 0 &&
+           topology.p1 == topology.num_procs / topology.procs_per_node &&
+           topology.p2 == topology.procs_per_node && topology.p3 == 1;
+}
+
+inline fftm_4d_pencil_pipeline select_production_pencil_pipeline_4d(
+    const fftm_4d_production_topology &topology, fftm_4d_spectral_layout spectral_layout,
+    bool device_aware_mpi
+)
+{
+    const bool node_aligned = is_4d_node_aligned_pencil_topology( topology );
+    if ( topology.pencil_pipeline == fftm_4d_pencil_pipeline::node_aligned_wz )
+    {
+        if ( spectral_layout != fftm_4d_spectral_layout::native_xzwy || !device_aware_mpi || !node_aligned )
+        {
+            throw std::logic_error(
+                "fftm node-aligned 4D pencil WZ pipeline requires device-aware MPI, native-xzwy layout, "
+                "and a nodes x processes-per-node x 1 process grid"
+            );
+        }
+        return fftm_4d_pencil_pipeline::node_aligned_wz;
+    }
+    if ( topology.pencil_pipeline == fftm_4d_pencil_pipeline::auto_select &&
+         spectral_layout == fftm_4d_spectral_layout::native_xzwy && device_aware_mpi && node_aligned )
+    {
+        return fftm_4d_pencil_pipeline::node_aligned_wz;
+    }
+    return fftm_4d_pencil_pipeline::standard;
+}
+
 inline fftm_init_options production_options_4d(
     transform_strategy_4d_mpi strategy,
-    fftm_4d_spectral_layout spectral_layout = fftm_4d_spectral_layout::public_yzwx,
-    bool device_aware_mpi = true
+    fftm_4d_spectral_layout spectral_layout,
+    bool device_aware_mpi,
+    const fftm_4d_production_topology &topology
 )
 {
     fftm_init_options options;
@@ -332,14 +428,43 @@ inline fftm_init_options production_options_4d(
             options.execution.use_4d_slab_native_wz_ready_pipeline = true;
         }
     }
-    else if ( spectral_layout == fftm_4d_spectral_layout::native_xzwy )
+    else
     {
+        const fftm_4d_pencil_pipeline pipeline =
+            select_production_pencil_pipeline_4d( topology, spectral_layout, device_aware_mpi );
+        if ( spectral_layout != fftm_4d_spectral_layout::native_xzwy )
+            return options;
+
         options.execution.use_4d_pencil_same_zw_native_layout = true;
-        options.execution.use_4d_pencil_degenerate_local_transposes = true;
-        options.execution.use_4d_pencil_degenerate_same_xw_native = true;
-        options.execution.use_4d_pencil_degenerate_wz_sliced_z_fft = true;
+        if ( pipeline == fftm_4d_pencil_pipeline::node_aligned_wz )
+        {
+            options.execution.use_4d_native_xw_direct_layout = true;
+            options.execution.use_4d_native_xw_chunked_transport = true;
+            options.execution.native_xw_chunk_window = 1;
+            options.execution.use_4d_native_xw_compact_staging = true;
+            options.execution.slab_native_wz_plan_concurrency = 4;
+            options.execution.use_4d_slab_native_wz_ready_pipeline = true;
+            options.execution.use_4d_pencil_node_aligned_wz_pipeline = true;
+        }
+        else if ( topology.p1 == 1 && topology.p3 == 1 )
+        {
+            options.execution.use_4d_pencil_degenerate_local_transposes = true;
+            options.execution.use_4d_pencil_degenerate_same_xw_native = true;
+            options.execution.use_4d_pencil_degenerate_wz_sliced_z_fft = true;
+        }
     }
     return options;
+}
+
+inline fftm_init_options production_options_4d(
+    transform_strategy_4d_mpi strategy,
+    fftm_4d_spectral_layout spectral_layout = fftm_4d_spectral_layout::public_yzwx,
+    bool device_aware_mpi = true
+)
+{
+    return production_options_4d(
+        strategy, spectral_layout, device_aware_mpi, fftm_4d_production_topology()
+    );
 }
 
 } // namespace fftm

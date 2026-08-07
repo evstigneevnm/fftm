@@ -310,6 +310,7 @@ verify_image()
 {
     local required=(
         test_fftm_options.bin
+        test_fft_benchmark_reporting.bin
         test_fftm_quiet_default.bin
         test_fftm_autotune_hardware.bin
         test_fftm_resource_lifecycle.bin
@@ -412,6 +413,14 @@ run_api()
         --container-entrypoint /opt/fftm/bin/test_fftm_options.bin
     )
     run_logged public-options "${TARGET_DIR}/public_options.log" "${options_cmd[@]}" || return 1
+
+    local reporting_cmd=(
+        srun -N 1 -n 2 --ntasks-per-node=2
+        --cpus-per-task=1 --exclusive --kill-on-bad-exit=1 --time=00:05:00
+        --container-image "${IMAGE}" --container-workdir /opt/fftm/bin
+        --container-entrypoint /opt/fftm/bin/test_fft_benchmark_reporting.bin
+    )
+    run_logged collective-reporting "${TARGET_DIR}/collective_reporting.log" "${reporting_cmd[@]}" || return 1
 
     local quiet_cmd=(
         srun -N 1 -n 1 -G 1 --ntasks-per-node=1 --gpus-per-node=1

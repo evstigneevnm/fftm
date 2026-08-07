@@ -497,6 +497,12 @@ public:
         return spectral_layout_4d() == fftm_4d_spectral_layout::native_xzwy;
     }
 
+    bool uses_4d_pencil_node_aligned_wz_pipeline() const
+    {
+        ensure_dimension_( 4 );
+        return pencil_4d_p3_degenerate_wz_pipeline_enabled_();
+    }
+
     native_spectral_array4_t make_native_spectral_view_4d( complex_array_t<4> &array ) const
     {
         ensure_dimension_( 4 );
@@ -1429,6 +1435,10 @@ private:
         {
             options.spectral_layout_4d = fftm_4d_spectral_layout::native_xzwy;
         }
+        if ( options.diagnostics.use_4d_pencil_p3_degenerate_wz_pipeline )
+        {
+            options.execution.use_4d_pencil_node_aligned_wz_pipeline = true;
+        }
         if ( native_opt0_diagnostic_variant_requested_( options ) &&
              !options.diagnostics.allow_native_opt0_diagnostic_variants )
         {
@@ -1522,16 +1532,34 @@ private:
                 "direct layout, chunked transport, and a bounded chunk window."
             );
         }
+        if ( options.execution.use_4d_pencil_node_aligned_wz_pipeline &&
+             ( strategy_family_4d != transform_strategy_4d_mpi::pencil_pencil ||
+               options.spectral_layout_4d != fftm_4d_spectral_layout::native_xzwy ||
+               !options.execution.use_4d_pencil_same_zw_native_layout ||
+               !options.execution.use_4d_native_xw_direct_layout ||
+               !options.execution.use_4d_native_xw_chunked_transport ||
+               options.execution.native_xw_chunk_window == 0 ||
+               !options.execution.use_4d_slab_native_wz_ready_pipeline ||
+               options.execution.use_4d_slab_native_work_area_alias ) )
+        {
+            throw std::logic_error(
+                "FFTM 4D node-aligned pencil WZ pipeline requires pencil-pencil, native-xzwy spectral layout, "
+                "native same_zw layout, direct layout, chunked transport, a bounded chunk window, the ready "
+                "pipeline, and a separately owned stage workspace."
+            );
+        }
         if ( options.execution.slab_native_wz_plan_concurrency == 0 )
         {
             throw std::logic_error( "FFTM 4D slab WZ plan concurrency must be positive." );
         }
         if ( ( options.execution.slab_native_wz_plan_concurrency != 1 ||
                options.execution.use_4d_slab_native_wz_ready_pipeline ) &&
-             !options.execution.use_4d_slab_native_wz_communication_layout )
+             !options.execution.use_4d_slab_native_wz_communication_layout &&
+             !options.execution.use_4d_pencil_node_aligned_wz_pipeline )
         {
             throw std::logic_error(
-                "FFTM 4D slab WZ plan concurrency/pipeline options require the WZ communication layout."
+                "FFTM 4D WZ plan concurrency/pipeline options require a slab WZ communication layout or the "
+                "node-aligned pencil WZ pipeline."
             );
         }
         if ( is_reference_parity_pencil_pipeline_( options.pencil_pipeline_3d ) )
@@ -1615,7 +1643,7 @@ private:
             init_options_.execution.use_4d_native_xw_compact_staging
         );
         same_xw_.set_slab_native_wz_communication_layout_enabled(
-            slab_4d_native_wz_communication_layout_enabled_()
+            native_4d_wz_communication_layout_enabled_()
         );
         same_zw_.set_peer_paired_p2p_enabled( init_options_.diagnostics.use_4d_pencil_same_zw_peer_paired );
         same_zw_.set_native_message_layout_enabled( pencil_4d_native_zw_message_layout_enabled_() );
@@ -2087,9 +2115,34 @@ private:
                init_options_.execution.use_4d_slab_native_wz_communication_layout;
     }
 
-    std::size_t slab_4d_native_wz_plan_concurrency_() const
+    bool pencil_4d_p3_degenerate_wz_pipeline_requested_() const
     {
-        if ( !slab_4d_native_wz_communication_layout_enabled_() )
+        return strategy_family_4d == transform_strategy_4d_mpi::pencil_pencil &&
+               init_options_.execution.use_4d_pencil_node_aligned_wz_pipeline;
+    }
+
+    bool pencil_4d_p3_degenerate_wz_pipeline_enabled_() const
+    {
+        if ( !pencil_4d_p3_degenerate_wz_pipeline_requested_() ||
+             !pencil_4d_native_zw_native_spectral_layout_enabled_() )
+        {
+            return false;
+        }
+        const processor_grid pg = partitioning_.get_process_grid();
+        return pg.p1 > 1 && pg.p2 > 1 && pg.p3 == 1;
+    }
+
+    bool native_4d_wz_communication_layout_enabled_() const
+    {
+        // configure_profiling_ runs before partitioning is initialized, so this
+        // predicate intentionally reflects requested policy rather than grid shape.
+        return slab_4d_native_wz_communication_layout_enabled_() ||
+               pencil_4d_p3_degenerate_wz_pipeline_requested_();
+    }
+
+    std::size_t native_4d_wz_plan_concurrency_() const
+    {
+        if ( !native_4d_wz_communication_layout_enabled_() )
             return 1;
         return std::max<std::size_t>(
             1, std::min<std::size_t>( init_options_.execution.slab_native_wz_plan_concurrency,
@@ -2097,10 +2150,21 @@ private:
         );
     }
 
+    bool native_4d_wz_ready_pipeline_enabled_() const
+    {
+        return native_4d_wz_communication_layout_enabled_() &&
+               init_options_.execution.use_4d_slab_native_wz_ready_pipeline;
+    }
+
+    std::size_t slab_4d_native_wz_plan_concurrency_() const
+    {
+        return slab_4d_native_wz_communication_layout_enabled_() ? native_4d_wz_plan_concurrency_() : 1;
+    }
+
     bool slab_4d_native_wz_ready_pipeline_enabled_() const
     {
         return slab_4d_native_wz_communication_layout_enabled_() &&
-               init_options_.execution.use_4d_slab_native_wz_ready_pipeline;
+               native_4d_wz_ready_pipeline_enabled_();
     }
 
     bool pencil_4d_native_zw_native_spectral_layout_enabled_() const
@@ -2711,21 +2775,21 @@ private:
         );
     }
 
-    void add_plan_zw_r2c_slab_communication_layout_( long long int x_size, long long int y_size )
+    void add_plan_zw_r2c_communication_layout_(
+        const std::string &forward_name, const std::string &inverse_name, long long int x_size,
+        long long int y_size, long long int real_stride, long long int real_distance,
+        std::size_t real_y_offset_stride
+    )
     {
-        const std::string forward_name = "forward_zw_slab_communication";
-        const std::string inverse_name = "inverse_zw_slab_communication";
-        const long long int real_x_distance = y_size * static_cast<long long int>( nz_ * nw_ );
-
         base_fft_.template add_plan_2D<::fftm::direction::R2C>(
             forward_name, static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ),
-            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), 1, real_x_distance,
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), real_stride, real_distance,
             static_cast<long long int>( nz_ ), static_cast<long long int>( nw_half_ ), x_size, 1, x_size
         );
         base_fft_.template add_plan_2D<::fftm::direction::C2R>(
             inverse_name, static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ),
             static_cast<long long int>( nz_ ), static_cast<long long int>( nw_half_ ), x_size, 1,
-            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), 1, real_x_distance, x_size
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), real_stride, real_distance, x_size
         );
 
         std::vector<std::string> forward_names( static_cast<std::size_t>( y_size ), forward_name );
@@ -2736,7 +2800,7 @@ private:
         slab_wz_communication_inverse_output_offsets_.resize( static_cast<std::size_t>( y_size ) );
         for ( std::size_t y = 0; y < static_cast<std::size_t>( y_size ); ++y )
         {
-            const std::size_t real_offset = y * nz_ * nw_;
+            const std::size_t real_offset = y * real_y_offset_stride;
             const std::size_t complex_offset = y * static_cast<std::size_t>( x_size ) * nz_ * nw_half_;
             slab_wz_communication_forward_input_offsets_[y]  = real_offset;
             slab_wz_communication_forward_output_offsets_[y] = complex_offset;
@@ -2747,12 +2811,29 @@ private:
         slab_wz_communication_inverse_sequence_ = base_fft_.make_plan_sequence( inverse_names );
         slab_wz_communication_plan_bundle_ = base_fft_.make_r2c_c2r_plan_bundle_2D(
             static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ),
-            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), 1, real_x_distance,
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), real_stride, real_distance,
             static_cast<long long int>( nz_ ), static_cast<long long int>( nw_half_ ), x_size, 1, x_size,
             static_cast<long long int>( nz_ ), static_cast<long long int>( nw_half_ ), x_size, 1,
-            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), 1, real_x_distance, x_size,
-            slab_4d_native_wz_plan_concurrency_()
+            static_cast<long long int>( nz_ ), static_cast<long long int>( nw_ ), real_stride, real_distance, x_size,
+            native_4d_wz_plan_concurrency_()
         );
+    }
+
+    void add_plan_zw_r2c_slab_communication_layout_( long long int x_size, long long int y_size )
+    {
+        SCFD_SAFE_CALL( add_plan_zw_r2c_communication_layout_(
+            "forward_zw_slab_communication", "inverse_zw_slab_communication", x_size, y_size, 1,
+            y_size * static_cast<long long int>( nz_ * nw_ ), nz_ * nw_
+        ) );
+    }
+
+    void add_plan_zw_r2c_pencil_communication_layout_( long long int x_size, long long int y_size )
+    {
+        const long long int xy_stride = x_size * y_size;
+        SCFD_SAFE_CALL( add_plan_zw_r2c_communication_layout_(
+            "forward_zw_pencil_p3_communication", "inverse_zw_pencil_p3_communication", x_size, y_size,
+            xy_stride, 1, static_cast<std::size_t>( x_size )
+        ) );
     }
 
     void add_plan_zw_r2c_pencil_xy_fast_(
@@ -2988,6 +3069,31 @@ private:
             throw std::logic_error( "FFTM 4D slab WZ communication layout is not valid for pencil-pencil" );
         }
         ensure_4d_native_xw_direct_layout_supported_();
+        if ( pencil_4d_p3_degenerate_wz_pipeline_requested_() )
+        {
+            const processor_grid grid = partitioning_.get_process_grid();
+            if ( grid.p1 <= 1 || grid.p2 <= 1 || grid.p3 != 1 )
+            {
+                throw std::logic_error(
+                    "FFTM 4D node-aligned pencil WZ pipeline requires a P1xP2x1 grid with P1>1 and P2>1."
+                );
+            }
+            if ( init_options_.execution.use_4d_pencil_degenerate_local_transposes ||
+                 init_options_.diagnostics.use_4d_pencil_degenerate_xw_slab_path )
+            {
+                throw std::logic_error(
+                    "FFTM 4D node-aligned pencil WZ pipeline is mutually exclusive with the 1xP2x1 "
+                    "degenerate-pencil paths."
+                );
+            }
+            if ( transpose_mode_4d != mpi_transpose_3d_mode::p2p_waitany )
+            {
+                throw std::logic_error( "FFTM 4D node-aligned pencil WZ pipeline requires p2p-waitany" );
+            }
+#ifndef FFTM_ENABLE_DEVICE_AWARE_MPI
+            throw std::logic_error( "FFTM 4D node-aligned pencil WZ pipeline requires device-aware MPI" );
+#endif
+        }
         if ( init_options_.execution.use_4d_pencil_degenerate_local_transposes )
         {
             const processor_grid grid = partitioning_.get_process_grid();
@@ -2999,11 +3105,12 @@ private:
             }
         }
         if ( init_options_.execution.use_4d_native_xw_direct_layout &&
-             !pencil_4d_degenerate_same_xw_native_enabled_() )
+             !pencil_4d_degenerate_same_xw_native_enabled_() &&
+             !pencil_4d_p3_degenerate_wz_pipeline_enabled_() )
         {
             throw std::logic_error(
                 "FFTM 4D pencil native XW direct layout requires native-xzwy spectral layout, a 1xP2x1 "
-                "grid, degenerate local transposes, and the degenerate native same_xw path."
+                    "degenerate native same_xw path, or the P1xP2x1 node-aligned WZ pipeline."
             );
         }
         output_dim_ = transpose3_dim_;
@@ -3018,6 +3125,22 @@ private:
             transpose1_dim_.size_x[myid_i_], transpose1_dim_.size_y[myid_j_], transpose1_dim_.size_w[myid_k_],
             transpose1_dim_.size_z[0]
         ) );
+        if ( pencil_4d_p3_degenerate_wz_pipeline_enabled_() )
+        {
+            const std::size_t pencil_wz_stage2_size =
+                transpose2_dim_.size_x[myid_i_] * transpose2_dim_.size_z[myid_j_] *
+                transpose2_dim_.size_w[myid_k_] * transpose2_dim_.size_y[0];
+            if ( pencil_wz_stage2_size > stage1_4d_size_ )
+            {
+                throw std::logic_error(
+                    "FFTM 4D node-aligned pencil WZ pipeline stage-2 view exceeds the available stage-1 workspace."
+                );
+            }
+            SCFD_SAFE_CALL( pencil_wz_stage2_4d_.init_by_raw_data(
+                scratch_stage1_4d_.raw_ptr(), transpose2_dim_.size_x[myid_i_], transpose2_dim_.size_z[myid_j_],
+                transpose2_dim_.size_w[myid_k_], transpose2_dim_.size_y[0]
+            ) );
+        }
 
         SCFD_SAFE_CALL( same_xy_.init( half_input_dim_, transpose1_dim_, myid_i_, myid_j_, myid_k_ ) );
         SCFD_SAFE_CALL( same_zw_.init( transpose2_dim_, output_dim_, myid_i_, myid_j_, myid_k_ ) );
@@ -3211,6 +3334,22 @@ private:
     void add_4d_plans_( std::integral_constant<transform_strategy_4d_mpi, transform_strategy_4d_mpi::pencil_pencil> )
     {
         FFTM_PROFILE_SCOPED_TIC( "fftm::add_plans_4d_pencil_pencil" );
+        if ( pencil_4d_p3_degenerate_wz_pipeline_enabled_() )
+        {
+            SCFD_SAFE_CALL( add_plan_zw_r2c_pencil_communication_layout_(
+                static_cast<long long int>( input_dim_.size_x[myid_i_] ),
+                static_cast<long long int>( input_dim_.size_y[myid_j_] )
+            ) );
+            SCFD_SAFE_CALL( add_plan_y_c2c_4d_(
+                "forward_y", "inverse_y", transpose2_dim_.size_x[myid_i_], transpose2_dim_.size_z[myid_j_],
+                transpose2_dim_.size_w[myid_k_]
+            ) );
+            SCFD_SAFE_CALL( add_plan_x_c2c_4d_(
+                "forward_x_xzwy_native", "inverse_x_xzwy_native", output_dim_.size_y[myid_i_],
+                output_dim_.size_z[myid_j_], output_dim_.size_w[myid_k_]
+            ) );
+            return;
+        }
         if ( pencil_4d_degenerate_xw_slab_path_enabled_() )
         {
             SCFD_SAFE_CALL( add_plan_zw_r2c_pencil_xy_fast_(
@@ -3993,6 +4132,48 @@ private:
         const real_array4_t &in, stage2_complex4_t &out
     )
     {
+        if ( pencil_4d_p3_degenerate_wz_pipeline_enabled_() )
+        {
+            FFTM_PROFILE_SCOPED_TIC( "fftm::forward_4d_pencil_p3_degenerate_wz_native_spectral" );
+            ensure_slab_wz_communication_plan_bundle_();
+            const std::size_t lanes = base_fft_.r2c_c2r_plan_bundle_lane_count(
+                slab_wz_communication_plan_bundle_
+            );
+            time_native_4d_stage_( "4d/pencil/p3_wz/forward_wz_same_xw_ready_pipeline", [&]() {
+                SCFD_SAFE_CALL( same_xw_.transpose_xyzw_wz_communication_to_xzwy_slab_native_pipelined(
+                    stage0_wz_communication_4d_, pencil_wz_stage2_4d_, transpose_mode_4d, lanes,
+                    [&]( int plane, std::size_t lane ) {
+                        launch_forward_slab_wz_communication_plane_(
+                            in, static_cast<std::size_t>( plane ), lane
+                        );
+                    },
+                    [&]( std::size_t lane ) {
+                        return base_fft_.r2c_c2r_plan_bundle_lane_ready(
+                            slab_wz_communication_plan_bundle_, lane
+                        );
+                    },
+                    [&]() {
+                        base_fft_.synchronize_r2c_c2r_plan_bundle( slab_wz_communication_plan_bundle_ );
+                    }
+                ) );
+            } );
+            time_native_4d_stage_( "4d/pencil/p3_wz/forward_y_fft", [&]() {
+                SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
+                    "forward_y", pencil_wz_stage2_4d_, pencil_wz_stage2_4d_
+                ) );
+            } );
+            time_native_4d_stage_( "4d/pencil/p3_wz/forward_same_zw_xzwy", [&]() {
+                SCFD_SAFE_CALL( same_zw_.transpose_xzwy_to_xzwy_native(
+                    pencil_wz_stage2_4d_, out, transpose_mode_4d
+                ) );
+            } );
+            time_native_4d_stage_( "4d/pencil/p3_wz/forward_x_fft_xzwy", [&]() {
+                SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
+                    "forward_x_xzwy_native", out, out
+                ) );
+            } );
+            return;
+        }
         if ( pencil_4d_degenerate_xw_slab_path_enabled_() )
         {
             FFTM_PROFILE_SCOPED_TIC( "fftm::forward_4d_pencil_pencil_degenerate_xw_slab_native_spectral" );
@@ -4099,6 +4280,49 @@ private:
         stage2_complex4_t &in, real_array4_t &out
     )
     {
+        if ( pencil_4d_p3_degenerate_wz_pipeline_enabled_() )
+        {
+            FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_pencil_p3_degenerate_wz_native_spectral" );
+            time_native_4d_stage_( "4d/pencil/p3_wz/backward_x_fft_xzwy", [&]() {
+                SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
+                    "inverse_x_xzwy_native", in, in
+                ) );
+            } );
+            time_native_4d_stage_( "4d/pencil/p3_wz/backward_same_zw_xzwy", [&]() {
+                SCFD_SAFE_CALL( same_zw_.transpose_xzwy_native_to_xzwy(
+                    in, pencil_wz_stage2_4d_, transpose_mode_4d
+                ) );
+            } );
+            time_native_4d_stage_( "4d/pencil/p3_wz/backward_y_fft", [&]() {
+                SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
+                    "inverse_y", pencil_wz_stage2_4d_, pencil_wz_stage2_4d_
+                ) );
+            } );
+
+            ensure_slab_wz_communication_plan_bundle_();
+            const std::size_t lanes = base_fft_.r2c_c2r_plan_bundle_lane_count(
+                slab_wz_communication_plan_bundle_
+            );
+            time_native_4d_stage_( "4d/pencil/p3_wz/backward_same_xw_wz_ready_pipeline", [&]() {
+                SCFD_SAFE_CALL( same_xw_.transpose_xzwy_to_xyzw_wz_communication_slab_native_pipelined(
+                    pencil_wz_stage2_4d_, stage0_wz_communication_4d_, transpose_mode_4d, lanes,
+                    [&]( int plane, std::size_t lane ) {
+                        launch_inverse_slab_wz_communication_plane_(
+                            out, static_cast<std::size_t>( plane ), lane
+                        );
+                    },
+                    [&]( std::size_t lane ) {
+                        return base_fft_.r2c_c2r_plan_bundle_lane_ready(
+                            slab_wz_communication_plan_bundle_, lane
+                        );
+                    },
+                    [&]() {
+                        base_fft_.synchronize_r2c_c2r_plan_bundle( slab_wz_communication_plan_bundle_ );
+                    }
+                ) );
+            } );
+            return;
+        }
         if ( pencil_4d_degenerate_xw_slab_path_enabled_() )
         {
             FFTM_PROFILE_SCOPED_TIC( "fftm::backward_4d_pencil_pencil_degenerate_xw_slab_native_spectral" );
@@ -4864,6 +5088,7 @@ private:
     slab_wz_communication_complex4_t stage0_wz_communication_4d_;
     stage1_complex4_t stage1_4d_;
     stage2_complex4_t stage2_4d_;
+    stage2_complex4_t pencil_wz_stage2_4d_;
     for_each_4d_t     for_each_4d_;
 };
 

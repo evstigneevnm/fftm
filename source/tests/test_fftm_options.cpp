@@ -13,6 +13,8 @@ int main()
         assert( !options.reporting.print_profile_summary_on_destroy );
         assert( !options.diagnostics.enable_native_stage_timers );
         assert( !options.diagnostics.allow_native_opt0_diagnostic_variants );
+        assert( !options.execution.use_4d_pencil_node_aligned_wz_pipeline );
+        assert( !options.diagnostics.use_4d_pencil_p3_degenerate_wz_pipeline );
     }
 
     {
@@ -99,12 +101,91 @@ int main()
         assert( options.execution.use_4d_pencil_degenerate_same_xw_native );
         assert( options.execution.use_4d_pencil_degenerate_wz_sliced_z_fft );
         assert( !options.diagnostics.use_4d_pencil_degenerate_xw_slab_path );
+        assert( !options.diagnostics.use_4d_pencil_p3_degenerate_wz_pipeline );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology( 16, 8, 2, 8, 1 );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::pencil_pencil,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( fftm::select_production_pencil_pipeline_4d(
+                    topology, fftm::fftm_4d_spectral_layout::native_xzwy, true
+                ) == fftm::fftm_4d_pencil_pipeline::node_aligned_wz );
+        assert( options.execution.use_4d_pencil_node_aligned_wz_pipeline );
+        assert( options.execution.use_4d_native_xw_direct_layout );
+        assert( options.execution.use_4d_native_xw_chunked_transport );
+        assert( options.execution.native_xw_chunk_window == 1 );
+        assert( options.execution.use_4d_native_xw_compact_staging );
+        assert( options.execution.slab_native_wz_plan_concurrency == 4 );
+        assert( options.execution.use_4d_slab_native_wz_ready_pipeline );
+        assert( !options.execution.use_4d_pencil_degenerate_local_transposes );
+        assert( !options.diagnostics.use_4d_pencil_p3_degenerate_wz_pipeline );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology( 32, 8, 4, 8, 1 );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::pencil_pencil,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( options.execution.use_4d_pencil_node_aligned_wz_pipeline );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology(
+            16, 8, 2, 8, 1, fftm::fftm_4d_pencil_pipeline::standard
+        );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::pencil_pencil,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( !options.execution.use_4d_pencil_node_aligned_wz_pipeline );
+        assert( !options.execution.use_4d_native_xw_direct_layout );
+        assert( !options.execution.use_4d_pencil_degenerate_local_transposes );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology( 16, 8, 2, 8, 1 );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::pencil_pencil,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            false,
+            topology
+        );
+        assert( !options.execution.use_4d_pencil_node_aligned_wz_pipeline );
     }
 
     bool rejected = false;
     try
     {
         (void)fftm::production_options_3d( fftm::transform_strategy_3d::pencil_pencil, 0 );
+    }
+    catch ( const std::logic_error & )
+    {
+        rejected = true;
+    }
+    assert( rejected );
+
+    rejected = false;
+    try
+    {
+        const fftm::fftm_4d_production_topology topology(
+            16, 8, 4, 4, 1, fftm::fftm_4d_pencil_pipeline::node_aligned_wz
+        );
+        (void)fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::pencil_pencil,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
     }
     catch ( const std::logic_error & )
     {

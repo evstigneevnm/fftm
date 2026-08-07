@@ -110,7 +110,37 @@ void test_signature_semantics()
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_NODE_COUNT" ) == "1" );
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_RANKS_PER_NODE" ) == "8" );
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_DEVICES_PER_NODE" ) == "8" );
+    assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_POLICY_VERSION" ) == "3" );
+    assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_STRATEGY_3D" ) == "slab-pencil" );
+    assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_GRID_3D" ) == "8x1" );
     assert( !rejects_hardware( config, inventory ) );
+
+    fftm::global_sizes fitted_sizes;
+    fitted_sizes.init( 1920, 1920, 1920 );
+    const auto fitted_config = fftm::autotune::make_default_3d_policy_config( 6, fitted_sizes );
+    assert( fftm::autotune::value_or_empty(
+        fitted_config, "FFTM_AUTOTUNE_STRATEGY_3D"
+    ) == "pencil-slab" );
+    assert( fftm::autotune::value_or_empty( fitted_config, "FFTM_AUTOTUNE_GRID_3D" ) == "1x6" );
+
+    const auto multinode_config = fftm::autotune::make_default_3d_policy_config( 16, sizes );
+    assert( fftm::autotune::value_or_empty(
+        multinode_config, "FFTM_AUTOTUNE_STRATEGY_3D"
+    ) == "slab-pencil" );
+    assert( fftm::autotune::value_or_empty( multinode_config, "FFTM_AUTOTUNE_GRID_3D" ) == "16x1" );
+    assert( fftm::autotune::value_or_empty( multinode_config, "FFTM_AUTOTUNE_MODE" ) == "p2p-waitany" );
+
+    const auto multinode32_config = fftm::autotune::make_default_3d_policy_config( 32, sizes );
+    assert( fftm::autotune::value_or_empty(
+        multinode32_config, "FFTM_AUTOTUNE_STRATEGY_3D"
+    ) == "slab-pencil" );
+    assert( fftm::autotune::value_or_empty( multinode32_config, "FFTM_AUTOTUNE_GRID_3D" ) == "32x1" );
+    assert( fftm::autotune::value_or_empty( multinode32_config, "FFTM_AUTOTUNE_MODE" ) == "alltoallv" );
+
+    const auto large_multinode_config = fftm::autotune::make_default_3d_policy_config( 64, sizes );
+    assert( fftm::autotune::value_or_empty(
+        large_multinode_config, "FFTM_AUTOTUNE_STRATEGY_3D"
+    ) == "pencil-pencil" );
 
     auto replacement_devices = inventory;
     replacement_devices.device_uuids[0] = "replacement-uuid";
@@ -162,27 +192,49 @@ void test_measured_candidate_policy()
     sizes.init( 2048, 2048, 2048 );
 
     fftm::autotune::measured_3d_options options;
+    assert( options.include_alltoallv );
     assert( options.verify_candidate_memory_recovery );
     assert( options.candidate_memory_recovery_tolerance_bytes == 1024ULL * 1024ULL * 1024ULL );
     const auto candidates6 = fftm::autotune::make_measured_3d_candidates( 6, sizes, options );
     const auto candidates7 = fftm::autotune::make_measured_3d_candidates( 7, sizes, options );
     const auto candidates8 = fftm::autotune::make_measured_3d_candidates( 8, sizes, options );
-    assert( candidates6.size() == 2 );
-    assert( candidates7.size() == 2 );
-    assert( candidates8.size() == 2 );
-    assert( fftm::autotune::value_or_empty( candidates6[0], "FFTM_AUTOTUNE_GRID_3D" ) == "2x3" );
-    assert( fftm::autotune::value_or_empty( candidates6[0], "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt1" );
-    assert( fftm::autotune::value_or_empty( candidates7[0], "FFTM_AUTOTUNE_GRID_3D" ) == "7x1" );
-    assert( fftm::autotune::value_or_empty( candidates7[0], "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt0" );
-    assert( fftm::autotune::value_or_empty( candidates8[0], "FFTM_AUTOTUNE_GRID_3D" ) == "4x2" );
-    assert( fftm::autotune::value_or_empty( candidates8[0], "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt0" );
+    assert( candidates6.size() == 6 );
+    assert( candidates7.size() == 6 );
+    assert( candidates8.size() == 6 );
     for ( const auto *candidates : { &candidates6, &candidates7, &candidates8 } )
     {
-        assert( fftm::autotune::value_or_empty( ( *candidates )[0], "FFTM_AUTOTUNE_STRATEGY_3D" ) ==
-                "pencil-pencil" );
-        assert( fftm::autotune::value_or_empty( ( *candidates )[1], "FFTM_AUTOTUNE_STRATEGY_3D" ) ==
-                "slab-pencil" );
+        for ( const char *mode : { "p2p-waitany", "alltoallv" } )
+        {
+            for ( const char *strategy : { "slab-pencil", "pencil-slab", "pencil-pencil" } )
+            {
+                bool found = false;
+                for ( const auto &candidate : *candidates )
+                {
+                    found = found ||
+                        ( fftm::autotune::value_or_empty( candidate, "FFTM_AUTOTUNE_MODE" ) == mode &&
+                          fftm::autotune::value_or_empty( candidate, "FFTM_AUTOTUNE_STRATEGY_3D" ) == strategy );
+                }
+                assert( found );
+            }
+        }
     }
+
+    const auto find_pencil = []( const std::vector<fftm::autotune::config_map> &candidates,
+                                 const char *mode ) -> const fftm::autotune::config_map & {
+        for ( const auto &candidate : candidates )
+        {
+            if ( fftm::autotune::value_or_empty( candidate, "FFTM_AUTOTUNE_STRATEGY_3D" ) == "pencil-pencil" &&
+                 fftm::autotune::value_or_empty( candidate, "FFTM_AUTOTUNE_MODE" ) == mode )
+                return candidate;
+        }
+        throw std::logic_error( "missing pencil-pencil test candidate" );
+    };
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates6, "p2p-waitany" ), "FFTM_AUTOTUNE_GRID_3D" ) == "2x3" );
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates6, "p2p-waitany" ), "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt1" );
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates7, "p2p-waitany" ), "FFTM_AUTOTUNE_GRID_3D" ) == "7x1" );
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates7, "p2p-waitany" ), "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt0" );
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates8, "p2p-waitany" ), "FFTM_AUTOTUNE_GRID_3D" ) == "4x2" );
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates8, "p2p-waitany" ), "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt0" );
 
     options.production_candidates_only = false;
     options.max_pencil_grids = 1;
@@ -280,7 +332,6 @@ void test_measured_cache(
     fftm::autotune::measured_3d_options measured;
     measured.warmup = 1;
     measured.iterations = 3;
-    measured.include_alltoallv = true;
     measured.max_pencil_grids = 2;
 
     fake_candidate_evaluator evaluator;
@@ -291,7 +342,10 @@ void test_measured_cache(
     assert( selected.strategy_3d == "slab-pencil" );
     assert( selected.mode == "p2p-waitany" );
     assert( evaluator.calls > 1 );
-    assert( fftm::autotune::value_or_empty( selected.config, "FFTM_AUTOTUNE_SOURCE" ) == "cpp-measured-v1" );
+    assert( fftm::autotune::value_or_empty( selected.config, "FFTM_AUTOTUNE_SOURCE" ) == "cpp-measured-v2" );
+    assert( fftm::autotune::value_or_empty(
+        selected.config, "FFTM_AUTOTUNE_CANDIDATE_POLICY_VERSION"
+    ) == "2" );
     assert( std::atoi( fftm::autotune::value_or_empty(
         selected.config, "FFTM_AUTOTUNE_CANDIDATE_COUNT"
     ).c_str() ) == evaluator.calls );

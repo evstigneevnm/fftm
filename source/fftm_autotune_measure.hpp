@@ -26,7 +26,7 @@ struct measured_3d_options
     bool        include_pencil_slab = true;
     bool        include_pencil_pencil = true;
     bool        include_p2p_waitany = true;
-    bool        include_alltoallv = false;
+    bool        include_alltoallv = true;
     bool        include_opt0 = true;
     bool        include_opt1 = true;
     bool        include_high_memory_opt0 = false;
@@ -186,21 +186,28 @@ inline std::vector<config_map> make_measured_3d_candidates(
     {
         if ( options.production_candidates_only )
         {
-            config_map policy = make_default_3d_policy_config( num_procs, sizes );
-            policy["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-candidate";
-            policy["FFTM_AUTOTUNE_MODE"] = mode;
-            if ( measured_strategy_enabled_3d(
-                     value_or_empty( policy, "FFTM_AUTOTUNE_STRATEGY_3D" ), options ) )
-            {
-                append_unique_measured_3d_candidate( result, std::move( policy ) );
-            }
-
             if ( options.include_slab_pencil )
             {
                 append_unique_measured_3d_candidate( result, make_measured_3d_candidate(
                     num_procs, sizes, "slab-pencil", mode,
                     static_cast<std::size_t>( num_procs ), 1, "auto"
                 ) );
+            }
+            if ( num_procs > 1 && options.include_pencil_slab )
+            {
+                append_unique_measured_3d_candidate( result, make_measured_3d_candidate(
+                    num_procs, sizes, "pencil-slab", mode, 1,
+                    static_cast<std::size_t>( num_procs ), "auto"
+                ) );
+            }
+            if ( num_procs > 1 && options.include_pencil_pencil )
+            {
+                config_map pencil = make_default_3d_policy_config( num_procs, sizes );
+                set_default_pencil_pencil_3d_policy( pencil, num_procs );
+                pencil["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-candidate";
+                pencil["FFTM_AUTOTUNE_MODE"] = mode;
+                pencil["FFTM_AUTOTUNE_CANDIDATE_ID"] = candidate_id_3d( pencil );
+                append_unique_measured_3d_candidate( result, std::move( pencil ) );
             }
             continue;
         }
@@ -266,7 +273,8 @@ inline selected_3d_config selected_3d_from_config(
 
 inline bool measured_cache_3d( const config_map &config )
 {
-    return value_or_empty( config, "FFTM_AUTOTUNE_SOURCE" ) == "cpp-measured-v1" &&
+    return value_or_empty( config, "FFTM_AUTOTUNE_SOURCE" ) == "cpp-measured-v2" &&
+           value_or_empty( config, "FFTM_AUTOTUNE_CANDIDATE_POLICY_VERSION" ) == "2" &&
            !value_or_empty( config, "FFTM_AUTOTUNE_WINNER_MEDIAN_MS" ).empty();
 }
 
@@ -348,7 +356,8 @@ inline void store_measured_candidates(
     std::size_t winner_index, const measured_3d_options &options
 )
 {
-    winner["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-v1";
+    winner["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-v2";
+    winner["FFTM_AUTOTUNE_CANDIDATE_POLICY_VERSION"] = "2";
     winner["FFTM_AUTOTUNE_MEASURED"] = "1";
     winner["FFTM_AUTOTUNE_MEASURE_WARMUP"] = std::to_string( options.warmup );
     winner["FFTM_AUTOTUNE_MEASURE_ITERATIONS"] = std::to_string( options.iterations );

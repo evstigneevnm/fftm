@@ -113,6 +113,7 @@ def benchmark_key(row: Dict[str, object]) -> Tuple[object, ...]:
         row.get("nw", ""),
         row.get("pencil_same_zw_peer_paired", ""),
         row.get("pencil_same_zw_native_layout", ""),
+        row.get("pencil_p3_degenerate_wz_pipeline", ""),
         row.get("pencil_degenerate_xw_slab_path", ""),
         row.get("pencil_degenerate_local_transposes", ""),
         row.get("pencil_degenerate_same_xw_native", ""),
@@ -168,6 +169,7 @@ def load_benchmark_rows(data_dir: Path) -> List[Dict[str, object]]:
             row.setdefault("slab_native_xw_native_spectral_layout", "")
             row.setdefault("pencil_same_zw_peer_paired", "")
             row.setdefault("pencil_same_zw_native_layout", "")
+            row.setdefault("pencil_p3_degenerate_wz_pipeline", "")
             row.setdefault("pencil_degenerate_xw_slab_path", "")
             row.setdefault("pencil_degenerate_local_transposes", "")
             row.setdefault("pencil_degenerate_same_xw_native", "")
@@ -226,6 +228,7 @@ def load_stage_summary(data_dir: Path) -> List[Dict[str, object]]:
                 as_int(raw.get("slab_native_xw_native_spectral_layout")) or 0,
                 as_int(raw.get("pencil_same_zw_peer_paired")) or 0,
                 as_int(raw.get("pencil_same_zw_native_layout")) or 0,
+                as_int(raw.get("pencil_p3_degenerate_wz_pipeline")) or 0,
                 as_int(raw.get("pencil_degenerate_xw_slab_path")) or 0,
                 as_int(raw.get("pencil_degenerate_local_transposes")) or 0,
                 as_int(raw.get("pencil_degenerate_same_xw_native")) or 0,
@@ -289,6 +292,7 @@ def load_stage_summary(data_dir: Path) -> List[Dict[str, object]]:
             slab_native_xw_native_spectral_layout,
             pencil_same_zw_peer_paired,
             pencil_same_zw_native_layout,
+            pencil_p3_degenerate_wz_pipeline,
             pencil_degenerate_xw_slab_path,
             pencil_degenerate_local_transposes,
             pencil_degenerate_same_xw_native,
@@ -321,6 +325,7 @@ def load_stage_summary(data_dir: Path) -> List[Dict[str, object]]:
                 "slab_native_xw_native_spectral_layout": slab_native_xw_native_spectral_layout,
                 "pencil_same_zw_peer_paired": pencil_same_zw_peer_paired,
                 "pencil_same_zw_native_layout": pencil_same_zw_native_layout,
+                "pencil_p3_degenerate_wz_pipeline": pencil_p3_degenerate_wz_pipeline,
                 "pencil_degenerate_xw_slab_path": pencil_degenerate_xw_slab_path,
                 "pencil_degenerate_local_transposes": pencil_degenerate_local_transposes,
                 "pencil_degenerate_same_xw_native": pencil_degenerate_same_xw_native,
@@ -388,6 +393,7 @@ def main() -> int:
         "slab_native_xw_native_spectral_layout",
         "pencil_same_zw_peer_paired",
         "pencil_same_zw_native_layout",
+        "pencil_p3_degenerate_wz_pipeline",
         "pencil_degenerate_xw_slab_path",
         "pencil_degenerate_local_transposes",
         "pencil_degenerate_same_xw_native",
@@ -434,6 +440,7 @@ def main() -> int:
         "slab_native_xw_native_spectral_layout",
         "pencil_same_zw_peer_paired",
         "pencil_same_zw_native_layout",
+        "pencil_p3_degenerate_wz_pipeline",
         "pencil_degenerate_xw_slab_path",
         "pencil_degenerate_local_transposes",
         "pencil_degenerate_same_xw_native",

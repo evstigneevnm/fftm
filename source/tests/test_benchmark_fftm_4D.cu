@@ -71,7 +71,8 @@ void append_4d_wall_time_rows(
         "source,rank,num_gpus,iteration,local_wall_ms,global_wall_ms,strategy,mode,p1,p2,p3,nx,ny,nz,nw,"
         "native_spectral_layout,native_xw_direct_layout,native_xw_chunk_mib,native_xw_chunk_window,"
         "native_xw_compact_staging,slab_native_work_area_alias,slab_native_wz_communication_layout,"
-        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,directory";
+        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
+        "pencil_p3_degenerate_wz_pipeline,directory";
     std::vector<std::string> rows;
     rows.reserve( local_wall_times.size() );
     for ( std::size_t i = 0; i < local_wall_times.size(); ++i )
@@ -89,6 +90,7 @@ void append_4d_wall_time_rows(
             << ( options.use_4d_slab_native_wz_communication_layout ? 1 : 0 ) << ','
             << options.slab_native_wz_plan_concurrency << ','
             << ( options.use_4d_slab_native_wz_ready_pipeline ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_p3_degenerate_wz_pipeline ? 1 : 0 ) << ','
             << fftm::test::detail::csv_quote( options.directory );
         rows.push_back( row.str() );
     }
@@ -116,6 +118,7 @@ void append_4d_stage_timer_rows(
         "slab_native_work_area_alias,slab_native_work_area_alias_effective,slab_native_wz_communication_layout,"
         "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
         "slab_native_xw_native_spectral_layout,pencil_same_zw_peer_paired,pencil_same_zw_native_layout,"
+        "pencil_p3_degenerate_wz_pipeline,"
         "pencil_degenerate_xw_slab_path,pencil_degenerate_local_transposes,"
         "pencil_degenerate_same_xw_native,pencil_degenerate_wz_sliced_z_fft,directory";
 
@@ -147,6 +150,7 @@ void append_4d_stage_timer_rows(
             << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_same_zw_peer_paired ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_same_zw_native_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_p3_degenerate_wz_pipeline ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_degenerate_xw_slab_path ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_degenerate_local_transposes ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_degenerate_same_xw_native ? 1 : 0 ) << ','
@@ -206,6 +210,7 @@ int run_benchmark_case(
     base_options.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
     base_options.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
     base_options.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
+    base_options.use_4d_pencil_p3_degenerate_wz_pipeline = options.use_4d_pencil_p3_degenerate_wz_pipeline;
     base_options.use_4d_pencil_degenerate_xw_slab_path = options.use_4d_pencil_degenerate_xw_slab_path;
     base_options.use_4d_pencil_degenerate_local_transposes =
         options.use_4d_pencil_degenerate_local_transposes;
@@ -320,11 +325,15 @@ int run_benchmark_case(
         wall_times.push_back( global_wall_ms );
         if ( options.enable_native_stage_timers )
         {
-            append_4d_stage_timer_rows(
-                options, comm_info.num_procs, comm_info.myid, iter, p1, p2, p3,
-                static_cast<double>( global_wall_ms ),
-                distributed_fft.slab_4d_native_work_area_alias_effective(),
-                distributed_fft.native_stage_timings()
+            fftm::test::detail::run_collective_reporting_step(
+                comm_info, "4D native stage-timer CSV reporting", [&]() {
+                    append_4d_stage_timer_rows(
+                        options, comm_info.num_procs, comm_info.myid, iter, p1, p2, p3,
+                        static_cast<double>( global_wall_ms ),
+                        distributed_fft.slab_4d_native_work_area_alias_effective(),
+                        distributed_fft.native_stage_timings()
+                    );
+                }
             );
             distributed_fft.end_native_stage_timing_iteration();
         }
@@ -361,8 +370,12 @@ int run_benchmark_case(
             validation_failed = true;
     }
 
-    append_4d_wall_time_rows(
-        options, comm_info.num_procs, comm_info.myid, p1, p2, p3, local_wall_times, wall_times
+    fftm::test::detail::run_collective_reporting_step(
+        comm_info, "4D wall-time CSV reporting", [&]() {
+            append_4d_wall_time_rows(
+                options, comm_info.num_procs, comm_info.myid, p1, p2, p3, local_wall_times, wall_times
+            );
+        }
     );
     const auto stats = fftm::test::detail::compute_timing_statistics( wall_times );
     fftm::test::detail::log_tracked_memory_with_external_mpi(
@@ -373,6 +386,7 @@ int run_benchmark_case(
             fftm::test::detail::array_bytes( work ), fftm::test::detail::array_bytes( hat ) ) )
     );
 
+    std::string summary_csv_row;
     if ( comm_info.myid == 0 )
     {
         log.info_f(
@@ -412,6 +426,7 @@ int run_benchmark_case(
             << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_same_zw_peer_paired ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_same_zw_native_layout ? 1 : 0 ) << ','
+            << ( options.use_4d_pencil_p3_degenerate_wz_pipeline ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_degenerate_xw_slab_path ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_degenerate_local_transposes ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_degenerate_same_xw_native ? 1 : 0 ) << ','
@@ -422,24 +437,34 @@ int run_benchmark_case(
             << max_norm << ','
             << fftm::test::detail::csv_quote( options.directory );
 
-        fftm::test::detail::append_csv_row(
-            options.directory, "benchmark_fftm_4d.csv",
-            "benchmark,num_gpus,strategy,mode,fft_exec_no_sync,native_stage_timers,slab_native_xw,slab_native_xw_batched_peer_kernels,"
-            "slab_native_xw_tensor_coalesced_kernels,slab_native_xw_vector4_kernels,"
-            "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,native_xw_direct_layout,"
-            "native_xw_chunked_transport,native_xw_chunk_mib,native_xw_chunk_window,native_xw_compact_staging,"
-            "slab_native_work_area_alias,slab_native_work_area_alias_effective,slab_native_wz_communication_layout,"
-            "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
-            "fft_work_bytes,"
-            "transpose_work_bytes,same_xw_work_bytes,sliced_z_work_bytes,stage1_alias_bytes,shared_work_bytes,"
-            "slab_native_xw_native_spectral_layout,pencil_same_zw_peer_paired,pencil_same_zw_native_layout,"
-            "pencil_degenerate_xw_slab_path,pencil_degenerate_local_transposes,"
-            "pencil_degenerate_same_xw_native,pencil_degenerate_wz_sliced_z_fft,"
-            "p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,"
-            "wall_time_scope,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
-            row.str()
-        );
+        summary_csv_row = row.str();
     }
+
+    fftm::test::detail::run_collective_reporting_step(
+        comm_info, "4D summary CSV reporting", [&]() {
+            if ( comm_info.myid == 0 )
+            {
+                fftm::test::detail::append_csv_row(
+                    options.directory, "benchmark_fftm_4d.csv",
+                    "benchmark,num_gpus,strategy,mode,fft_exec_no_sync,native_stage_timers,slab_native_xw,slab_native_xw_batched_peer_kernels,"
+                    "slab_native_xw_tensor_coalesced_kernels,slab_native_xw_vector4_kernels,"
+                    "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,native_xw_direct_layout,"
+                    "native_xw_chunked_transport,native_xw_chunk_mib,native_xw_chunk_window,native_xw_compact_staging,"
+                    "slab_native_work_area_alias,slab_native_work_area_alias_effective,slab_native_wz_communication_layout,"
+                    "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
+                    "fft_work_bytes,"
+                    "transpose_work_bytes,same_xw_work_bytes,sliced_z_work_bytes,stage1_alias_bytes,shared_work_bytes,"
+                    "slab_native_xw_native_spectral_layout,pencil_same_zw_peer_paired,pencil_same_zw_native_layout,"
+                    "pencil_p3_degenerate_wz_pipeline,"
+                    "pencil_degenerate_xw_slab_path,pencil_degenerate_local_transposes,"
+                    "pencil_degenerate_same_xw_native,pencil_degenerate_wz_sliced_z_fft,"
+                    "p1,p2,p3,nx,ny,nz,nw,times,warmup,epsilon,"
+                    "wall_time_scope,avg_wall_ms,stddev_wall_ms,max_l2_diff,directory",
+                    summary_csv_row
+                );
+            }
+        }
+    );
 
     if ( validation_failed && comm_info.myid == 0 )
     {

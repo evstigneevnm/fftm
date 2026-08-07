@@ -525,27 +525,29 @@ inline void set_native_opt0_hot_y_options( config_map &config )
     config["FFTM_USE_NATIVE_OPT0_REFERENCE_LOCAL_PLAN_CONTEXT"] = "0";
 }
 
-inline config_map make_default_3d_policy_config( int num_procs, const global_sizes &sizes )
+inline bool is_power_of_two( std::size_t value )
 {
-    config_map config;
-    config["FFTM_AUTOTUNE_SCHEMA"] = "2";
-    config["FFTM_AUTOTUNE_LIBRARY"] = "fftm";
-    config["FFTM_AUTOTUNE_DIM"] = "3";
-    config["FFTM_AUTOTUNE_NUM_GPUS"] = std::to_string( num_procs );
-    config["FFTM_AUTOTUNE_SIZE_3D"] = sizes_to_string( sizes );
-    config["FFTM_AUTOTUNE_SOURCE"] = "cpp-policy-cache-v2";
+    return value != 0 && ( value & ( value - 1 ) ) == 0;
+}
 
-    if ( num_procs <= 1 )
-    {
-        config["FFTM_AUTOTUNE_STRATEGY_3D"] = "slab-pencil";
-        config["FFTM_AUTOTUNE_BACKEND_3D"] = "native";
-        config["FFTM_AUTOTUNE_MODE"] = "p2p-waitany";
-        config["FFTM_AUTOTUNE_GRID_3D"] = "1x1";
-        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "auto";
-        config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] = "staged";
-        return config;
-    }
+inline bool is_power_of_two_cube( const global_sizes &sizes )
+{
+    return sizes.Nx == sizes.Ny && sizes.Ny == sizes.Nz && is_power_of_two( sizes.Nx );
+}
 
+inline void set_staged_3d_policy(
+    config_map &config, const std::string &strategy, std::size_t p1, std::size_t p2
+)
+{
+    set_common_native_pencil_options( config );
+    config["FFTM_AUTOTUNE_STRATEGY_3D"] = strategy;
+    config["FFTM_AUTOTUNE_GRID_3D"] = std::to_string( p1 ) + "x" + std::to_string( p2 );
+    config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "auto";
+    config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] = "staged";
+}
+
+inline void set_default_pencil_pencil_3d_policy( config_map &config, int num_procs )
+{
     set_common_native_pencil_options( config );
     config["FFTM_AUTOTUNE_STRATEGY_3D"] = "pencil-pencil";
 
@@ -577,6 +579,42 @@ inline config_map make_default_3d_policy_config( int num_procs, const global_siz
         config["FFTM_AUTOTUNE_GRID_3D"] = std::to_string( grid.first ) + "x" + std::to_string( grid.second );
         config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
     }
+}
+
+inline config_map make_default_3d_policy_config( int num_procs, const global_sizes &sizes )
+{
+    if ( num_procs <= 0 )
+        throw std::logic_error( "FFTM 3D policy requires a positive MPI size" );
+
+    config_map config;
+    config["FFTM_AUTOTUNE_SCHEMA"] = "2";
+    config["FFTM_AUTOTUNE_POLICY_VERSION"] = "3";
+    config["FFTM_AUTOTUNE_LIBRARY"] = "fftm";
+    config["FFTM_AUTOTUNE_DIM"] = "3";
+    config["FFTM_AUTOTUNE_NUM_GPUS"] = std::to_string( num_procs );
+    config["FFTM_AUTOTUNE_SIZE_3D"] = sizes_to_string( sizes );
+    config["FFTM_AUTOTUNE_SOURCE"] = "cpp-policy-cache-v3";
+
+    if ( num_procs <= 1 )
+    {
+        set_staged_3d_policy( config, "slab-pencil", 1, 1 );
+        return config;
+    }
+
+    // Release data favors slab-pencil for power-of-two cubes and for the
+    // validated 8-32 rank multinode range. Fitted non-power-of-two cases on a
+    // single node favor pencil-slab. Measured tuning still evaluates every
+    // production strategy and is authoritative whenever it is enabled.
+    if ( num_procs <= 32 && ( is_power_of_two_cube( sizes ) || num_procs > 8 ) )
+    {
+        set_staged_3d_policy( config, "slab-pencil", static_cast<std::size_t>( num_procs ), 1 );
+        if ( num_procs == 32 )
+            config["FFTM_AUTOTUNE_MODE"] = "alltoallv";
+    }
+    else if ( num_procs <= 8 )
+        set_staged_3d_policy( config, "pencil-slab", 1, static_cast<std::size_t>( num_procs ) );
+    else
+        set_default_pencil_pencil_3d_policy( config, num_procs );
     return config;
 }
 
