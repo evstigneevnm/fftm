@@ -15,6 +15,10 @@ int main()
         assert( !options.diagnostics.allow_native_opt0_diagnostic_variants );
         assert( !options.execution.use_4d_pencil_node_aligned_wz_pipeline );
         assert( !options.diagnostics.use_4d_pencil_p3_degenerate_wz_pipeline );
+        assert( !options.diagnostics.use_4d_slab_native_wz_send_overlap );
+        assert( !options.diagnostics.use_4d_slab_native_wz_send_overlap_nonblocking_stream );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window == 0 );
+        assert( !options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order );
     }
 
     {
@@ -54,6 +58,30 @@ int main()
 
     {
         const auto options = fftm::production_options_3d(
+            fftm::transform_strategy_3d::pencil_pencil, 64, true
+        );
+        assert( options.pencil_layout_3d == fftm::fftm_3d_pencil_layout::opt0 );
+        assert( options.pencil_pipeline_3d == fftm::fftm_3d_pencil_pipeline::reference_parity );
+        assert( options.execution.use_native_opt0_default_z_layout );
+        assert( options.execution.use_native_opt0_reference_y_buffer_topology );
+        assert( options.execution.use_native_opt0_tight_y_plan_sequence );
+        assert( options.execution.use_native_opt0_shared_y_plan_handles );
+        assert( options.execution.use_native_opt0_y_group_device_sync );
+        assert( options.execution.use_native_opt0_y_no_sync_exec );
+        assert( options.execution.use_native_opt0_raw_y_plan_array_executor );
+    }
+
+    {
+        const auto options = fftm::production_options_3d(
+            fftm::transform_strategy_3d::pencil_pencil, 64, false
+        );
+        assert( options.pencil_layout_3d == fftm::fftm_3d_pencil_layout::opt1 );
+        assert( options.pencil_pipeline_3d == fftm::fftm_3d_pencil_pipeline::reference );
+        assert( !options.execution.use_native_opt0_default_z_layout );
+    }
+
+    {
+        const auto options = fftm::production_options_3d(
             fftm::transform_strategy_3d::pencil_pencil, 8, false
         );
         assert( options.pencil_layout_3d == fftm::fftm_3d_pencil_layout::opt1 );
@@ -77,6 +105,84 @@ int main()
         assert( options.execution.use_4d_slab_native_wz_communication_layout );
         assert( options.execution.slab_native_wz_plan_concurrency == 4 );
         assert( options.execution.use_4d_slab_native_wz_ready_pipeline );
+        assert( !options.diagnostics.use_4d_slab_native_wz_send_overlap );
+        assert( !options.diagnostics.use_4d_slab_native_wz_send_overlap_nonblocking_stream );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window == 0 );
+        assert( !options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order );
+    }
+
+    {
+        auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true
+        );
+        options.execution.slab_native_wz_backward_plane_credit_window = 8;
+        assert( options.execution.slab_native_wz_plan_concurrency == 4 );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window >
+                options.execution.slab_native_wz_plan_concurrency );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology( 16, 8, 1, 16, 1 );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window == 8 );
+        assert( !options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology( 24, 8, 1, 24, 1 );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window == 6 );
+        assert( options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology( 32, 8, 1, 32, 1 );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window == 4 );
+        assert( options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology(
+            24, 8, 1, 24, 1, fftm::fftm_4d_pencil_pipeline::auto_select,
+            fftm::fftm_4d_slab_backward_credit_policy::disabled
+        );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window == 0 );
+        assert( !options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order );
+    }
+
+    {
+        const fftm::fftm_4d_production_topology topology( 24, 4, 1, 24, 1 );
+        const auto options = fftm::production_options_4d(
+            fftm::transform_strategy_4d_mpi::slab_slab,
+            fftm::fftm_4d_spectral_layout::native_xzwy,
+            true,
+            topology
+        );
+        assert( options.execution.slab_native_wz_backward_plane_credit_window == 0 );
     }
 
     {

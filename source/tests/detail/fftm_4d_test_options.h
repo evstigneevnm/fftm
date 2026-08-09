@@ -60,6 +60,10 @@ struct fftm_4d_test_options
     bool                          use_4d_slab_native_wz_communication_layout = false;
     std::size_t                   slab_native_wz_plan_concurrency = 1;
     bool                          use_4d_slab_native_wz_ready_pipeline = false;
+    bool                          use_4d_slab_native_wz_send_overlap = false;
+    bool                          use_4d_slab_native_wz_send_overlap_nonblocking_stream = false;
+    std::size_t                   slab_native_wz_backward_plane_credit_window = 0;
+    bool                          use_4d_slab_native_wz_backward_cyclic_peer_order = false;
     bool                          use_4d_pencil_same_zw_peer_paired = false;
     bool                          use_4d_pencil_same_zw_native_layout = true;
     bool                          use_4d_pencil_p3_degenerate_wz_pipeline = false;
@@ -483,6 +487,50 @@ inline fftm_4d_test_options parse_fftm_4d_test_options(
             options.use_4d_slab_native_wz_ready_pipeline = false;
             argi += 1;
         }
+        else if ( arg == "--use-4d-slab-native-wz-send-overlap" )
+        {
+            options.use_4d_slab_native_wz_send_overlap = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-send-overlap" )
+        {
+            options.use_4d_slab_native_wz_send_overlap = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-wz-send-overlap-nonblocking-stream" )
+        {
+            options.use_4d_slab_native_wz_send_overlap_nonblocking_stream = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-send-overlap-nonblocking-stream" )
+        {
+            options.use_4d_slab_native_wz_send_overlap_nonblocking_stream = false;
+            argi += 1;
+        }
+        else if ( arg == "--4d-slab-native-wz-backward-plane-credit-window" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --4d-slab-native-wz-backward-plane-credit-window" );
+            options.slab_native_wz_backward_plane_credit_window =
+                static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
+            if ( options.slab_native_wz_backward_plane_credit_window == 0 )
+            {
+                throw std::logic_error(
+                    "--4d-slab-native-wz-backward-plane-credit-window must be positive"
+                );
+            }
+            argi += 2;
+        }
+        else if ( arg == "--use-4d-slab-native-wz-backward-cyclic-peer-order" )
+        {
+            options.use_4d_slab_native_wz_backward_cyclic_peer_order = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-backward-cyclic-peer-order" )
+        {
+            options.use_4d_slab_native_wz_backward_cyclic_peer_order = false;
+            argi += 1;
+        }
         else if ( arg == "--use-4d-pencil-same-zw-peer-paired" )
         {
             options.use_4d_pencil_same_zw_peer_paired = true;
@@ -617,6 +665,13 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_test_opti
         options.use_4d_slab_native_wz_communication_layout;
     init_options.execution.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
     init_options.execution.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
+    init_options.diagnostics.use_4d_slab_native_wz_send_overlap = options.use_4d_slab_native_wz_send_overlap;
+    init_options.diagnostics.use_4d_slab_native_wz_send_overlap_nonblocking_stream =
+        options.use_4d_slab_native_wz_send_overlap_nonblocking_stream;
+    init_options.execution.slab_native_wz_backward_plane_credit_window =
+        options.slab_native_wz_backward_plane_credit_window;
+    init_options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order =
+        options.use_4d_slab_native_wz_backward_cyclic_peer_order;
     init_options.diagnostics.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
     init_options.execution.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
     init_options.execution.use_4d_pencil_node_aligned_wz_pipeline =

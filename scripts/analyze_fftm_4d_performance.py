@@ -128,6 +128,10 @@ def benchmark_key(row: Dict[str, object]) -> Tuple[object, ...]:
         row.get("slab_native_wz_communication_layout", ""),
         row.get("slab_native_wz_plan_concurrency", ""),
         row.get("slab_native_wz_ready_pipeline", ""),
+        row.get("slab_native_wz_send_overlap", ""),
+        row.get("slab_native_wz_send_overlap_nonblocking_stream", ""),
+        row.get("slab_native_wz_backward_plane_credit_window", ""),
+        row.get("slab_native_wz_backward_cyclic_peer_order", ""),
     )
 
 
@@ -184,6 +188,10 @@ def load_benchmark_rows(data_dir: Path) -> List[Dict[str, object]]:
             row.setdefault("slab_native_wz_communication_layout", "")
             row.setdefault("slab_native_wz_plan_concurrency", "")
             row.setdefault("slab_native_wz_ready_pipeline", "")
+            row.setdefault("slab_native_wz_send_overlap", "")
+            row.setdefault("slab_native_wz_send_overlap_nonblocking_stream", "")
+            row.setdefault("slab_native_wz_backward_plane_credit_window", "")
+            row.setdefault("slab_native_wz_backward_cyclic_peer_order", "")
             row.setdefault("fft_work_bytes", "")
             row.setdefault("transpose_work_bytes", "")
             row.setdefault("same_xw_work_bytes", "")
@@ -243,6 +251,10 @@ def load_stage_summary(data_dir: Path) -> List[Dict[str, object]]:
                 as_int(raw.get("slab_native_wz_communication_layout")) or 0,
                 as_int(raw.get("slab_native_wz_plan_concurrency")) or 1,
                 as_int(raw.get("slab_native_wz_ready_pipeline")) or 0,
+                as_int(raw.get("slab_native_wz_send_overlap")) or 0,
+                as_int(raw.get("slab_native_wz_send_overlap_nonblocking_stream")) or 0,
+                as_int(raw.get("slab_native_wz_backward_plane_credit_window")) or 0,
+                as_int(raw.get("slab_native_wz_backward_cyclic_peer_order")) or 0,
             )
             stage = raw.get("stage", "")
             stage_iter_rank_sum[case + (stage, iteration, rank)] += stage_ms
@@ -307,6 +319,10 @@ def load_stage_summary(data_dir: Path) -> List[Dict[str, object]]:
             slab_native_wz_communication_layout,
             slab_native_wz_plan_concurrency,
             slab_native_wz_ready_pipeline,
+            slab_native_wz_send_overlap,
+            slab_native_wz_send_overlap_nonblocking_stream,
+            slab_native_wz_backward_plane_credit_window,
+            slab_native_wz_backward_cyclic_peer_order,
         ) = case
         rows.append(
             {
@@ -340,6 +356,13 @@ def load_stage_summary(data_dir: Path) -> List[Dict[str, object]]:
                 "slab_native_wz_communication_layout": slab_native_wz_communication_layout,
                 "slab_native_wz_plan_concurrency": slab_native_wz_plan_concurrency,
                 "slab_native_wz_ready_pipeline": slab_native_wz_ready_pipeline,
+                "slab_native_wz_send_overlap": slab_native_wz_send_overlap,
+                "slab_native_wz_send_overlap_nonblocking_stream":
+                    slab_native_wz_send_overlap_nonblocking_stream,
+                "slab_native_wz_backward_plane_credit_window":
+                    slab_native_wz_backward_plane_credit_window,
+                "slab_native_wz_backward_cyclic_peer_order":
+                    slab_native_wz_backward_cyclic_peer_order,
                 "stage": stage,
                 "iterations": len(values),
                 "avg_stage_ms": avg_stage,
@@ -408,6 +431,10 @@ def main() -> int:
         "slab_native_wz_communication_layout",
         "slab_native_wz_plan_concurrency",
         "slab_native_wz_ready_pipeline",
+        "slab_native_wz_send_overlap",
+        "slab_native_wz_send_overlap_nonblocking_stream",
+        "slab_native_wz_backward_plane_credit_window",
+        "slab_native_wz_backward_cyclic_peer_order",
         "fft_work_bytes",
         "transpose_work_bytes",
         "same_xw_work_bytes",
@@ -455,6 +482,10 @@ def main() -> int:
         "slab_native_wz_communication_layout",
         "slab_native_wz_plan_concurrency",
         "slab_native_wz_ready_pipeline",
+        "slab_native_wz_send_overlap",
+        "slab_native_wz_send_overlap_nonblocking_stream",
+        "slab_native_wz_backward_plane_credit_window",
+        "slab_native_wz_backward_cyclic_peer_order",
         "stage",
         "iterations",
         "avg_stage_ms",
@@ -469,8 +500,13 @@ def main() -> int:
     display_benchmark_rows = benchmark_rows
 
     raw_benchmark_rows = load_benchmark_rows(data_dir)
-    best_by_gpu = best_rows(raw_benchmark_rows, ["num_gpus"])
-    best_by_gpu_strategy = best_rows(raw_benchmark_rows, ["num_gpus", "strategy"])
+    wall_benchmark_rows = [
+        row
+        for row in raw_benchmark_rows
+        if (as_int(row.get("native_stage_timers")) or 0) == 0
+    ]
+    best_by_gpu = best_rows(wall_benchmark_rows, ["num_gpus"])
+    best_by_gpu_strategy = best_rows(wall_benchmark_rows, ["num_gpus", "strategy"])
     for rows in (best_by_gpu, best_by_gpu_strategy):
         for row in rows:
             for field in ["avg_wall_ms", "stddev_wall_ms", "max_l2_diff", "throughput_gpoints_s", "effective_gflops_s"]:

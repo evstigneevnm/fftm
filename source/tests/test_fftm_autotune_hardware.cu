@@ -110,7 +110,7 @@ void test_signature_semantics()
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_NODE_COUNT" ) == "1" );
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_RANKS_PER_NODE" ) == "8" );
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_DEVICES_PER_NODE" ) == "8" );
-    assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_POLICY_VERSION" ) == "3" );
+    assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_POLICY_VERSION" ) == "4" );
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_STRATEGY_3D" ) == "slab-pencil" );
     assert( fftm::autotune::value_or_empty( config, "FFTM_AUTOTUNE_GRID_3D" ) == "8x1" );
     assert( !rejects_hardware( config, inventory ) );
@@ -141,6 +141,41 @@ void test_signature_semantics()
     assert( fftm::autotune::value_or_empty(
         large_multinode_config, "FFTM_AUTOTUNE_STRATEGY_3D"
     ) == "pencil-pencil" );
+    assert( fftm::autotune::value_or_empty(
+        large_multinode_config, "FFTM_AUTOTUNE_GRID_3D"
+    ) == "8x8" );
+    assert( fftm::autotune::value_or_empty(
+        large_multinode_config, "FFTM_AUTOTUNE_PENCIL_LAYOUT"
+    ) == "opt0" );
+    assert( fftm::autotune::value_or_empty(
+        large_multinode_config, "FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC"
+    ) == "1" );
+
+    const auto multinode96_config = fftm::autotune::make_default_3d_policy_config( 96, sizes, 8 );
+    assert( fftm::autotune::value_or_empty( multinode96_config, "FFTM_AUTOTUNE_GRID_3D" ) == "12x8" );
+    assert( fftm::autotune::value_or_empty(
+        multinode96_config, "FFTM_AUTOTUNE_PENCIL_LAYOUT"
+    ) == "opt0" );
+
+    const auto multinode120_config = fftm::autotune::make_default_3d_policy_config( 120, sizes, 8 );
+    assert( fftm::autotune::value_or_empty( multinode120_config, "FFTM_AUTOTUNE_GRID_3D" ) == "15x8" );
+    assert( fftm::autotune::value_or_empty(
+        multinode120_config, "FFTM_AUTOTUNE_PENCIL_LAYOUT"
+    ) == "opt0" );
+
+    auto stale_policy = large_multinode_config;
+    stale_policy["FFTM_AUTOTUNE_SOURCE"] = "cpp-policy-cache-v3";
+    stale_policy["FFTM_AUTOTUNE_POLICY_VERSION"] = "3";
+    bool stale_policy_rejected = false;
+    try
+    {
+        fftm::autotune::validate_match( stale_policy, 64, sizes );
+    }
+    catch ( const std::logic_error & )
+    {
+        stale_policy_rejected = true;
+    }
+    assert( stale_policy_rejected );
 
     auto replacement_devices = inventory;
     replacement_devices.device_uuids[0] = "replacement-uuid";
@@ -198,9 +233,11 @@ void test_measured_candidate_policy()
     const auto candidates6 = fftm::autotune::make_measured_3d_candidates( 6, sizes, options );
     const auto candidates7 = fftm::autotune::make_measured_3d_candidates( 7, sizes, options );
     const auto candidates8 = fftm::autotune::make_measured_3d_candidates( 8, sizes, options );
+    const auto candidates64 = fftm::autotune::make_measured_3d_candidates( 64, sizes, options, 8 );
     assert( candidates6.size() == 6 );
     assert( candidates7.size() == 6 );
     assert( candidates8.size() == 6 );
+    assert( candidates64.size() == 6 );
     for ( const auto *candidates : { &candidates6, &candidates7, &candidates8 } )
     {
         for ( const char *mode : { "p2p-waitany", "alltoallv" } )
@@ -235,6 +272,11 @@ void test_measured_candidate_policy()
     assert( fftm::autotune::value_or_empty( find_pencil( candidates7, "p2p-waitany" ), "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt0" );
     assert( fftm::autotune::value_or_empty( find_pencil( candidates8, "p2p-waitany" ), "FFTM_AUTOTUNE_GRID_3D" ) == "4x2" );
     assert( fftm::autotune::value_or_empty( find_pencil( candidates8, "p2p-waitany" ), "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt0" );
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates64, "p2p-waitany" ), "FFTM_AUTOTUNE_GRID_3D" ) == "8x8" );
+    assert( fftm::autotune::value_or_empty( find_pencil( candidates64, "p2p-waitany" ), "FFTM_AUTOTUNE_PENCIL_LAYOUT" ) == "opt0" );
+    assert( fftm::autotune::value_or_empty(
+        find_pencil( candidates64, "p2p-waitany" ), "FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC"
+    ) == "1" );
 
     options.production_candidates_only = false;
     options.max_pencil_grids = 1;

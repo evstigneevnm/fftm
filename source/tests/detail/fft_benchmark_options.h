@@ -168,6 +168,13 @@ struct fftm_4d_benchmark_options
     bool                          use_4d_slab_native_wz_communication_layout = false;
     std::size_t                   slab_native_wz_plan_concurrency = 1;
     bool                          use_4d_slab_native_wz_ready_pipeline = false;
+    bool                          use_4d_slab_native_wz_send_overlap = false;
+    bool                          use_4d_slab_native_wz_send_overlap_nonblocking_stream = false;
+    std::size_t                   slab_native_wz_backward_plane_credit_window = 0;
+    bool                          use_4d_slab_native_wz_backward_cyclic_peer_order = false;
+    bool                          use_4d_slab_backward_credit_production_policy = false;
+    ::fftm::fftm_4d_slab_backward_credit_policy slab_backward_credit_production_policy =
+        ::fftm::fftm_4d_slab_backward_credit_policy::auto_select;
     bool                          use_4d_pencil_same_zw_peer_paired = false;
     bool                          use_4d_pencil_same_zw_native_layout = true;
     bool                          use_4d_pencil_p3_degenerate_wz_pipeline = false;
@@ -415,6 +422,9 @@ inline std::string usage_fftm_4d_benchmark( const std::string &binary_name )
            " [--use-4d-native-xw-compact-staging|--no-4d-native-xw-compact-staging]"
            " [--use-4d-slab-native-work-area-alias|--no-4d-slab-native-work-area-alias]"
            " [--use-4d-slab-native-wz-communication-layout|--no-4d-slab-native-wz-communication-layout]"
+           " [--4d-slab-native-wz-backward-plane-credit-window N]"
+           " [--use-4d-slab-native-wz-backward-cyclic-peer-order|--no-4d-slab-native-wz-backward-cyclic-peer-order]"
+           " [--4d-slab-backward-credit-policy auto|disabled --4d-procs-per-node count]"
            " [--use-4d-pencil-same-zw-peer-paired|--no-4d-pencil-same-zw-peer-paired]"
            " [--use-4d-pencil-same-zw-native-layout|--no-4d-pencil-same-zw-native-layout]"
            " [--4d-pencil-production-policy auto|standard|node-aligned-wz --4d-procs-per-node count]"
@@ -1591,6 +1601,72 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
             options.use_4d_slab_native_wz_ready_pipeline = false;
             argi += 1;
         }
+        else if ( arg == "--use-4d-slab-native-wz-send-overlap" )
+        {
+            options.use_4d_slab_native_wz_send_overlap = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-send-overlap" )
+        {
+            options.use_4d_slab_native_wz_send_overlap = false;
+            argi += 1;
+        }
+        else if ( arg == "--use-4d-slab-native-wz-send-overlap-nonblocking-stream" )
+        {
+            options.use_4d_slab_native_wz_send_overlap_nonblocking_stream = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-send-overlap-nonblocking-stream" )
+        {
+            options.use_4d_slab_native_wz_send_overlap_nonblocking_stream = false;
+            argi += 1;
+        }
+        else if ( arg == "--4d-slab-native-wz-backward-plane-credit-window" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --4d-slab-native-wz-backward-plane-credit-window" );
+            options.slab_native_wz_backward_plane_credit_window =
+                static_cast<std::size_t>( std::strtoull( argv[argi + 1], NULL, 10 ) );
+            if ( options.slab_native_wz_backward_plane_credit_window == 0 )
+            {
+                throw std::logic_error(
+                    "--4d-slab-native-wz-backward-plane-credit-window must be positive"
+                );
+            }
+            argi += 2;
+        }
+        else if ( arg == "--use-4d-slab-native-wz-backward-cyclic-peer-order" )
+        {
+            options.use_4d_slab_native_wz_backward_cyclic_peer_order = true;
+            argi += 1;
+        }
+        else if ( arg == "--no-4d-slab-native-wz-backward-cyclic-peer-order" )
+        {
+            options.use_4d_slab_native_wz_backward_cyclic_peer_order = false;
+            argi += 1;
+        }
+        else if ( arg == "--4d-slab-backward-credit-policy" )
+        {
+            if ( argi + 1 >= argc )
+                throw std::logic_error( "Missing value for --4d-slab-backward-credit-policy" );
+            const std::string value = argv[argi + 1];
+            if ( value == "auto" )
+            {
+                options.slab_backward_credit_production_policy =
+                    ::fftm::fftm_4d_slab_backward_credit_policy::auto_select;
+            }
+            else if ( value == "disabled" || value == "off" || value == "fallback" )
+            {
+                options.slab_backward_credit_production_policy =
+                    ::fftm::fftm_4d_slab_backward_credit_policy::disabled;
+            }
+            else
+            {
+                throw std::logic_error( "Unknown 4D slab backward-credit policy '" + value + "'" );
+            }
+            options.use_4d_slab_backward_credit_production_policy = true;
+            argi += 2;
+        }
         else if ( arg == "--use-4d-pencil-same-zw-peer-paired" )
         {
             options.use_4d_pencil_same_zw_peer_paired = true;
@@ -1744,6 +1820,42 @@ parse_fftm_4d_benchmark_options( int argc, char *argv[], int num_procs, const st
         options.p3            = std::get<2>( grid );
     }
 
+    if ( options.use_4d_slab_backward_credit_production_policy )
+    {
+        if ( options.run_all || options.strategy != fftm_4d_strategy_kind::slab_slab )
+            throw std::logic_error( "4D slab backward-credit policy requires --strategy slab-slab" );
+        if ( options.procs_per_node == 0 )
+            throw std::logic_error( "4D slab backward-credit policy requires --4d-procs-per-node" );
+        if ( options.slab_backward_credit_production_policy ==
+                 ::fftm::fftm_4d_slab_backward_credit_policy::auto_select &&
+             ( options.mode != ::fftm::mpi_transpose_3d_mode::p2p_waitany ||
+               !options.direct_p2p_cuda_aware ||
+               !options.use_4d_slab_native_xw_native_spectral_layout ) )
+        {
+            throw std::logic_error(
+                "automatic 4D slab backward credits require p2p-waitany, device-aware MPI, and native-xzwy"
+            );
+        }
+
+        const ::fftm::fftm_4d_production_topology topology(
+            static_cast<std::size_t>( num_procs ), options.procs_per_node,
+            options.p1, options.p2, options.p3, ::fftm::fftm_4d_pencil_pipeline::auto_select,
+            options.slab_backward_credit_production_policy
+        );
+        const ::fftm::fftm_init_options selected = ::fftm::production_options_4d(
+            ::fftm::transform_strategy_4d_mpi::slab_slab,
+            options.use_4d_slab_native_xw_native_spectral_layout
+                ? ::fftm::fftm_4d_spectral_layout::native_xzwy
+                : ::fftm::fftm_4d_spectral_layout::public_yzwx,
+            options.direct_p2p_cuda_aware,
+            topology
+        );
+        options.slab_native_wz_backward_plane_credit_window =
+            selected.execution.slab_native_wz_backward_plane_credit_window;
+        options.use_4d_slab_native_wz_backward_cyclic_peer_order =
+            selected.execution.use_4d_slab_native_wz_backward_cyclic_peer_order;
+    }
+
     if ( options.use_4d_pencil_production_policy )
     {
         if ( options.run_all || options.strategy != fftm_4d_strategy_kind::pencil_pencil )
@@ -1884,6 +1996,13 @@ inline ::fftm::fftm_init_options make_fftm_init_options( const fftm_4d_benchmark
         options.use_4d_slab_native_wz_communication_layout;
     init_options.execution.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
     init_options.execution.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
+    init_options.diagnostics.use_4d_slab_native_wz_send_overlap = options.use_4d_slab_native_wz_send_overlap;
+    init_options.diagnostics.use_4d_slab_native_wz_send_overlap_nonblocking_stream =
+        options.use_4d_slab_native_wz_send_overlap_nonblocking_stream;
+    init_options.execution.slab_native_wz_backward_plane_credit_window =
+        options.slab_native_wz_backward_plane_credit_window;
+    init_options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order =
+        options.use_4d_slab_native_wz_backward_cyclic_peer_order;
     init_options.diagnostics.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
     init_options.execution.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
     init_options.execution.use_4d_pencil_node_aligned_wz_pipeline =

@@ -58,6 +58,25 @@ enum class fftm_4d_pencil_pipeline
     node_aligned_wz
 };
 
+enum class fftm_4d_slab_backward_credit_policy
+{
+    auto_select,
+    disabled
+};
+
+struct fftm_4d_slab_backward_credit_selection
+{
+    std::size_t window;
+    bool        cyclic_peer_order;
+
+    fftm_4d_slab_backward_credit_selection(
+        std::size_t window_ = 0, bool cyclic_peer_order_ = false
+    )
+        : window( window_ ), cyclic_peer_order( cyclic_peer_order_ )
+    {
+    }
+};
+
 inline const char *fftm_4d_pencil_pipeline_name( fftm_4d_pencil_pipeline pipeline )
 {
     switch ( pipeline )
@@ -80,19 +99,23 @@ struct fftm_4d_production_topology
     std::size_t             p2;
     std::size_t             p3;
     fftm_4d_pencil_pipeline pencil_pipeline;
+    fftm_4d_slab_backward_credit_policy slab_backward_credit_policy;
 
     fftm_4d_production_topology()
         : num_procs( 1 ), procs_per_node( 1 ), p1( 1 ), p2( 1 ), p3( 1 ),
-          pencil_pipeline( fftm_4d_pencil_pipeline::auto_select )
+          pencil_pipeline( fftm_4d_pencil_pipeline::auto_select ),
+          slab_backward_credit_policy( fftm_4d_slab_backward_credit_policy::auto_select )
     {
     }
 
     fftm_4d_production_topology(
         std::size_t num_procs_, std::size_t procs_per_node_, std::size_t p1_, std::size_t p2_,
-        std::size_t p3_, fftm_4d_pencil_pipeline pencil_pipeline_ = fftm_4d_pencil_pipeline::auto_select
+        std::size_t p3_, fftm_4d_pencil_pipeline pencil_pipeline_ = fftm_4d_pencil_pipeline::auto_select,
+        fftm_4d_slab_backward_credit_policy slab_backward_credit_policy_ =
+            fftm_4d_slab_backward_credit_policy::auto_select
     )
         : num_procs( num_procs_ ), procs_per_node( procs_per_node_ ), p1( p1_ ), p2( p2_ ), p3( p3_ ),
-          pencil_pipeline( pencil_pipeline_ )
+          pencil_pipeline( pencil_pipeline_ ), slab_backward_credit_policy( slab_backward_credit_policy_ )
     {
     }
 };
@@ -256,6 +279,10 @@ struct fftm_execution_options
     bool        use_4d_slab_native_wz_communication_layout = false;
     std::size_t slab_native_wz_plan_concurrency = 1;
     bool        use_4d_slab_native_wz_ready_pipeline = false;
+    // Bounds backward communication independently of FFT plan-lane ownership.
+    // Zero retains the unbounded per-peer fallback.
+    std::size_t slab_native_wz_backward_plane_credit_window = 0;
+    bool        use_4d_slab_native_wz_backward_cyclic_peer_order = false;
     bool        use_4d_pencil_same_zw_native_layout = true;
     bool        use_4d_pencil_node_aligned_wz_pipeline = false;
     bool        use_4d_pencil_degenerate_local_transposes = false;
@@ -301,6 +328,10 @@ struct fftm_diagnostic_options
     bool        use_4d_slab_native_xw_vector4_kernels = false;
     bool        use_4d_slab_native_xw_tiled_kernels = false;
     bool        use_4d_slab_native_xw_layout_stage = false;
+    // Overlap forward XY execution with sends that read the separate WZ workspace.
+    bool        use_4d_slab_native_wz_send_overlap = false;
+    // Bind the overlapped XY plan to an abstraction-owned nonblocking stream.
+    bool        use_4d_slab_native_wz_send_overlap_nonblocking_stream = false;
     bool        use_4d_pencil_same_zw_peer_paired = false;
     // Deprecated benchmark compatibility alias. Prefer the production-owned
     // use_4d_pencil_node_aligned_wz_pipeline execution option.
@@ -325,6 +356,18 @@ struct fftm_init_options
     detail::fftm_diagnostic_options diagnostics;
 };
 
+inline fftm_3d_pencil_layout select_production_pencil_layout_3d(
+    int num_procs, bool device_aware_mpi = true
+)
+{
+    if ( num_procs <= 0 )
+        throw std::logic_error( "fftm 3D production policy requires a positive process count" );
+
+    const bool use_opt0 =
+        device_aware_mpi && ( num_procs == 7 || num_procs == 8 || num_procs >= 64 );
+    return use_opt0 ? fftm_3d_pencil_layout::opt0 : fftm_3d_pencil_layout::opt1;
+}
+
 inline fftm_init_options production_options_3d(
     transform_strategy_3d strategy, int num_procs, bool device_aware_mpi = true
 )
@@ -342,8 +385,8 @@ inline fftm_init_options production_options_3d(
     options.execution.use_p2p_byte_transfer = device_aware_mpi;
     options.execution.large_count_p2p_transport = fftm_3d_large_count_p2p_transport::hindexed;
 
-    const bool use_opt0 = device_aware_mpi && ( num_procs == 7 || num_procs == 8 );
-    options.pencil_layout_3d = use_opt0 ? fftm_3d_pencil_layout::opt0 : fftm_3d_pencil_layout::opt1;
+    options.pencil_layout_3d = select_production_pencil_layout_3d( num_procs, device_aware_mpi );
+    const bool use_opt0 = options.pencil_layout_3d == fftm_3d_pencil_layout::opt0;
     if ( use_opt0 )
     {
         options.execution.use_native_opt0_default_z_layout = true;
@@ -402,6 +445,34 @@ inline fftm_4d_pencil_pipeline select_production_pencil_pipeline_4d(
     return fftm_4d_pencil_pipeline::standard;
 }
 
+inline fftm_4d_slab_backward_credit_selection select_production_slab_backward_credit_4d(
+    const fftm_4d_production_topology &topology, fftm_4d_spectral_layout spectral_layout,
+    bool device_aware_mpi
+)
+{
+    if ( topology.num_procs == 0 || topology.procs_per_node == 0 )
+        throw std::logic_error( "fftm 4D production topology dimensions must be positive" );
+
+    if ( topology.slab_backward_credit_policy == fftm_4d_slab_backward_credit_policy::disabled ||
+         spectral_layout != fftm_4d_spectral_layout::native_xzwy || !device_aware_mpi ||
+         topology.procs_per_node != 8 )
+    {
+        return fftm_4d_slab_backward_credit_selection();
+    }
+
+    switch ( topology.num_procs )
+    {
+    case 16:
+        return fftm_4d_slab_backward_credit_selection( 8, false );
+    case 24:
+        return fftm_4d_slab_backward_credit_selection( 6, true );
+    case 32:
+        return fftm_4d_slab_backward_credit_selection( 4, true );
+    default:
+        return fftm_4d_slab_backward_credit_selection();
+    }
+}
+
 inline fftm_init_options production_options_4d(
     transform_strategy_4d_mpi strategy,
     fftm_4d_spectral_layout spectral_layout,
@@ -426,6 +497,11 @@ inline fftm_init_options production_options_4d(
             options.execution.use_4d_slab_native_wz_communication_layout = true;
             options.execution.slab_native_wz_plan_concurrency = 4;
             options.execution.use_4d_slab_native_wz_ready_pipeline = true;
+            const fftm_4d_slab_backward_credit_selection credit =
+                select_production_slab_backward_credit_4d( topology, spectral_layout, device_aware_mpi );
+            options.execution.slab_native_wz_backward_plane_credit_window = credit.window;
+            options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order =
+                credit.cyclic_peer_order;
         }
     }
     else

@@ -183,6 +183,19 @@ struct hip_runtime_api
         HIP_SAFE_CALL( hipStreamSynchronize( stream ) );
     }
 
+    static stream_t create_nonblocking_stream()
+    {
+        stream_t stream = nullptr;
+        HIP_SAFE_CALL( hipStreamCreateWithFlags( &stream, hipStreamNonBlocking ) );
+        return stream;
+    }
+
+    static void destroy_stream( stream_t stream )
+    {
+        if ( stream != nullptr )
+            HIP_SAFE_CALL( hipStreamDestroy( stream ) );
+    }
+
     static stream_t default_stream()
     {
         return stream_t{};

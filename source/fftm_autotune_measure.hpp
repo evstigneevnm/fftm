@@ -165,7 +165,8 @@ inline int measured_workspace_priority_3d( const config_map &candidate )
 }
 
 inline std::vector<config_map> make_measured_3d_candidates(
-    int num_procs, const global_sizes &sizes, const measured_3d_options &options
+    int num_procs, const global_sizes &sizes, const measured_3d_options &options,
+    std::size_t ranks_per_node = 0
 )
 {
     if ( num_procs <= 0 )
@@ -202,8 +203,10 @@ inline std::vector<config_map> make_measured_3d_candidates(
             }
             if ( num_procs > 1 && options.include_pencil_pencil )
             {
-                config_map pencil = make_default_3d_policy_config( num_procs, sizes );
-                set_default_pencil_pencil_3d_policy( pencil, num_procs );
+                config_map pencil = make_default_3d_policy_config(
+                    num_procs, sizes, ranks_per_node
+                );
+                set_default_pencil_pencil_3d_policy( pencil, num_procs, ranks_per_node );
                 pencil["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-candidate";
                 pencil["FFTM_AUTOTUNE_MODE"] = mode;
                 pencil["FFTM_AUTOTUNE_CANDIDATE_ID"] = candidate_id_3d( pencil );
@@ -480,7 +483,9 @@ inline selected_3d_config load_or_measure_3d_config(
         );
     }
 
-    const auto candidate_configs = make_measured_3d_candidates( comm.num_procs, sizes, measurement_options );
+    const auto candidate_configs = make_measured_3d_candidates(
+        comm.num_procs, sizes, measurement_options, homogeneous_ranks_per_node( inventory )
+    );
     prepare_evaluator_candidates( evaluator, candidate_configs, 0 );
     std::vector<measured_3d_candidate> candidates;
     candidates.reserve( candidate_configs.size() );

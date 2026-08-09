@@ -6,9 +6,9 @@ usage()
     cat <<'EOF'
 Usage: scripts/run_cpp_autotune_policy_guard.sh [--inside-allocation]
 
-Validates the release C++ 3D policy cache on 16 and 32 GPUs. Each case creates
+Validates the release C++ 3D policy cache on selected GPU counts. Each case creates
 the cache, executes a 2048^3 Poisson solve, reuses the cache in a second solve,
-and verifies the selected slab-pencil grid. The launcher also runs the
+and verifies the selected production strategy, grid, and layout. The launcher also runs the
 two-rank collective-reporting regression test from the SQSH.
 
 Useful overrides:
@@ -21,7 +21,8 @@ Useful overrides:
   FFTM_POLICY_GUARD_APPLICATION_WARMUP default: 0
   FFTM_POLICY_GUARD_STEP_TIME         default: 00:30:00
   FFTM_POLICY_GUARD_ALLOCATION_TIME   default: 02:00:00
-  FFTM_POLICY_GUARD_SALLOC_EXTRA_ARGS default: --exclude=cn13
+  FFTM_POLICY_GUARD_FORBIDDEN_NODES   default: cn13,cn24,cn43
+  FFTM_POLICY_GUARD_SALLOC_EXTRA_ARGS default: --exclude=<forbidden nodes>
   FFTM_POLICY_GUARD_DRY_RUN=0|1
 EOF
 }
@@ -54,7 +55,8 @@ APPLICATION_TIMES=${FFTM_POLICY_GUARD_APPLICATION_TIMES:-1}
 APPLICATION_WARMUP=${FFTM_POLICY_GUARD_APPLICATION_WARMUP:-0}
 STEP_TIME=${FFTM_POLICY_GUARD_STEP_TIME:-00:30:00}
 ALLOCATION_TIME=${FFTM_POLICY_GUARD_ALLOCATION_TIME:-02:00:00}
-SALLOC_EXTRA_ARGS=${FFTM_POLICY_GUARD_SALLOC_EXTRA_ARGS:---exclude=cn13}
+FORBIDDEN_NODES=${FFTM_POLICY_GUARD_FORBIDDEN_NODES:-cn13,cn24,cn43}
+SALLOC_EXTRA_ARGS=${FFTM_POLICY_GUARD_SALLOC_EXTRA_ARGS:---exclude=${FORBIDDEN_NODES}}
 DRY_RUN=${FFTM_POLICY_GUARD_DRY_RUN:-0}
 
 case "${DRY_RUN}" in
@@ -117,6 +119,7 @@ if [[ "${DRY_RUN}" == 0 && -z "${SLURM_JOB_ID:-}" ]]; then
         FFTM_POLICY_GUARD_APPLICATION_WARMUP="${APPLICATION_WARMUP}" \
         FFTM_POLICY_GUARD_STEP_TIME="${STEP_TIME}" \
         FFTM_POLICY_GUARD_ALLOCATION_TIME="${ALLOCATION_TIME}" \
+        FFTM_POLICY_GUARD_FORBIDDEN_NODES="${FORBIDDEN_NODES}" \
         FFTM_POLICY_GUARD_SALLOC_EXTRA_ARGS="${SALLOC_EXTRA_ARGS}" \
         salloc \
         --job-name=fftm-policy-guard \
@@ -151,8 +154,9 @@ allocated_hosts=()
 if [[ "${DRY_RUN}" == 0 ]]; then
     scontrol show hostnames "${SLURM_JOB_NODELIST}" > "${DATA_DIR}/hosts.txt"
     mapfile -t allocated_hosts < "${DATA_DIR}/hosts.txt"
-    if grep -Fxq cn13 "${DATA_DIR}/hosts.txt"; then
-        echo "Refusing to run on excluded node cn13." >&2
+    forbidden_pattern="^($(printf '%s' "${FORBIDDEN_NODES}" | sed 's/,/|/g'))$"
+    if grep -Eq "${forbidden_pattern}" "${DATA_DIR}/hosts.txt"; then
+        echo "Refusing to run on a forbidden node (${FORBIDDEN_NODES})." >&2
         exit 2
     fi
     scontrol show job "${SLURM_JOB_ID}" > "${DATA_DIR}/slurm_job.txt"
@@ -166,8 +170,9 @@ fi
     printf 'size_3d=%s\n' "${SIZE}"
     printf 'application_times=%s\n' "${APPLICATION_TIMES}"
     printf 'application_warmup=%s\n' "${APPLICATION_WARMUP}"
-    printf 'policy_source=cpp-policy-cache-v3\n'
-    printf 'policy_version=3\n'
+    printf 'policy_source=cpp-policy-cache-v4\n'
+    printf 'policy_version=4\n'
+    printf 'forbidden_nodes=%s\n' "${FORBIDDEN_NODES}"
     printf 'slurm_job_id=%s\n' "${SLURM_JOB_ID:-dry-run}"
     printf 'created_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "${DATA_DIR}/config.env"
@@ -207,9 +212,17 @@ for gpus in "${gpu_values[@]}"; do
     nodes=$((gpus / GPUS_PER_NODE))
     case_dir="${DATA_DIR}/${gpus}g"
     mkdir -p "${case_dir}"
+    expected_strategy=slab-pencil
     expected_grid="${gpus}x1"
     expected_mode=p2p-waitany
-    (( gpus == 32 )) && expected_mode=alltoallv
+    expected_layout=auto
+    if (( gpus == 32 )); then
+        expected_mode=alltoallv
+    elif (( gpus >= 64 )); then
+        expected_strategy=pencil-pencil
+        expected_grid="$((gpus / GPUS_PER_NODE))x${GPUS_PER_NODE}"
+        expected_layout=opt0
+    fi
     case_node_args=()
     if [[ "${DRY_RUN}" == 0 ]]; then
         case_host_list=$(IFS=,; printf '%s' "${allocated_hosts[*]:0:${nodes}}")
@@ -277,13 +290,21 @@ for gpus in "${gpu_values[@]}"; do
     fi
 
     cache_file="${case_dir}/autotune.env"
-    grep -Fxq 'FFTM_AUTOTUNE_SOURCE=cpp-policy-cache-v3' "${cache_file}"
-    grep -Fxq 'FFTM_AUTOTUNE_POLICY_VERSION=3' "${cache_file}"
-    grep -Fxq 'FFTM_AUTOTUNE_STRATEGY_3D=slab-pencil' "${cache_file}"
+    grep -Fxq 'FFTM_AUTOTUNE_SOURCE=cpp-policy-cache-v4' "${cache_file}"
+    grep -Fxq 'FFTM_AUTOTUNE_POLICY_VERSION=4' "${cache_file}"
+    grep -Fxq "FFTM_AUTOTUNE_STRATEGY_3D=${expected_strategy}" "${cache_file}"
     grep -Fxq "FFTM_AUTOTUNE_GRID_3D=${expected_grid}" "${cache_file}"
     grep -Fxq "FFTM_AUTOTUNE_MODE=${expected_mode}" "${cache_file}"
-    grep -q "strategy=slab-pencil mode=${expected_mode} grid=${expected_grid}.*source=created" "${case_dir}/create.log"
-    grep -q "strategy=slab-pencil mode=${expected_mode} grid=${expected_grid}.*source=cache" "${case_dir}/cache.log"
+    grep -Fxq "FFTM_AUTOTUNE_PENCIL_LAYOUT=${expected_layout}" "${cache_file}"
+    if [[ "${expected_layout}" == opt0 ]]; then
+        grep -Fxq 'FFTM_AUTOTUNE_PENCIL_PIPELINE=reference-parity' "${cache_file}"
+        grep -Fxq 'FFTM_USE_NATIVE_OPT0_DEFAULT_Z_LAYOUT=1' "${cache_file}"
+        grep -Fxq 'FFTM_USE_NATIVE_OPT0_REFERENCE_Y_BUFFER_TOPOLOGY=1' "${cache_file}"
+        grep -Fxq 'FFTM_USE_NATIVE_OPT0_Y_NO_SYNC_EXEC=1' "${cache_file}"
+        grep -Fxq 'FFTM_USE_NATIVE_OPT0_RAW_Y_PLAN_ARRAY_EXECUTOR=1' "${cache_file}"
+    fi
+    grep -q "strategy=${expected_strategy} mode=${expected_mode} grid=${expected_grid}.*layout=${expected_layout}.*source=created" "${case_dir}/create.log"
+    grep -q "strategy=${expected_strategy} mode=${expected_mode} grid=${expected_grid}.*layout=${expected_layout}.*source=cache" "${case_dir}/cache.log"
     printf '%s,%s,validate,passed,0,%s\n' \
         "${gpus}" "${nodes}" "${case_dir}" >> "${DATA_DIR}/status.csv"
 done

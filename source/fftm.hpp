@@ -1236,6 +1236,12 @@ private:
         release_native_opt0_default_z_scratch_if_aliased_();
         SCFD_SAFE_CALL( bind_native_opt0_y_parallel_fft_plans_() );
         SCFD_SAFE_CALL( bind_native_4d_degen_wz_sliced_z_fft_plans_() );
+        if ( slab_4d_native_wz_send_overlap_nonblocking_stream_enabled_() )
+        {
+            SCFD_SAFE_CALL(
+                base_fft_.bind_plan_to_owned_nonblocking_stream( "forward_xy_xzwy_native" )
+            );
+        }
         log_shared_workspace_sizes_();
         if ( shared_host_work_size_ != 0 )
         {
@@ -1532,6 +1538,46 @@ private:
                 "direct layout, chunked transport, and a bounded chunk window."
             );
         }
+        if ( options.diagnostics.use_4d_slab_native_wz_send_overlap &&
+             ( strategy_family_4d != transform_strategy_4d_mpi::slab_slab ||
+               transpose_mode_4d != mpi_transpose_3d_mode::p2p_waitany ||
+               options.spectral_layout_4d != fftm_4d_spectral_layout::native_xzwy ||
+               !options.execution.direct_p2p_cuda_aware ||
+               !options.execution.use_4d_slab_native_wz_communication_layout ||
+               !options.execution.use_4d_slab_native_wz_ready_pipeline ) )
+        {
+            throw std::logic_error(
+                "FFTM 4D slab WZ send overlap requires slab-slab, p2p-waitany, device-aware MPI, "
+                "native-xzwy spectral layout, the WZ communication layout, and the ready pipeline."
+            );
+        }
+        if ( options.diagnostics.use_4d_slab_native_wz_send_overlap_nonblocking_stream &&
+             !options.diagnostics.use_4d_slab_native_wz_send_overlap )
+        {
+            throw std::logic_error(
+                "FFTM 4D slab WZ send-overlap nonblocking stream requires send overlap to be enabled."
+            );
+        }
+        if ( options.execution.slab_native_wz_backward_plane_credit_window != 0 &&
+             ( strategy_family_4d != transform_strategy_4d_mpi::slab_slab ||
+               transpose_mode_4d != mpi_transpose_3d_mode::p2p_waitany ||
+               options.spectral_layout_4d != fftm_4d_spectral_layout::native_xzwy ||
+               !options.execution.direct_p2p_cuda_aware ||
+               !options.execution.use_4d_slab_native_wz_communication_layout ||
+               !options.execution.use_4d_slab_native_wz_ready_pipeline ) )
+        {
+            throw std::logic_error(
+                "FFTM 4D backward WZ plane credits require slab-slab, p2p-waitany, device-aware MPI, "
+                "native-xzwy spectral layout, the WZ communication layout, and the ready pipeline."
+            );
+        }
+        if ( options.execution.use_4d_slab_native_wz_backward_cyclic_peer_order &&
+             options.execution.slab_native_wz_backward_plane_credit_window == 0 )
+        {
+            throw std::logic_error(
+                "FFTM 4D backward WZ cyclic peer order requires a nonzero plane-credit window."
+            );
+        }
         if ( options.execution.use_4d_pencil_node_aligned_wz_pipeline &&
              ( strategy_family_4d != transform_strategy_4d_mpi::pencil_pencil ||
                options.spectral_layout_4d != fftm_4d_spectral_layout::native_xzwy ||
@@ -1644,6 +1690,10 @@ private:
         );
         same_xw_.set_slab_native_wz_communication_layout_enabled(
             native_4d_wz_communication_layout_enabled_()
+        );
+        same_xw_.set_slab_native_wz_backward_plane_credit_scheduler(
+            init_options_.execution.slab_native_wz_backward_plane_credit_window,
+            init_options_.execution.use_4d_slab_native_wz_backward_cyclic_peer_order
         );
         same_zw_.set_peer_paired_p2p_enabled( init_options_.diagnostics.use_4d_pencil_same_zw_peer_paired );
         same_zw_.set_native_message_layout_enabled( pencil_4d_native_zw_message_layout_enabled_() );
@@ -2165,6 +2215,18 @@ private:
     {
         return slab_4d_native_wz_communication_layout_enabled_() &&
                native_4d_wz_ready_pipeline_enabled_();
+    }
+
+    bool slab_4d_native_wz_send_overlap_enabled_() const
+    {
+        return slab_4d_native_wz_ready_pipeline_enabled_() &&
+               init_options_.diagnostics.use_4d_slab_native_wz_send_overlap;
+    }
+
+    bool slab_4d_native_wz_send_overlap_nonblocking_stream_enabled_() const
+    {
+        return slab_4d_native_wz_send_overlap_enabled_() &&
+               init_options_.diagnostics.use_4d_slab_native_wz_send_overlap_nonblocking_stream;
     }
 
     bool pencil_4d_native_zw_native_spectral_layout_enabled_() const
@@ -4084,24 +4146,63 @@ private:
                 const std::size_t lanes = base_fft_.r2c_c2r_plan_bundle_lane_count(
                     slab_wz_communication_plan_bundle_
                 );
-                time_native_4d_stage_( "4d/slab/forward_wz_same_xw_ready_pipeline", [&]() {
-                    SCFD_SAFE_CALL( same_xw_.transpose_xyzw_wz_communication_to_xzwy_slab_native_pipelined(
-                        stage0_wz_communication_4d_, out, transpose_mode_4d, lanes,
-                        [&]( int plane, std::size_t lane ) {
-                            launch_forward_slab_wz_communication_plane_(
-                                in, static_cast<std::size_t>( plane ), lane
-                            );
-                        },
-                        [&]( std::size_t lane ) {
-                            return base_fft_.r2c_c2r_plan_bundle_lane_ready(
-                                slab_wz_communication_plan_bundle_, lane
-                            );
-                        },
-                        [&]() {
-                            base_fft_.synchronize_r2c_c2r_plan_bundle( slab_wz_communication_plan_bundle_ );
-                        }
-                    ) );
-                } );
+                if ( slab_4d_native_wz_send_overlap_enabled_() )
+                {
+                    time_native_4d_stage_( "4d/slab/forward_wz_same_xw_xy_send_overlap", [&]() {
+                        SCFD_SAFE_CALL(
+                            same_xw_.transpose_xyzw_wz_communication_to_xzwy_slab_native_pipelined_send_overlap(
+                                stage0_wz_communication_4d_, out, transpose_mode_4d, lanes,
+                                [&]( int plane, std::size_t lane ) {
+                                    launch_forward_slab_wz_communication_plane_(
+                                        in, static_cast<std::size_t>( plane ), lane
+                                    );
+                                },
+                                [&]( std::size_t lane ) {
+                                    return base_fft_.r2c_c2r_plan_bundle_lane_ready(
+                                        slab_wz_communication_plan_bundle_, lane
+                                    );
+                                },
+                                [&]() {
+                                    base_fft_.synchronize_r2c_c2r_plan_bundle(
+                                        slab_wz_communication_plan_bundle_
+                                    );
+                                },
+                                [&]() { base_fft_.exec_named_no_sync( "forward_xy_xzwy_native", out, out ); },
+                                [&]() {
+                                    if ( slab_4d_native_wz_send_overlap_nonblocking_stream_enabled_() )
+                                    {
+                                        base_fft_.synchronize_owned_plan_stream( "forward_xy_xzwy_native" );
+                                    }
+                                    else
+                                    {
+                                        base_fft_.synchronize_device_execution();
+                                    }
+                                }
+                            )
+                        );
+                    } );
+                }
+                else
+                {
+                    time_native_4d_stage_( "4d/slab/forward_wz_same_xw_ready_pipeline", [&]() {
+                        SCFD_SAFE_CALL( same_xw_.transpose_xyzw_wz_communication_to_xzwy_slab_native_pipelined(
+                            stage0_wz_communication_4d_, out, transpose_mode_4d, lanes,
+                            [&]( int plane, std::size_t lane ) {
+                                launch_forward_slab_wz_communication_plane_(
+                                    in, static_cast<std::size_t>( plane ), lane
+                                );
+                            },
+                            [&]( std::size_t lane ) {
+                                return base_fft_.r2c_c2r_plan_bundle_lane_ready(
+                                    slab_wz_communication_plan_bundle_, lane
+                                );
+                            },
+                            [&]() {
+                                base_fft_.synchronize_r2c_c2r_plan_bundle( slab_wz_communication_plan_bundle_ );
+                            }
+                        ) );
+                    } );
+                }
             }
             else
             {
@@ -4114,11 +4215,14 @@ private:
                     ) );
                 } );
             }
-            time_native_4d_stage_( "4d/slab/forward_xy_fft_xzwy_native", [&]() {
-                SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
-                    "forward_xy_xzwy_native", out, out
-                ) );
-            } );
+            if ( !slab_4d_native_wz_send_overlap_enabled_() )
+            {
+                time_native_4d_stage_( "4d/slab/forward_xy_fft_xzwy_native", [&]() {
+                    SCFD_SAFE_CALL( base_fft_.template exec<stage2_complex4_t, stage2_complex4_t>(
+                        "forward_xy_xzwy_native", out, out
+                    ) );
+                } );
+            }
             return;
         }
         time_native_4d_stage_( "4d/slab/forward_zw_fft", [&]() {

@@ -435,6 +435,33 @@ inline fftm_3d_contiguous_forward_send_mode parse_contiguous_forward_send_mode( 
     throw std::logic_error( "Invalid FFTM contiguous forward send mode '" + value + "'" );
 }
 
+inline const char *current_3d_policy_version()
+{
+    return "4";
+}
+
+inline const char *current_3d_policy_source()
+{
+    return "cpp-policy-cache-v4";
+}
+
+inline void validate_policy_cache_version( const config_map &config )
+{
+    const std::string prefix = "cpp-policy-cache-";
+    const std::string source = value_or_empty( config, "FFTM_AUTOTUNE_SOURCE" );
+    if ( source.compare( 0, prefix.size(), prefix ) != 0 )
+        return;
+
+    const std::string version = value_or_empty( config, "FFTM_AUTOTUNE_POLICY_VERSION" );
+    if ( version != current_3d_policy_version() )
+    {
+        throw std::logic_error(
+            "FFTM policy cache version " + ( version.empty() ? std::string( "missing" ) : version ) +
+            " does not match current version " + current_3d_policy_version()
+        );
+    }
+}
+
 inline void validate_match( const config_map &config, int num_procs, const global_sizes &sizes )
 {
     const std::string expected_gpus = value_or_empty( config, "FFTM_AUTOTUNE_NUM_GPUS" );
@@ -465,9 +492,24 @@ inline void validate_match( const config_map &config, int num_procs, const globa
             );
         }
     }
+
+    validate_policy_cache_version( config );
 }
 
 #include "detail/fftm_autotune_hardware.inc"
+
+inline std::size_t homogeneous_ranks_per_node( const hardware_inventory &inventory )
+{
+    if ( inventory.ranks_per_node.empty() || inventory.ranks_per_node.front() <= 0 )
+        return 0;
+    const int expected = inventory.ranks_per_node.front();
+    for ( int value : inventory.ranks_per_node )
+    {
+        if ( value != expected )
+            return 0;
+    }
+    return static_cast<std::size_t>( expected );
+}
 
 inline void set_common_native_pencil_options( config_map &config )
 {
@@ -546,7 +588,9 @@ inline void set_staged_3d_policy(
     config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] = "staged";
 }
 
-inline void set_default_pencil_pencil_3d_policy( config_map &config, int num_procs )
+inline void set_default_pencil_pencil_3d_policy(
+    config_map &config, int num_procs, std::size_t ranks_per_node = 0
+)
 {
     set_common_native_pencil_options( config );
     config["FFTM_AUTOTUNE_STRATEGY_3D"] = "pencil-pencil";
@@ -573,6 +617,20 @@ inline void set_default_pencil_pencil_3d_policy( config_map &config, int num_pro
         config["FFTM_AUTOTUNE_GRID_3D"] = "5x1";
         config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
     }
+    else if ( select_production_pencil_layout_3d( num_procs, true ) == fftm_3d_pencil_layout::opt0 )
+    {
+        auto grid = default_pencil_grid_3d( num_procs );
+        if ( ranks_per_node > 1 && static_cast<std::size_t>( num_procs ) % ranks_per_node == 0 )
+        {
+            grid = std::make_pair(
+                static_cast<std::size_t>( num_procs ) / ranks_per_node, ranks_per_node
+            );
+        }
+        config["FFTM_AUTOTUNE_GRID_3D"] =
+            std::to_string( grid.first ) + "x" + std::to_string( grid.second );
+        config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt0";
+        set_native_opt0_hot_y_options( config );
+    }
     else
     {
         const auto grid = default_pencil_grid_3d( num_procs );
@@ -581,19 +639,21 @@ inline void set_default_pencil_pencil_3d_policy( config_map &config, int num_pro
     }
 }
 
-inline config_map make_default_3d_policy_config( int num_procs, const global_sizes &sizes )
+inline config_map make_default_3d_policy_config(
+    int num_procs, const global_sizes &sizes, std::size_t ranks_per_node = 0
+)
 {
     if ( num_procs <= 0 )
         throw std::logic_error( "FFTM 3D policy requires a positive MPI size" );
 
     config_map config;
     config["FFTM_AUTOTUNE_SCHEMA"] = "2";
-    config["FFTM_AUTOTUNE_POLICY_VERSION"] = "3";
+    config["FFTM_AUTOTUNE_POLICY_VERSION"] = current_3d_policy_version();
     config["FFTM_AUTOTUNE_LIBRARY"] = "fftm";
     config["FFTM_AUTOTUNE_DIM"] = "3";
     config["FFTM_AUTOTUNE_NUM_GPUS"] = std::to_string( num_procs );
     config["FFTM_AUTOTUNE_SIZE_3D"] = sizes_to_string( sizes );
-    config["FFTM_AUTOTUNE_SOURCE"] = "cpp-policy-cache-v3";
+    config["FFTM_AUTOTUNE_SOURCE"] = current_3d_policy_source();
 
     if ( num_procs <= 1 )
     {
@@ -603,8 +663,10 @@ inline config_map make_default_3d_policy_config( int num_procs, const global_siz
 
     // Release data favors slab-pencil for power-of-two cubes and for the
     // validated 8-32 rank multinode range. Fitted non-power-of-two cases on a
-    // single node favor pencil-slab. Measured tuning still evaluates every
-    // production strategy and is authoritative whenever it is enabled.
+    // single node favor pencil-slab. At 64 ranks and above, the native opt0
+    // pencil path uses a node-aligned grid when uniform node occupancy is
+    // available from the hardware inventory. Measured tuning remains
+    // authoritative whenever it is enabled.
     if ( num_procs <= 32 && ( is_power_of_two_cube( sizes ) || num_procs > 8 ) )
     {
         set_staged_3d_policy( config, "slab-pencil", static_cast<std::size_t>( num_procs ), 1 );
@@ -614,7 +676,7 @@ inline config_map make_default_3d_policy_config( int num_procs, const global_siz
     else if ( num_procs <= 8 )
         set_staged_3d_policy( config, "pencil-slab", 1, static_cast<std::size_t>( num_procs ) );
     else
-        set_default_pencil_pencil_3d_policy( config, num_procs );
+        set_default_pencil_pencil_3d_policy( config, num_procs, ranks_per_node );
     return config;
 }
 
@@ -622,7 +684,9 @@ inline config_map make_default_3d_config(
     int num_procs, const global_sizes &sizes, const hardware_inventory &inventory
 )
 {
-    config_map config = make_default_3d_policy_config( num_procs, sizes );
+    config_map config = make_default_3d_policy_config(
+        num_procs, sizes, homogeneous_ranks_per_node( inventory )
+    );
     const auto signature = make_hardware_signature_record(
         inventory, hardware_transport_policy( config, num_procs )
     );

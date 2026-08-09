@@ -382,6 +382,56 @@ public:
             plan->exec( in.raw_ptr(), out.raw_ptr() );
     }
 
+    template <class ArrayIn, class ArrayOut>
+    void exec_named_no_sync( const std::string &name, const ArrayIn &in, ArrayOut &out )
+    {
+        container_.at( name )->exec_no_sync( in.raw_ptr(), out.raw_ptr() );
+    }
+
+    void synchronize_device_execution() const
+    {
+        runtime_api::device_synchronize();
+    }
+
+    void bind_plan_to_owned_nonblocking_stream( const std::string &name )
+    {
+        if ( !activated_ && !external_activated_ )
+        {
+            throw std::logic_error(
+                "fft_wrap_many::bind_plan_to_owned_nonblocking_stream: plans must be activated first"
+            );
+        }
+        if ( owned_plan_streams_.count( name ) != 0 )
+        {
+            throw std::logic_error(
+                "fft_wrap_many::bind_plan_to_owned_nonblocking_stream: plan already has an owned stream"
+            );
+        }
+
+        typename runtime_api::stream_t stream = runtime_api::create_nonblocking_stream();
+        try
+        {
+            const auto inserted = owned_plan_streams_.emplace( name, stream );
+            if ( !inserted.second )
+                throw std::logic_error( "fft_wrap_many: failed to register an owned plan stream" );
+            container_.at( name )->set_stream( stream );
+        }
+        catch ( ... )
+        {
+            owned_plan_streams_.erase( name );
+            runtime_api::destroy_stream( stream );
+            throw;
+        }
+    }
+
+    void synchronize_owned_plan_stream( const std::string &name ) const
+    {
+        const auto it = owned_plan_streams_.find( name );
+        if ( it == owned_plan_streams_.end() )
+            throw std::out_of_range( "fft_wrap_many: plan has no owned execution stream" );
+        runtime_api::stream_synchronize( it->second );
+    }
+
     void exec_raw( const std::string &name, void *in, void *out )
     {
         wrap_t *plan = container_.at( name ).get();
@@ -1738,6 +1788,9 @@ private:
         r2c_c2r_plan_bundles_.clear();
 
         container_.clear();
+        for ( const auto &entry : owned_plan_streams_ )
+            runtime_api::destroy_stream( entry.second );
+        owned_plan_streams_.clear();
         if ( !work_area_.is_free() )
             work_area_.free();
 
@@ -1858,6 +1911,7 @@ private:
     bool                                           activated_, external_activated_;
     bool                                           hot_exec_no_sync_;
     std::map<std::string, std::unique_ptr<wrap_t>> container_;
+    std::map<std::string, typename runtime_api::stream_t>       owned_plan_streams_;
     std::vector<plan_sequence_t>                   plan_sequences_;
     std::vector<typed_plan_sequence_t<::fftm::direction::C2CF>> c2cf_plan_sequences_;
     std::vector<typed_plan_sequence_t<::fftm::direction::C2CB>> c2cb_plan_sequences_;

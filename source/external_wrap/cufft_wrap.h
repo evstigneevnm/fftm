@@ -181,6 +181,19 @@ struct cuda_runtime_api
         CUDA_SAFE_CALL( cudaStreamSynchronize( stream ) );
     }
 
+    static stream_t create_nonblocking_stream()
+    {
+        stream_t stream = nullptr;
+        CUDA_SAFE_CALL( cudaStreamCreateWithFlags( &stream, cudaStreamNonBlocking ) );
+        return stream;
+    }
+
+    static void destroy_stream( stream_t stream )
+    {
+        if ( stream != nullptr )
+            CUDA_SAFE_CALL( cudaStreamDestroy( stream ) );
+    }
+
     static stream_t default_stream()
     {
         return stream_t{};

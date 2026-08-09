@@ -1688,6 +1688,10 @@ class PaperClusterRunner:
                         if spec.fftm_4d_pencil_degenerate_wz_sliced_z_fft
                         else "--no-4d-pencil-degenerate-wz-sliced-z-fft"
                     )
+        if spec.suite == "fftm" and self.args.fftm_binary_extra_args:
+            args.extend(shlex.split(self.args.fftm_binary_extra_args))
+        if spec.suite == "fftm" and spec.dim == 4 and self.args.fftm_4d_binary_extra_args:
+            args.extend(shlex.split(self.args.fftm_4d_binary_extra_args))
         args.extend(["--times", str(times)])
         warmup = self.warmup_for_spec(spec)
         if warmup > 0:
@@ -1951,6 +1955,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--container-env", default="")
     parser.add_argument("--container-writable", action="store_true")
     parser.add_argument("--srun-extra-args", default="")
+    parser.add_argument(
+        "--fftm-binary-extra-args",
+        default="",
+        help="Additional shell-split arguments appended only to FFTM test binaries.",
+    )
+    parser.add_argument(
+        "--fftm-4d-binary-extra-args",
+        default="",
+        help="Additional shell-split arguments appended only to FFTM 4D test binaries.",
+    )
     parser.add_argument("--srun-time", default="00:20:00")
     parser.add_argument(
         "--mpi-rank-affinity-mode",

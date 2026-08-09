@@ -124,6 +124,26 @@ public:
         slab_native_wz_communication_layout_enabled_ = enabled;
     }
 
+    void set_slab_native_wz_backward_plane_credit_scheduler(
+        std::size_t window, bool cyclic_peer_order
+    )
+    {
+        if ( cyclic_peer_order && window == 0 )
+        {
+            throw std::logic_error(
+                "mpi_transpose_4d_same_xw cyclic peer order requires an active backward plane-credit window"
+            );
+        }
+        if ( window > static_cast<std::size_t>( std::numeric_limits<int>::max() ) )
+        {
+            throw std::overflow_error(
+                "mpi_transpose_4d_same_xw backward plane-credit window exceeds int range"
+            );
+        }
+        slab_native_wz_backward_plane_credit_window_ = static_cast<int>( window );
+        slab_native_wz_backward_cyclic_peer_order_   = cyclic_peer_order;
+    }
+
     void set_memory_profiler( memory_profiler_t *profiler, const std::string &prefix )
     {
         memory_profiler_       = profiler;
@@ -606,8 +626,9 @@ public:
             throw std::logic_error( "FFTM 4D slab WZ communication pipeline requires p2p-waitany" );
 #ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
         stage_timing_direction_ = "forward";
+        const auto no_overlap = []() {};
         forward_p2p_waitany_slab_wz_communication_pipelined_(
-            in, out, plan_lanes, launch_plane, lane_ready, synchronize_plans
+            in, out, plan_lanes, launch_plane, lane_ready, synchronize_plans, false, no_overlap, no_overlap
         );
 #else
         (void)in;
@@ -617,6 +638,44 @@ public:
         (void)lane_ready;
         (void)synchronize_plans;
         throw std::logic_error( "FFTM 4D slab WZ communication pipeline requires device-aware MPI" );
+#endif
+    }
+
+    template <
+        class ArrayIn, class ArrayOut, class LaunchPlane, class LaneReady, class SynchronizePlans,
+        class LaunchOverlap, class SynchronizeOverlap>
+    void transpose_xyzw_wz_communication_to_xzwy_slab_native_pipelined_send_overlap(
+        ArrayIn &in, ArrayOut &out, mpi_transpose_3d_mode mode, std::size_t plan_lanes,
+        LaunchPlane launch_plane, LaneReady lane_ready, SynchronizePlans synchronize_plans,
+        LaunchOverlap launch_overlap, SynchronizeOverlap synchronize_overlap
+    )
+    {
+        auto scope = profile_scope_(
+            "mpi_transpose_4d_same_xw::"
+            "transpose_xyzw_wz_communication_to_xzwy_slab_native_pipelined_send_overlap"
+        );
+        ensure_is_inited_();
+        verify_forward_slab_native_to_xzwy_shapes_( in, out );
+        if ( !slab_native_wz_communication_layout_enabled_ )
+            throw std::logic_error( "FFTM 4D slab WZ send overlap requires the WZ communication layout" );
+        if ( mode != mpi_transpose_3d_mode::p2p_waitany )
+            throw std::logic_error( "FFTM 4D slab WZ send overlap requires p2p-waitany" );
+#ifdef FFTM_ENABLE_DEVICE_AWARE_MPI
+        stage_timing_direction_ = "forward";
+        forward_p2p_waitany_slab_wz_communication_pipelined_(
+            in, out, plan_lanes, launch_plane, lane_ready, synchronize_plans, true,
+            launch_overlap, synchronize_overlap
+        );
+#else
+        (void)in;
+        (void)out;
+        (void)plan_lanes;
+        (void)launch_plane;
+        (void)lane_ready;
+        (void)synchronize_plans;
+        (void)launch_overlap;
+        (void)synchronize_overlap;
+        throw std::logic_error( "FFTM 4D slab WZ send overlap requires device-aware MPI" );
 #endif
     }
 
@@ -2970,6 +3029,18 @@ private:
         return base_tag + line_comm_info_.num_procs * ( chunk % native_xzwy_chunk_window_ );
     }
 
+    int slab_wz_plane_credit_tag_( int base_tag, int plane ) const
+    {
+        if ( slab_native_wz_backward_plane_credit_window_ <= 0 || plane < 0 )
+        {
+            throw std::logic_error(
+                "same_xw backward WZ plane-credit tag requires an active window and plane"
+            );
+        }
+        return base_tag + line_comm_info_.num_procs *
+                              ( plane % slab_native_wz_backward_plane_credit_window_ );
+    }
+
     std::size_t native_xzwy_chunk_offset_bytes_( int chunk ) const
     {
         const std::size_t chunk_bytes = effective_native_xzwy_chunk_bytes_();
@@ -3128,6 +3199,28 @@ private:
         line_comm_info_.isend(
             ptr, detail::mpi_int_cast( native_xzwy_peer_bytes_( elems ), "same_xw WZ plane send bytes" ),
             byte_type, dest, native_xzwy_chunk_window_tag_( base_tag, plane ), request
+        );
+    }
+
+    void post_slab_wz_plane_credit_irecv_(
+        void *ptr, std::size_t elems, int source, int base_tag, int plane, mpi_request_t &request
+    ) const
+    {
+        const mpi_dtype_t byte_type = scfd::communication::detail::mpi_data_type_trait<char>::get();
+        line_comm_info_.irecv(
+            ptr, detail::mpi_int_cast( native_xzwy_peer_bytes_( elems ), "same_xw WZ credit recv bytes" ),
+            byte_type, source, slab_wz_plane_credit_tag_( base_tag, plane ), request
+        );
+    }
+
+    void post_slab_wz_plane_credit_isend_(
+        const void *ptr, std::size_t elems, int dest, int base_tag, int plane, mpi_request_t &request
+    ) const
+    {
+        const mpi_dtype_t byte_type = scfd::communication::detail::mpi_data_type_trait<char>::get();
+        line_comm_info_.isend(
+            ptr, detail::mpi_int_cast( native_xzwy_peer_bytes_( elems ), "same_xw WZ credit send bytes" ),
+            byte_type, dest, slab_wz_plane_credit_tag_( base_tag, plane ), request
         );
     }
 
@@ -3299,10 +3392,13 @@ private:
         record_peer_phase_( direction, "wz_planes", "wait_send", wait_send_ms );
     }
 
-    template <class ArrayIn, class ArrayOut, class LaunchPlane, class LaneReady, class SynchronizePlans>
+    template <
+        class ArrayIn, class ArrayOut, class LaunchPlane, class LaneReady, class SynchronizePlans,
+        class LaunchOverlap, class SynchronizeOverlap>
     void forward_p2p_waitany_slab_wz_communication_pipelined_(
         ArrayIn &in, ArrayOut &out, std::size_t plan_lanes, LaunchPlane launch_plane,
-        LaneReady lane_ready, SynchronizePlans synchronize_plans
+        LaneReady lane_ready, SynchronizePlans synchronize_plans, bool overlap_send_completion,
+        LaunchOverlap launch_overlap, SynchronizeOverlap synchronize_overlap
     )
     {
         auto scope = profile_scope_( "forward_p2p_waitany_slab_wz_communication_pipelined" );
@@ -3330,6 +3426,9 @@ private:
         double wait_recv_ms = 0.0;
         double self_ms      = 0.0;
         double wait_send_ms = 0.0;
+        double overlap_launch_ms = 0.0;
+        double overlap_send_drain_ms = 0.0;
+        double overlap_sync_ms = 0.0;
 
         auto post_recv_plane = [&]( int peer, int plane, mpi_request_t &request ) {
             post_slab_wz_communication_plane_irecv_(
@@ -3396,7 +3495,22 @@ private:
             }
         };
 
-        while ( recv_state.completed_chunks < recv_state.total_chunks || completed_send_planes < plane_count )
+        auto advance_send = [&]( int slot ) {
+            const std::size_t plane = static_cast<std::size_t>( slot ) /
+                                      static_cast<std::size_t>( comm_size );
+            int &remaining = plane_send_remaining.at( plane );
+            if ( remaining <= 0 )
+                throw std::logic_error( "same_xw WZ pipeline completed an inactive plane send" );
+            --active_send_requests;
+            if ( --remaining == 0 )
+                ++completed_send_planes;
+        };
+
+        auto overlap_inputs_ready = [&]() {
+            return next_plane_to_post == plane_count && recv_state.completed_chunks == recv_state.total_chunks;
+        };
+
+        while ( !overlap_inputs_ready() || ( !overlap_send_completion && completed_send_planes < plane_count ) )
         {
             bool progressed = false;
             for ( std::size_t lane = 0; lane < plan_lanes; ++lane )
@@ -3475,14 +3589,7 @@ private:
                 } );
                 if ( !ready || slot == MPI_UNDEFINED )
                     break;
-                const std::size_t plane = static_cast<std::size_t>( slot ) /
-                                          static_cast<std::size_t>( comm_size );
-                int &remaining = plane_send_remaining.at( plane );
-                if ( remaining <= 0 )
-                    throw std::logic_error( "same_xw WZ pipeline completed an inactive plane send" );
-                --active_send_requests;
-                if ( --remaining == 0 )
-                    ++completed_send_planes;
+                advance_send( slot );
                 progressed = true;
             }
 
@@ -3509,6 +3616,8 @@ private:
                 advance_recv( slot );
                 continue;
             }
+            if ( overlap_send_completion )
+                continue;
             if ( active_send_requests > 0 )
             {
                 int slot = MPI_UNDEFINED;
@@ -3520,18 +3629,13 @@ private:
                 } );
                 if ( slot == MPI_UNDEFINED )
                     throw std::logic_error( "same_xw WZ pipeline send completion ended early" );
-                const std::size_t plane = static_cast<std::size_t>( slot ) /
-                                          static_cast<std::size_t>( comm_size );
-                int &remaining = plane_send_remaining.at( plane );
-                if ( remaining <= 0 )
-                    throw std::logic_error( "same_xw WZ pipeline waited on an inactive plane send" );
-                --active_send_requests;
-                if ( --remaining == 0 )
-                    ++completed_send_planes;
+                advance_send( slot );
             }
         }
 
-        if ( next_plane_to_launch != plane_count || next_plane_to_post != plane_count || active_send_requests != 0 )
+        if ( next_plane_to_launch != plane_count || next_plane_to_post != plane_count ||
+             recv_state.completed_chunks != recv_state.total_chunks ||
+             ( !overlap_send_completion && active_send_requests != 0 ) )
             throw std::logic_error( "same_xw WZ pipeline finished with incomplete forward scheduler state" );
 
         synchronize_plans();
@@ -3544,6 +3648,40 @@ private:
             for_each_.wait();
         } );
 
+        auto drain_pending_sends = [&]() {
+            while ( active_send_requests > 0 )
+            {
+                int slot = MPI_UNDEFINED;
+                wait_send_ms += time_direct_host_phase_( [&]() {
+                    slot = line_comm_info_.waitany(
+                        detail::mpi_int_cast( send_requests.size(), "same_xw WZ overlap send wait count" ),
+                        send_requests.data()
+                    );
+                } );
+                if ( slot == MPI_UNDEFINED )
+                    throw std::logic_error( "same_xw WZ overlap send completion ended early" );
+                advance_send( slot );
+            }
+        };
+
+        if ( overlap_send_completion )
+        {
+            try
+            {
+                overlap_launch_ms += time_direct_host_phase_( launch_overlap );
+            }
+            catch ( ... )
+            {
+                overlap_send_drain_ms += time_direct_host_phase_( drain_pending_sends );
+                throw;
+            }
+            overlap_send_drain_ms += time_direct_host_phase_( drain_pending_sends );
+            overlap_sync_ms += time_direct_host_phase_( synchronize_overlap );
+        }
+
+        if ( active_send_requests != 0 || completed_send_planes != plane_count )
+            throw std::logic_error( "same_xw WZ pipeline returned with incomplete forward sends" );
+
         record_peer_phase_( "forward", "wz_pipeline", "post_recv", post_recv_ms );
         record_peer_phase_( "forward", "wz_pipeline", "plan_launch", plan_launch_ms );
         record_peer_phase_( "forward", "wz_pipeline", "plan_poll", plan_poll_ms );
@@ -3551,6 +3689,12 @@ private:
         record_peer_phase_( "forward", "wz_pipeline", "wait_recv", wait_recv_ms );
         record_peer_phase_( "forward", "wz_pipeline", "self", self_ms );
         record_peer_phase_( "forward", "wz_pipeline", "wait_send", wait_send_ms );
+        if ( overlap_send_completion )
+        {
+            record_peer_phase_( "forward", "wz_pipeline", "overlap_launch", overlap_launch_ms );
+            record_peer_phase_( "forward", "wz_pipeline", "overlap_send_drain", overlap_send_drain_ms );
+            record_peer_phase_( "forward", "wz_pipeline", "overlap_sync", overlap_sync_ms );
+        }
     }
 
     template <class ArrayIn, class ArrayOut, class LaunchPlane, class LaneReady, class SynchronizePlans>
@@ -3564,6 +3708,13 @@ private:
         const int plane_count = detail::mpi_int_cast( ny_local_, "same_xw inverse WZ pipeline plane count" );
         if ( plan_lanes == 0 || plan_lanes > static_cast<std::size_t>( plane_count ) )
             throw std::logic_error( "same_xw WZ backward pipeline has an invalid plan-lane count" );
+        if ( slab_native_wz_backward_plane_credit_window_ > 0 )
+        {
+            backward_p2p_waitany_slab_wz_communication_plane_credit_(
+                in, out, plan_lanes, launch_plane, lane_ready, synchronize_plans
+            );
+            return;
+        }
 
         const std::size_t plane_elems = nx_local_ * nw_local_;
         std::vector<int> recv_planes( static_cast<std::size_t>( comm_size ), 0 );
@@ -3780,6 +3931,313 @@ private:
         record_peer_phase_( "backward", "wz_pipeline", "self", self_ms );
         record_peer_phase_( "backward", "wz_pipeline", "plan_launch", plan_launch_ms );
         record_peer_phase_( "backward", "wz_pipeline", "plan_poll", plan_poll_ms );
+    }
+
+    template <class ArrayIn, class ArrayOut, class LaunchPlane, class LaneReady, class SynchronizePlans>
+    void backward_p2p_waitany_slab_wz_communication_plane_credit_(
+        const ArrayIn &in, ArrayOut &out, std::size_t plan_lanes, LaunchPlane launch_plane,
+        LaneReady lane_ready, SynchronizePlans synchronize_plans
+    )
+    {
+        auto scope = profile_scope_( "backward_p2p_waitany_slab_wz_communication_plane_credit" );
+        const int comm_size = line_comm_info_.num_procs;
+        const int plane_count = detail::mpi_int_cast(
+            ny_local_, "same_xw inverse WZ plane-credit local plane count"
+        );
+        const int credit_window = slab_native_wz_backward_plane_credit_window_;
+        if ( credit_window <= 0 )
+        {
+            throw std::logic_error( "same_xw backward WZ plane-credit window must be positive" );
+        }
+        if ( plan_lanes == 0 )
+            throw std::logic_error( "same_xw backward WZ plane-credit scheduler requires an FFT plan lane" );
+        if ( comm_size > 32767 / credit_window )
+        {
+            throw std::logic_error(
+                "same_xw backward WZ plane-credit scheduler exceeds the portable MPI tag range"
+            );
+        }
+
+        int max_plane_count = 0;
+        for ( std::size_t count : input_dim_.size_y )
+        {
+            max_plane_count = std::max(
+                max_plane_count,
+                detail::mpi_int_cast( count, "same_xw inverse WZ plane-credit global plane count" )
+            );
+        }
+        if ( max_plane_count <= 0 )
+            throw std::logic_error( "same_xw backward WZ plane-credit scheduler has no planes" );
+
+        std::vector<int> peer_order;
+        peer_order.reserve( static_cast<std::size_t>( std::max( 0, comm_size - 1 ) ) );
+        if ( slab_native_wz_backward_cyclic_peer_order_ )
+        {
+            for ( int step = 1; step < comm_size; ++step )
+                peer_order.push_back( ( myid_j_ + step ) % comm_size );
+        }
+        else
+        {
+            for ( int peer = 0; peer < comm_size; ++peer )
+            {
+                if ( peer != myid_j_ )
+                    peer_order.push_back( peer );
+            }
+        }
+
+        const std::size_t request_slots = static_cast<std::size_t>( credit_window ) *
+                                          static_cast<std::size_t>( comm_size );
+        std::vector<mpi_request_t> recv_requests( request_slots );
+        std::vector<mpi_request_t> send_requests( request_slots );
+        std::vector<int> slot_plane( static_cast<std::size_t>( credit_window ), -1 );
+        std::vector<int> slot_recv_remaining( static_cast<std::size_t>( credit_window ), 0 );
+        std::vector<int> slot_send_remaining( static_cast<std::size_t>( credit_window ), 0 );
+        std::vector<bool> slot_active( static_cast<std::size_t>( credit_window ), false );
+        std::vector<bool> slot_ready_queued( static_cast<std::size_t>( credit_window ), false );
+        std::vector<int> ready_planes;
+        ready_planes.reserve( static_cast<std::size_t>( plane_count ) );
+        std::size_t ready_head = 0;
+        std::vector<int> lane_plane( plan_lanes, -1 );
+
+        int active_recv_requests = 0;
+        int active_send_requests = 0;
+        int completed_network_planes = 0;
+        int completed_plan_count = 0;
+
+        double post_recv_ms = 0.0;
+        double post_send_ms = 0.0;
+        double wait_recv_ms = 0.0;
+        double wait_send_ms = 0.0;
+        double self_ms = 0.0;
+        double plan_launch_ms = 0.0;
+        double plan_poll_ms = 0.0;
+
+        const std::size_t plane_elems = nx_local_ * nw_local_;
+        auto request_index = [&]( int slot, int peer ) {
+            return static_cast<std::size_t>( slot ) * static_cast<std::size_t>( comm_size ) +
+                   static_cast<std::size_t>( peer );
+        };
+
+        auto queue_ready_plane = [&]( int slot ) {
+            const std::size_t slot_index = static_cast<std::size_t>( slot );
+            const int plane = slot_plane[slot_index];
+            if ( plane >= 0 && plane < plane_count && slot_recv_remaining[slot_index] == 0 &&
+                 !slot_ready_queued[slot_index] )
+            {
+                ready_planes.push_back( plane );
+                slot_ready_queued[slot_index] = true;
+            }
+        };
+
+        auto activate_slot = [&]( int slot, int plane ) {
+            const std::size_t slot_index = static_cast<std::size_t>( slot );
+            slot_plane[slot_index] = plane;
+            slot_recv_remaining[slot_index] = 0;
+            slot_send_remaining[slot_index] = 0;
+            slot_active[slot_index] = true;
+            slot_ready_queued[slot_index] = false;
+
+            for ( int peer : peer_order )
+            {
+                const std::size_t request = request_index( slot, peer );
+                if ( plane < plane_count )
+                {
+                    post_recv_ms += time_direct_host_phase_( [&]() {
+                        post_slab_wz_plane_credit_irecv_(
+                            out.raw_ptr() +
+                                ( static_cast<std::size_t>( plane ) * nz_global_ + output_dim_.start_z[peer] ) *
+                                    plane_elems,
+                            output_dim_.size_z[peer] * plane_elems, peer, myid_j_, plane,
+                            recv_requests[request]
+                        );
+                    } );
+                    ++slot_recv_remaining[slot_index];
+                    ++active_recv_requests;
+                }
+                if ( plane < detail::mpi_int_cast(
+                                 input_dim_.size_y[peer],
+                                 "same_xw inverse WZ plane-credit peer plane count" ) )
+                {
+                    post_send_ms += time_direct_host_phase_( [&]() {
+                        post_slab_wz_plane_credit_isend_(
+                            in.raw_ptr() +
+                                ( input_dim_.start_y[peer] + static_cast<std::size_t>( plane ) ) * nz_local_ *
+                                    plane_elems,
+                            nz_local_ * plane_elems, peer, peer, plane, send_requests[request]
+                        );
+                    } );
+                    ++slot_send_remaining[slot_index];
+                    ++active_send_requests;
+                }
+            }
+            queue_ready_plane( slot );
+        };
+
+        for ( int slot = 0; slot < credit_window && slot < max_plane_count; ++slot )
+            activate_slot( slot, slot );
+
+        self_ms += time_direct_host_phase_( [&]() {
+            for_each_(
+                copy_backward_slab_wz_communication_self_functor<ArrayIn, ArrayOut>{
+                    in, out, input_dim_.start_y[myid_j_], output_dim_.start_z[myid_j_] },
+                make_range_4d<idx_t>( nx_local_, nw_local_, nz_local_, ny_local_ )
+            );
+            for_each_.wait();
+        } );
+
+        auto launch_ready_planes = [&]() {
+            bool progressed = false;
+            for ( std::size_t lane = 0; lane < plan_lanes && ready_head < ready_planes.size(); ++lane )
+            {
+                if ( lane_plane[lane] >= 0 )
+                    continue;
+                const int plane = ready_planes[ready_head++];
+                plan_launch_ms += time_direct_host_phase_( [&]() { launch_plane( plane, lane ); } );
+                lane_plane[lane] = plane;
+                progressed = true;
+            }
+            return progressed;
+        };
+
+        auto recycle_network_slots = [&]() {
+            bool progressed = false;
+            bool recycled = true;
+            while ( recycled )
+            {
+                recycled = false;
+                for ( int slot = 0; slot < credit_window; ++slot )
+                {
+                    const std::size_t slot_index = static_cast<std::size_t>( slot );
+                    if ( !slot_active[slot_index] || slot_recv_remaining[slot_index] != 0 ||
+                         slot_send_remaining[slot_index] != 0 )
+                        continue;
+                    const int next_plane = slot_plane[slot_index] + credit_window;
+                    ++completed_network_planes;
+                    if ( next_plane < max_plane_count )
+                        activate_slot( slot, next_plane );
+                    else
+                    {
+                        slot_plane[slot_index] = -1;
+                        slot_active[slot_index] = false;
+                    }
+                    progressed = true;
+                    recycled = true;
+                }
+            }
+            return progressed;
+        };
+
+        const int request_count = detail::mpi_int_cast(
+            request_slots, "same_xw inverse WZ plane-credit request count"
+        );
+        while ( completed_network_planes < max_plane_count || completed_plan_count < plane_count )
+        {
+            bool progressed = launch_ready_planes();
+            for ( std::size_t lane = 0; lane < plan_lanes; ++lane )
+            {
+                if ( lane_plane[lane] < 0 )
+                    continue;
+                bool ready = false;
+                plan_poll_ms += time_direct_host_phase_( [&]() { ready = lane_ready( lane ); } );
+                if ( ready )
+                {
+                    lane_plane[lane] = -1;
+                    ++completed_plan_count;
+                    progressed = true;
+                }
+            }
+            progressed = launch_ready_planes() || progressed;
+
+            while ( active_recv_requests > 0 )
+            {
+                int ready = 0;
+                int request = MPI_UNDEFINED;
+                wait_recv_ms += time_direct_host_phase_( [&]() {
+                    request = line_comm_info_.testany( request_count, recv_requests.data(), &ready );
+                } );
+                if ( !ready || request == MPI_UNDEFINED )
+                    break;
+                const int slot = request / comm_size;
+                int &remaining = slot_recv_remaining.at( static_cast<std::size_t>( slot ) );
+                if ( remaining <= 0 )
+                    throw std::logic_error( "same_xw backward WZ plane-credit completed an inactive receive" );
+                --remaining;
+                --active_recv_requests;
+                queue_ready_plane( slot );
+                progressed = true;
+            }
+            while ( active_send_requests > 0 )
+            {
+                int ready = 0;
+                int request = MPI_UNDEFINED;
+                wait_send_ms += time_direct_host_phase_( [&]() {
+                    request = line_comm_info_.testany( request_count, send_requests.data(), &ready );
+                } );
+                if ( !ready || request == MPI_UNDEFINED )
+                    break;
+                const int slot = request / comm_size;
+                int &remaining = slot_send_remaining.at( static_cast<std::size_t>( slot ) );
+                if ( remaining <= 0 )
+                    throw std::logic_error( "same_xw backward WZ plane-credit completed an inactive send" );
+                --remaining;
+                --active_send_requests;
+                progressed = true;
+            }
+
+            progressed = recycle_network_slots() || progressed;
+            progressed = launch_ready_planes() || progressed;
+            if ( progressed )
+                continue;
+
+            const bool fft_active = std::find_if(
+                lane_plane.begin(), lane_plane.end(), []( int plane ) { return plane >= 0; }
+            ) != lane_plane.end();
+            if ( active_recv_requests > 0 )
+            {
+                int request = MPI_UNDEFINED;
+                wait_recv_ms += time_direct_host_phase_( [&]() {
+                    request = line_comm_info_.waitany( request_count, recv_requests.data() );
+                } );
+                if ( request == MPI_UNDEFINED )
+                    throw std::logic_error( "same_xw backward WZ plane-credit receive completion ended early" );
+                const int slot = request / comm_size;
+                int &remaining = slot_recv_remaining.at( static_cast<std::size_t>( slot ) );
+                if ( remaining <= 0 )
+                    throw std::logic_error( "same_xw backward WZ plane-credit waited on an inactive receive" );
+                --remaining;
+                --active_recv_requests;
+                queue_ready_plane( slot );
+                continue;
+            }
+            if ( active_send_requests > 0 )
+            {
+                int request = MPI_UNDEFINED;
+                wait_send_ms += time_direct_host_phase_( [&]() {
+                    request = line_comm_info_.waitany( request_count, send_requests.data() );
+                } );
+                if ( request == MPI_UNDEFINED )
+                    throw std::logic_error( "same_xw backward WZ plane-credit send completion ended early" );
+                const int slot = request / comm_size;
+                int &remaining = slot_send_remaining.at( static_cast<std::size_t>( slot ) );
+                if ( remaining <= 0 )
+                    throw std::logic_error( "same_xw backward WZ plane-credit waited on an inactive send" );
+                --remaining;
+                --active_send_requests;
+                continue;
+            }
+            if ( fft_active )
+                continue;
+            throw std::logic_error( "same_xw backward WZ plane-credit scheduler made no progress" );
+        }
+
+        synchronize_plans();
+        record_peer_phase_( "backward", "wz_credit", "post_recv", post_recv_ms );
+        record_peer_phase_( "backward", "wz_credit", "post_send", post_send_ms );
+        record_peer_phase_( "backward", "wz_credit", "wait_recv", wait_recv_ms );
+        record_peer_phase_( "backward", "wz_credit", "wait_send", wait_send_ms );
+        record_peer_phase_( "backward", "wz_credit", "self", self_ms );
+        record_peer_phase_( "backward", "wz_credit", "plan_launch", plan_launch_ms );
+        record_peer_phase_( "backward", "wz_credit", "plan_poll", plan_poll_ms );
     }
 
     template <class ArrayIn, class ArrayOut>
@@ -6038,6 +6496,8 @@ private:
     int                                native_xzwy_chunk_window_ = 0;
     bool                               native_xzwy_compact_staging_enabled_ = false;
     bool                               slab_native_wz_communication_layout_enabled_ = false;
+    int                                slab_native_wz_backward_plane_credit_window_ = 0;
+    bool                               slab_native_wz_backward_cyclic_peer_order_ = false;
     bool                               p2p_slab_native_unpack_ = false;
     contiguous_buf_t                   send_buffer_;
     contiguous_buf_t                   recv_buffer_;

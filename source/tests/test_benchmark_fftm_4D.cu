@@ -71,7 +71,9 @@ void append_4d_wall_time_rows(
         "source,rank,num_gpus,iteration,local_wall_ms,global_wall_ms,strategy,mode,p1,p2,p3,nx,ny,nz,nw,"
         "native_spectral_layout,native_xw_direct_layout,native_xw_chunk_mib,native_xw_chunk_window,"
         "native_xw_compact_staging,slab_native_work_area_alias,slab_native_wz_communication_layout,"
-        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
+        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,slab_native_wz_send_overlap,"
+        "slab_native_wz_send_overlap_nonblocking_stream,"
+        "slab_native_wz_backward_plane_credit_window,slab_native_wz_backward_cyclic_peer_order,"
         "pencil_p3_degenerate_wz_pipeline,directory";
     std::vector<std::string> rows;
     rows.reserve( local_wall_times.size() );
@@ -90,6 +92,10 @@ void append_4d_wall_time_rows(
             << ( options.use_4d_slab_native_wz_communication_layout ? 1 : 0 ) << ','
             << options.slab_native_wz_plan_concurrency << ','
             << ( options.use_4d_slab_native_wz_ready_pipeline ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_send_overlap ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_send_overlap_nonblocking_stream ? 1 : 0 ) << ','
+            << options.slab_native_wz_backward_plane_credit_window << ','
+            << ( options.use_4d_slab_native_wz_backward_cyclic_peer_order ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_p3_degenerate_wz_pipeline ? 1 : 0 ) << ','
             << fftm::test::detail::csv_quote( options.directory );
         rows.push_back( row.str() );
@@ -116,7 +122,9 @@ void append_4d_stage_timer_rows(
         "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,native_xw_direct_layout,"
         "native_xw_chunked_transport,native_xw_chunk_mib,native_xw_chunk_window,native_xw_compact_staging,"
         "slab_native_work_area_alias,slab_native_work_area_alias_effective,slab_native_wz_communication_layout,"
-        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
+        "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,slab_native_wz_send_overlap,"
+        "slab_native_wz_send_overlap_nonblocking_stream,"
+        "slab_native_wz_backward_plane_credit_window,slab_native_wz_backward_cyclic_peer_order,"
         "slab_native_xw_native_spectral_layout,pencil_same_zw_peer_paired,pencil_same_zw_native_layout,"
         "pencil_p3_degenerate_wz_pipeline,"
         "pencil_degenerate_xw_slab_path,pencil_degenerate_local_transposes,"
@@ -147,6 +155,10 @@ void append_4d_stage_timer_rows(
             << ( options.use_4d_slab_native_wz_communication_layout ? 1 : 0 ) << ','
             << options.slab_native_wz_plan_concurrency << ','
             << ( options.use_4d_slab_native_wz_ready_pipeline ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_send_overlap ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_send_overlap_nonblocking_stream ? 1 : 0 ) << ','
+            << options.slab_native_wz_backward_plane_credit_window << ','
+            << ( options.use_4d_slab_native_wz_backward_cyclic_peer_order ? 1 : 0 ) << ','
             << ( options.use_4d_slab_native_xw_native_spectral_layout ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_same_zw_peer_paired ? 1 : 0 ) << ','
             << ( options.use_4d_pencil_same_zw_native_layout ? 1 : 0 ) << ','
@@ -208,6 +220,13 @@ int run_benchmark_case(
         options.use_4d_slab_native_wz_communication_layout;
     base_options.slab_native_wz_plan_concurrency = options.slab_native_wz_plan_concurrency;
     base_options.use_4d_slab_native_wz_ready_pipeline = options.use_4d_slab_native_wz_ready_pipeline;
+    base_options.use_4d_slab_native_wz_send_overlap = options.use_4d_slab_native_wz_send_overlap;
+    base_options.use_4d_slab_native_wz_send_overlap_nonblocking_stream =
+        options.use_4d_slab_native_wz_send_overlap_nonblocking_stream;
+    base_options.slab_native_wz_backward_plane_credit_window =
+        options.slab_native_wz_backward_plane_credit_window;
+    base_options.use_4d_slab_native_wz_backward_cyclic_peer_order =
+        options.use_4d_slab_native_wz_backward_cyclic_peer_order;
     base_options.use_4d_pencil_same_zw_peer_paired = options.use_4d_pencil_same_zw_peer_paired;
     base_options.use_4d_pencil_same_zw_native_layout = options.use_4d_pencil_same_zw_native_layout;
     base_options.use_4d_pencil_p3_degenerate_wz_pipeline = options.use_4d_pencil_p3_degenerate_wz_pipeline;
@@ -417,6 +436,10 @@ int run_benchmark_case(
             << ( options.use_4d_slab_native_wz_communication_layout ? 1 : 0 ) << ','
             << options.slab_native_wz_plan_concurrency << ','
             << ( options.use_4d_slab_native_wz_ready_pipeline ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_send_overlap ? 1 : 0 ) << ','
+            << ( options.use_4d_slab_native_wz_send_overlap_nonblocking_stream ? 1 : 0 ) << ','
+            << options.slab_native_wz_backward_plane_credit_window << ','
+            << ( options.use_4d_slab_native_wz_backward_cyclic_peer_order ? 1 : 0 ) << ','
             << distributed_fft.shared_fft_work_size_bytes() << ','
             << distributed_fft.shared_transpose_work_size_bytes() << ','
             << distributed_fft.shared_same_xw_work_size_bytes() << ','
@@ -451,7 +474,9 @@ int run_benchmark_case(
                     "slab_native_xw_tiled_kernels,slab_native_xw_layout_stage,native_xw_direct_layout,"
                     "native_xw_chunked_transport,native_xw_chunk_mib,native_xw_chunk_window,native_xw_compact_staging,"
                     "slab_native_work_area_alias,slab_native_work_area_alias_effective,slab_native_wz_communication_layout,"
-                    "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,"
+                    "slab_native_wz_plan_concurrency,slab_native_wz_ready_pipeline,slab_native_wz_send_overlap,"
+                    "slab_native_wz_send_overlap_nonblocking_stream,"
+                    "slab_native_wz_backward_plane_credit_window,slab_native_wz_backward_cyclic_peer_order,"
                     "fft_work_bytes,"
                     "transpose_work_bytes,same_xw_work_bytes,sliced_z_work_bytes,stage1_alias_bytes,shared_work_bytes,"
                     "slab_native_xw_native_spectral_layout,pencil_same_zw_peer_paired,pencil_same_zw_native_layout,"
