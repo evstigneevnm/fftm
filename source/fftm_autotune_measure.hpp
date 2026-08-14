@@ -32,7 +32,7 @@ struct measured_3d_options
     bool        include_high_memory_opt0 = false;
     bool        production_candidates_only = true;
     bool        replace_policy_cache = true;
-    bool        continue_on_candidate_error = false;
+    bool        continue_on_candidate_error = true;
     bool        log_candidate_memory = false;
     bool        verify_candidate_memory_recovery = true;
     std::size_t candidate_memory_recovery_tolerance_bytes =

@@ -13,6 +13,16 @@ Build it directly:
 make -C examples/poisson
 ```
 
+CUDA and MPI installations default to `/usr/local/cuda` and `/usr/local/mpi`.
+They and the target GPU architecture are normal Make variables, so a remote
+machine can override them without editing project files:
+
+```bash
+make -C examples/poisson \
+  cuda_dir=/opt/cuda mpi_dir=/opt/openmpi \
+  CUDA_ARCH='-gencode arch=compute_80,code=sm_80'
+```
+
 It remains part of the aggregate examples build:
 
 ```bash
@@ -65,6 +75,10 @@ cache-validation controls. Optional candidate expansion is available through
 `FFTM_CPP_AUTOTUNE_INCLUDE_ALLTOALLV`,
 `FFTM_CPP_AUTOTUNE_INCLUDE_HIGH_MEMORY_OPT0`, and
 `FFTM_CPP_AUTOTUNE_MAX_PENCIL_GRIDS`. Set
+`FFTM_CPP_AUTOTUNE_CONTINUE_ON_CANDIDATE_ERROR=0` to make an unsupported or
+failed candidate abort the sweep. By default, failed candidates are recorded
+as invalid in the cache and measurement continues; a valid candidate is still
+required before the cache is written. Set
 `FFTM_CPP_AUTOTUNE_LOG_CANDIDATE_MEMORY=1` to report free device memory before
 and after each measured candidate; it is disabled by default. Measured
 candidates reuse SCFD-owned workspace and spectrum pools because CUDA-aware MPI
@@ -89,6 +103,15 @@ a production `2048^3` target for 6, 7, and 8 GPUs:
 ```bash
 scripts/run_cpp_autotune_validation.sh smoke
 scripts/run_cpp_autotune_validation.sh production
+```
+
+For a small reader-facing check on a two-GPU CUDA machine with CUDA-aware MPI,
+build and run the policy-cache, measured-cache, and 4D examples with:
+
+```bash
+CUDA_ARCH='-gencode arch=compute_80,code=sm_80' \
+MPIEXEC=/opt/openmpi/bin/mpiexec \
+bash examples/tests/run_reader_smoke.sh
 ```
 
 The launcher validates the compatibility signature by default. This permits a

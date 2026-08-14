@@ -31,6 +31,7 @@ struct fake_runtime_api
 struct fake_candidate_evaluator
 {
     int calls = 0;
+    std::string fail_mode;
 
     fftm::autotune::candidate_measurement operator()(
         const fftm::autotune::selected_3d_config &selected,
@@ -38,6 +39,8 @@ struct fake_candidate_evaluator
     )
     {
         ++calls;
+        if ( !fail_mode.empty() && selected.mode == fail_mode )
+            throw std::runtime_error( "synthetic candidate failure" );
         double wall_ms = 30.0;
         if ( selected.strategy_3d == "slab-pencil" )
             wall_ms = 10.0;
@@ -228,6 +231,7 @@ void test_measured_candidate_policy()
 
     fftm::autotune::measured_3d_options options;
     assert( options.include_alltoallv );
+    assert( options.continue_on_candidate_error );
     assert( options.verify_candidate_memory_recovery );
     assert( options.candidate_memory_recovery_tolerance_bytes == 1024ULL * 1024ULL * 1024ULL );
     const auto candidates6 = fftm::autotune::make_measured_3d_candidates( 6, sizes, options );
@@ -288,6 +292,63 @@ void test_measured_candidate_policy()
             fftm::autotune::value_or_empty( candidate, "FFTM_AUTOTUNE_STRATEGY_3D" ) == "pencil-slab";
     }
     assert( found_pencil_slab );
+}
+
+void test_failed_measured_candidate(
+    const scfd::communication::mpi_comm_info &comm, const std::string &cache_file
+)
+{
+    if ( comm.myid == 0 )
+        std::remove( cache_file.c_str() );
+    comm.barrier();
+
+    fftm::global_sizes sizes;
+    sizes.init( 64, 64, 64 );
+
+    fftm::autotune::autotune_options options;
+    options.cache_file = cache_file;
+    options.strict_device_identity = true;
+
+    fftm::autotune::measured_3d_options measured;
+    measured.warmup = 0;
+    measured.iterations = 1;
+
+    fake_candidate_evaluator evaluator;
+    evaluator.fail_mode = "alltoallv";
+    const auto selected = fftm::autotune::load_or_measure_3d_config<fake_runtime_api>(
+        comm, sizes, options, measured, evaluator
+    );
+    assert( selected.source == "measured" );
+    assert( selected.mode == "p2p-waitany" );
+
+    if ( comm.myid == 0 )
+    {
+        const auto cache = fftm::autotune::load_key_value_file( cache_file );
+        const std::size_t count = static_cast<std::size_t>( std::strtoull(
+            fftm::autotune::value_or_empty(
+                cache, "FFTM_AUTOTUNE_CANDIDATE_COUNT"
+            ).c_str(), nullptr, 10
+        ) );
+        std::size_t invalid = 0;
+        for ( std::size_t index = 0; index < count; ++index )
+        {
+            const std::string prefix = fftm::autotune::measured_candidate_prefix( index );
+            if ( !fftm::autotune::truthy(
+                     fftm::autotune::value_or_empty( cache, prefix + "VALID" )
+                 ) )
+            {
+                ++invalid;
+                assert( !fftm::autotune::value_or_empty( cache, prefix + "ERROR" ).empty() );
+            }
+        }
+        const std::size_t strategies = comm.num_procs > 1 ? 3 : 1;
+        assert( count == 2 * strategies );
+        assert( invalid == strategies );
+    }
+
+    comm.barrier();
+    if ( comm.myid == 0 )
+        std::remove( cache_file.c_str() );
 }
 
 void test_collective_cache(
@@ -441,5 +502,6 @@ int main( int argc, char *argv[] )
     test_measured_candidate_policy();
     test_collective_cache( comm, cache_file );
     test_measured_cache( comm, cache_file + ".measured" );
+    test_failed_measured_candidate( comm, cache_file + ".failure" );
     return 0;
 }

@@ -240,6 +240,9 @@ void apply_measurement_environment( fftm::autotune::measured_3d_options &options
     };
 
     assign_bool( "FFTM_CPP_AUTOTUNE_INCLUDE_ALLTOALLV", options.include_alltoallv );
+    assign_bool(
+        "FFTM_CPP_AUTOTUNE_CONTINUE_ON_CANDIDATE_ERROR", options.continue_on_candidate_error
+    );
     assign_bool( "FFTM_CPP_AUTOTUNE_INCLUDE_HIGH_MEMORY_OPT0", options.include_high_memory_opt0 );
     assign_bool( "FFTM_CPP_AUTOTUNE_PRODUCTION_CANDIDATES_ONLY", options.production_candidates_only );
     assign_bool( "FFTM_CPP_AUTOTUNE_LOG_CANDIDATE_MEMORY", options.log_candidate_memory );
