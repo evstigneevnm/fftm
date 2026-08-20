@@ -66,6 +66,8 @@ ALL_BINS = \
 	test_fftm_options.bin \
 	test_fft_benchmark_reporting.bin \
 	test_fftm_autotune_hardware.bin \
+	test_fftm_autotune_4d.bin \
+	test_fftm_autotune_4d_runtime.bin \
 	test_fftm_resource_lifecycle.bin \
 	test_fftm_quiet_default.bin \
 	test_init.bin \
@@ -197,6 +199,10 @@ $(eval $(call BUILD_MPI_TEST,test_init.bin,test_init.cu,$(NVCCFLAGS),$(SCFD_FLAG
 $(eval $(call BUILD_MPI_TEST,test_fftm_quiet_default.bin,test_fftm_quiet_default.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_quiet_default.o,-lcudart -lcufft -lmpi))
 
 $(eval $(call BUILD_MPI_TEST,test_fftm_autotune_hardware.bin,test_fftm_autotune_hardware.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_autotune_hardware.o,-lcudart -lcufft -lmpi))
+
+$(eval $(call BUILD_MPI_TEST,test_fftm_autotune_4d.bin,test_fftm_autotune_4d.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_autotune_4d.o,-lcudart -lcufft -lmpi))
+
+$(eval $(call BUILD_MPI_TEST,test_fftm_autotune_4d_runtime.bin,test_fftm_autotune_4d_runtime.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_autotune_4d_runtime.o,-lcudart -lcufft -lmpi))
 
 $(eval $(call BUILD_MPI_TEST,test_fftm_resource_lifecycle.bin,test_fftm_resource_lifecycle.cu,$(NVCCFLAGS_NO_DEVICE_DEBUG),$(SCFD_FLAGS_CA),test_fftm_resource_lifecycle.o,-lcudart -lcufft -lmpi))
 

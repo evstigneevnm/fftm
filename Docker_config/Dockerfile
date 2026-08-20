@@ -37,7 +37,8 @@ RUN make -C source/tests check-abstraction-boundaries && \
     test_fftm_3D_compare.bin test_fftm_3D_compare_nca.bin \
     test_fftm_4D_compare.bin test_fftm_4D_compare_nca.bin \
     test_fftm_options.bin test_fft_benchmark_reporting.bin test_fftm_quiet_default.bin \
-    test_fftm_autotune_hardware.bin test_fftm_resource_lifecycle.bin \
+    test_fftm_autotune_hardware.bin test_fftm_autotune_4d.bin \
+    test_fftm_autotune_4d_runtime.bin test_fftm_resource_lifecycle.bin \
     test_scfd_mpi_transport.bin \
     test_4D_poisson_mpi.bin test_4D_poisson_mpi_tutorial.bin \
     BUILD_FOLDER=/opt/fftm/bin \
@@ -59,6 +60,8 @@ RUN make -C source/tests check-abstraction-boundaries && \
     test -x /opt/fftm/bin/test_fft_benchmark_reporting.bin && \
     test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
     test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
+    test -x /opt/fftm/bin/test_fftm_autotune_4d.bin && \
+    test -x /opt/fftm/bin/test_fftm_autotune_4d_runtime.bin && \
     test -x /opt/fftm/bin/test_fftm_resource_lifecycle.bin && \
     test -x /opt/fftm/bin/test_scfd_mpi_transport.bin && \
     test -x /opt/fftm/bin/test_4D_poisson_mpi.bin && \
@@ -136,6 +139,8 @@ RUN test -x /opt/fftm/bin/test_scfd_mpi_transport.bin && \
     test -x /opt/fftm/bin/test_fft_benchmark_reporting.bin && \
     test -x /opt/fftm/bin/test_fftm_quiet_default.bin && \
     test -x /opt/fftm/bin/test_fftm_autotune_hardware.bin && \
+    test -x /opt/fftm/bin/test_fftm_autotune_4d.bin && \
+    test -x /opt/fftm/bin/test_fftm_autotune_4d_runtime.bin && \
     test -x /opt/fftm/bin/test_fftm_resource_lifecycle.bin && \
     test -x /opt/fftm/bin/test_fftm_3D_compare.bin && \
     test -x /opt/fftm/bin/test_fftm_3D_compare_nca.bin && \

@@ -219,12 +219,15 @@ option sets:
 Use `fftm::profiling_reporting_options()` when a benchmark intentionally needs
 the complete timing and memory summaries.
 
-The C++ autotune API has two layers and does not require Python:
+The C++ autotune API has two layers for both 3D and 4D and does not require
+Python:
 
-- `fftm_autotune.hpp` creates or loads a known production-policy cache.
-- `fftm_autotune_measure.hpp` measures complete forward/backward pairs for a
-  production-safe 3D candidate matrix, stores every candidate timing, and
-  selects the lowest median max-rank wall time.
+- `fftm_autotune.hpp` and `fftm_autotune_4d.hpp` create or load known
+  production-policy caches.
+- `fftm_autotune_measure.hpp` and `fftm_autotune_measure_4d.hpp` measure
+  complete forward/backward pairs for production-safe candidate matrices,
+  store every candidate timing, and select the lowest median max-rank wall
+  time.
 
 Schema-v2 caches validate the GPU model and architecture, device memory,
 CUDA runtime and driver, MPI implementation, node/rank topology, distinct
@@ -254,6 +257,31 @@ auto selected = fftm::autotune::load_or_measure_3d_config<runtime_api_t>(
     comm, sizes, cache, measurements, evaluator);
 ```
 
+The 4D interface follows the same protocol while making the application-visible
+spectral layout an explicit constraint:
+
+```cpp
+fftm::autotune::autotune_options_4d cache4d;
+cache4d.cache_file = "fftm_4d.env";
+cache4d.requested_spectral_layout = fftm::fftm_4d_spectral_layout::native_xzwy;
+
+fftm::autotune::measured_4d_options measurements4d;
+using evaluator_4d_t = fftm::autotune::fftm_4d_candidate_evaluator<
+    fft_backend_t, comm_t, backend_t, log_t>;
+evaluator_4d_t evaluator4d(comm, sizes4d, log);
+
+auto selected4d = fftm::autotune::load_or_measure_4d_config<runtime_api_t>(
+    comm, sizes4d, cache4d, measurements4d, evaluator4d);
+```
+
+The measured 4D matrix covers slab-slab and pencil-pencil production paths,
+eligible `p2p-waitany` and `alltoallv` modes, the node-aligned pencil grid on
+multiple nodes, and the validated slab backward-credit fallback where it is
+applicable. Combinations that conflict with a required native direct layout
+are removed during candidate preflight instead of being launched. Use
+`init_autotuned_4d_plan` and `init_autotuned_4d_data_arrays` to transfer the
+retained SCFD workspace and data pools to the selected application plan.
+
 An expert can constrain a cached selection without rerunning measurements:
 
 ```cpp
@@ -272,7 +300,10 @@ transferred to the selected application plan and its spectrum view. The real
 input retains normal SCFD ownership because it is not registered by the
 validated communication paths. Applications using a measured
 selection should initialize the transform arrays with
-`init_autotuned_3d_data_arrays`. The memory guard reports intentional pool
+`init_autotuned_3d_data_arrays`. The 4D evaluator additionally retains the
+SCFD input pool because its larger candidate matrix can otherwise expose the
+same device-aware MPI allocation-lifetime behavior; selected 4D applications
+use `init_autotuned_4d_data_arrays`. The memory guard reports intentional pool
 growth separately and still rejects unexplained retained memory.
 
 ### 3D Strategies
@@ -421,6 +452,7 @@ complete Taylor-Green application and 4D analysis workflow is documented in
 | FFTM vs FFTS comparisons | `test_fftm_3D_compare.cu`, `test_fftm_4D_compare.cu` |
 | Manufactured Poisson tests | `test_3D_poisson_mpi.cu`, `test_4D_poisson_mpi.cu` |
 | Tutorial Poisson examples | `test_3D_poisson_mpi_tutorial.cu`, `test_4D_poisson_mpi_tutorial.cu` |
+| C++ autotune caches | `test_fftm_autotune_hardware.cu`, `test_fftm_autotune_4d.cu`, `test_fftm_autotune_4d_runtime.cu` |
 | Performance benchmarks | `test_benchmark_ffts_3D.cu`, `test_benchmark_ffts_4D.cu`, `test_benchmark_fftm_3D.cu`, `test_benchmark_fftm_4D.cu` |
 | Versioned analytical tests | `test_ffts_v0_3D.cu` through `test_ffts_v4_4D.cu`, and `test_fftm_v0_3D.cu` through `test_fftm_v4_4D.cu` |
 
