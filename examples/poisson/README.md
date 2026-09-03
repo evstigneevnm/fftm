@@ -4,8 +4,15 @@ This directory contains two SCFD/FFTM manufactured-solution applications:
 
 - `poisson_periodic_3d_autotuned.bin` demonstrates measured C++ autotuning and
   cache reuse for a distributed 3D transform.
-- `poisson_periodic_4d.bin` demonstrates the production 4D slab-slab path and
-  its native `xzwy` Fourier-space layout.
+- `poisson_periodic_4d_autotuned.bin` demonstrates measured 4D strategy, transport, and
+  spectral-layout selection. Its Fourier-space operator supports both the
+  public `yzwx` and native `xzwy` contracts.
+
+Both sources are backend-neutral `.cpp` translation units. They use FFTM's
+backend facade and SCFD device containers and kernels; CUDA and HIP names do
+not appear in application code. Because the files contain device functors,
+the Makefile compiles them explicitly as CUDA or HIP rather than using a
+host-only C++ compiler.
 
 Build it directly:
 
@@ -23,11 +30,35 @@ make -C examples/poisson \
   CUDA_ARCH='-gencode arch=compute_80,code=sm_80'
 ```
 
+Build the ROCm-aware HIP binaries with:
+
+```bash
+make -C examples/poisson hip \
+  ROCM_DIR=/opt/rocm \
+  mpi_dir=$HOME/opt/rocm-mpi/openmpi \
+  HIP_ARCH=gfx1102
+```
+
+For MPI installations that cannot consume device pointers, build the
+host-staged variants instead:
+
+```bash
+make -C examples/poisson hip-nca \
+  ROCM_DIR=/opt/rocm \
+  mpi_dir=/opt/openmpi \
+  HIP_ARCH=gfx1102
+```
+
+These targets produce `_hip.bin` and `_hip_nca.bin` binaries alongside the
+stable CUDA binary names. The historical SCFD CUDA-aware macro appears only in
+the build boundary; FFTM application code treats it as a backend-neutral MPI
+capability.
+
 It remains part of the aggregate examples build:
 
 ```bash
 make -C examples poisson_periodic_3d_autotuned.bin
-make -C examples poisson_periodic_4d.bin
+make -C examples poisson_periodic_4d_autotuned.bin
 ```
 
 ## Autotuned 3D solve
@@ -125,7 +156,7 @@ Each target requests one Slurm allocation unless it is already running inside
 one. The result directory contains one short subdirectory per GPU count,
 `status.csv`, the generated caches, and a compact selected-configuration log.
 
-## Native-spectral 4D solve
+## Autotuned 4D solve
 
 The 4D application solves
 
@@ -134,21 +165,56 @@ The 4D application solves
 u = sin(x) cos(2y) sin(3z) cos(w)
 ```
 
-on the periodic domain `[0,2*pi)^4`. It uses the public production preset,
-stores all fields in SCFD tensors, applies the diagonal Poisson operator in
-FFTM's native `xzwy` spectral view, and verifies the relative L2 error.
+on the periodic domain `[0,2*pi)^4`. It stores all fields in SCFD tensors,
+measures the supported 4D strategy/communication candidates, applies the
+diagonal operator in the selected Fourier-space layout, and verifies the
+relative L2 error.
 
-The positional arguments are the common side length and repetition count:
+The full positional form is `Nx Ny Nz Nw`, followed by the cache path,
+repetition count, and application warmup. A single `N` remains a shorthand
+for an `N x N x N x N` problem:
 
 ```bash
-mpiexec -n 4 ./examples/build/poisson_periodic_4d.bin 64 3
+mpiexec -n 4 ./examples/build/poisson_periodic_4d_autotuned.bin \
+  64 80 96 128 fftm_poisson_4d_64x80x96x128_4g.env 3 1
 ```
+
+The example declares that its Fourier-space kernel accepts both implemented
+physical contracts:
+
+```cpp
+autotune_options.accepted_spectral_layouts = {
+    fftm::fftm_4d_spectral_layout::public_yzwx,
+    fftm::fftm_4d_spectral_layout::native_xzwy
+};
+```
+
+Consequently, complete forward/backward pairs for both layouts enter the
+measured candidate set. The selected layout is serialized with every candidate
+and returned in `selected.config`. Changing the accepted-layout set invalidates
+the measured cache so that an unmeasured representation cannot win by stale
+timing. Applications that require one fixed representation should leave
+`accepted_spectral_layouts` empty and set `requested_spectral_layout`.
+
+Override the example's two-layout set with a comma-separated list:
+
+```bash
+FFTM_CPP_AUTOTUNE_ACCEPTED_SPECTRAL_LAYOUTS_4D=native-xzwy \
+mpiexec -n 4 ./examples/build/poisson_periodic_4d_autotuned.bin \
+  64 64 64 64 fftm_poisson_4d_native_64_4g.env 3 1
+```
+
+The first execution measures and writes the cache; the second loads its
+winner. `FFTM_CPP_AUTOTUNE_WARMUP`, `FFTM_CPP_AUTOTUNE_TIMES`, and the 4D
+strategy/layout constraint variables use the same semantics as their 3D
+counterparts.
 
 For a local one-GPU correctness check with multiple wrapped MPI ranks:
 
 ```bash
 FFTM_WRAP_PROCS_GPUS=1 \
-mpiexec -n 2 ./examples/build/poisson_periodic_4d.bin 16 1
+mpiexec -n 2 ./examples/build/poisson_periodic_4d_autotuned.bin \
+  16 16 16 16 fftm_poisson_4d_smoke.env 1 0
 ```
 
 ## Reader smoke suite
@@ -163,4 +229,19 @@ make -C examples reader-smoke
 ```
 
 Set `FFTM_READER_BUILD_DIR`, `CUDA_ARCH`, or `MPIEXEC` to override the local
-build directory, CUDA architecture, or MPI launcher.
+build directory, CUDA architecture, or MPI launcher. For HIP, use:
+
+```bash
+FFTM_READER_BACKEND=hip \
+FFTM_READER_DEVICE_AWARE_MPI=0 \
+ROCM_DIR=/opt/rocm \
+HIP_ARCH=gfx1102 \
+mpi_dir=/opt/openmpi \
+MPIEXEC=/opt/openmpi/bin/mpiexec \
+bash examples/tests/run_reader_smoke.sh
+```
+
+Set `FFTM_READER_DEVICE_AWARE_MPI=1` only when Open MPI and its transport have
+been built with ROCm pointer support. The smoke suite checks backend identity,
+transport capability, cache creation/reuse, numerical accuracy, and both 4D
+layout candidates.

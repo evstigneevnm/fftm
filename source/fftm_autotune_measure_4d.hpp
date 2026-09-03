@@ -59,6 +59,7 @@ inline config_map make_measured_4d_candidate(
     int num_procs, const global_sizes &sizes, std::size_t ranks_per_node,
     const autotune_options_4d &autotune, const std::string &strategy,
     const std::string &mode, std::size_t p1, std::size_t p2, std::size_t p3,
+    fftm_4d_spectral_layout spectral_layout,
     const std::string &credit_policy = "auto"
 )
 {
@@ -71,6 +72,10 @@ inline config_map make_measured_4d_candidate(
     config["FFTM_AUTOTUNE_GRID_4D"] = std::to_string( p1 ) + "x" +
                                         std::to_string( p2 ) + "x" +
                                         std::to_string( p3 );
+    config["FFTM_AUTOTUNE_SPECTRAL_LAYOUT_4D"] =
+        fftm_4d_spectral_layout_name( spectral_layout );
+    config["FFTM_AUTOTUNE_ACCEPTED_SPECTRAL_LAYOUTS_4D"] =
+        accepted_spectral_layouts_string_4d( autotune );
     config["FFTM_AUTOTUNE_4D_SLAB_BACKWARD_CREDIT_POLICY"] = credit_policy;
     if ( strategy == "pencil-pencil" )
     {
@@ -81,7 +86,7 @@ inline config_map make_measured_4d_candidate(
         );
         config["FFTM_AUTOTUNE_PENCIL_PIPELINE_4D"] = fftm_4d_pencil_pipeline_name(
             select_production_pencil_pipeline_4d(
-                topology, autotune.requested_spectral_layout, autotune.device_aware_mpi
+                topology, spectral_layout, autotune.device_aware_mpi
             )
         );
     }
@@ -158,44 +163,49 @@ inline std::vector<config_map> make_measured_4d_candidates(
         throw std::logic_error( "FFTM measured 4D autotune has no enabled communication mode" );
 
     std::vector<config_map> result;
+    const auto spectral_layouts = effective_accepted_spectral_layouts_4d( autotune );
     const auto pencil_grid = production_pencil_grid_4d( num_procs, ranks_per_node );
-    for ( const auto &mode : modes )
+    for ( const auto spectral_layout : spectral_layouts )
     {
-        if ( options.include_slab_slab )
+        for ( const auto &mode : modes )
         {
-            append_supported_measured_4d_candidate(
-                result,
-                make_measured_4d_candidate(
-                    num_procs, sizes, ranks_per_node, autotune, "slab-slab", mode,
-                    1, static_cast<std::size_t>( num_procs ), 1
-                ),
-                num_procs, sizes, ranks_per_node
-            );
-            if ( options.include_slab_credit_fallback && mode == "p2p-waitany" &&
-                 slab_credit_policy_is_active_4d( num_procs ) &&
-                 autotune.requested_spectral_layout == fftm_4d_spectral_layout::native_xzwy )
+            if ( options.include_slab_slab )
             {
                 append_supported_measured_4d_candidate(
                     result,
                     make_measured_4d_candidate(
                         num_procs, sizes, ranks_per_node, autotune, "slab-slab", mode,
-                        1, static_cast<std::size_t>( num_procs ), 1, "disabled"
+                        1, static_cast<std::size_t>( num_procs ), 1, spectral_layout
+                    ),
+                    num_procs, sizes, ranks_per_node
+                );
+                if ( options.include_slab_credit_fallback && mode == "p2p-waitany" &&
+                     slab_credit_policy_is_active_4d( num_procs ) &&
+                     spectral_layout == fftm_4d_spectral_layout::native_xzwy )
+                {
+                    append_supported_measured_4d_candidate(
+                        result,
+                        make_measured_4d_candidate(
+                            num_procs, sizes, ranks_per_node, autotune, "slab-slab", mode,
+                            1, static_cast<std::size_t>( num_procs ), 1, spectral_layout,
+                            "disabled"
+                        ),
+                        num_procs, sizes, ranks_per_node
+                    );
+                }
+            }
+            if ( options.include_pencil_pencil && num_procs > 1 )
+            {
+                append_supported_measured_4d_candidate(
+                    result,
+                    make_measured_4d_candidate(
+                        num_procs, sizes, ranks_per_node, autotune, "pencil-pencil", mode,
+                        std::get<0>( pencil_grid ), std::get<1>( pencil_grid ),
+                        std::get<2>( pencil_grid ), spectral_layout
                     ),
                     num_procs, sizes, ranks_per_node
                 );
             }
-        }
-        if ( options.include_pencil_pencil && num_procs > 1 )
-        {
-            append_supported_measured_4d_candidate(
-                result,
-                make_measured_4d_candidate(
-                    num_procs, sizes, ranks_per_node, autotune, "pencil-pencil", mode,
-                    std::get<0>( pencil_grid ), std::get<1>( pencil_grid ),
-                    std::get<2>( pencil_grid )
-                ),
-                num_procs, sizes, ranks_per_node
-            );
         }
     }
     std::stable_sort( result.begin(), result.end(), []( const config_map &lhs, const config_map &rhs ) {
@@ -208,8 +218,8 @@ inline std::vector<config_map> make_measured_4d_candidates(
 
 inline bool measured_cache_4d( const config_map &config )
 {
-    return value_or_empty( config, "FFTM_AUTOTUNE_SOURCE" ) == "cpp-measured-4d-v1" &&
-           value_or_empty( config, "FFTM_AUTOTUNE_4D_CANDIDATE_POLICY_VERSION" ) == "1" &&
+    return value_or_empty( config, "FFTM_AUTOTUNE_SOURCE" ) == "cpp-measured-4d-v2" &&
+           value_or_empty( config, "FFTM_AUTOTUNE_4D_CANDIDATE_POLICY_VERSION" ) == "2" &&
            !value_or_empty( config, "FFTM_AUTOTUNE_WINNER_MEDIAN_MS" ).empty();
 }
 
@@ -222,11 +232,16 @@ inline std::string measured_candidate_prefix_4d( std::size_t index )
 }
 
 inline bool measured_candidate_matches_4d(
-    const config_map &cache, std::size_t index, const autotune_constraints_4d &constraints
+    const config_map &cache, std::size_t index, const autotune_constraints_4d &constraints,
+    const std::vector<fftm_4d_spectral_layout> &accepted_spectral_layouts = {}
 )
 {
     const std::string prefix = measured_candidate_prefix_4d( index );
-    return truthy( value_or_empty( cache, prefix + "VALID" ) ) &&
+    const std::string layout_name = value_or_empty( cache, prefix + "SPECTRAL_LAYOUT_4D" );
+    const bool layout_accepted = accepted_spectral_layouts.empty() || accepts_spectral_layout_4d(
+        accepted_spectral_layouts, parse_spectral_layout_4d( layout_name )
+    );
+    return layout_accepted && truthy( value_or_empty( cache, prefix + "VALID" ) ) &&
            constraint_matches( constraints.strategy_4d, value_or_empty( cache, prefix + "STRATEGY_4D" ) ) &&
            constraint_matches( constraints.mode, value_or_empty( cache, prefix + "MODE" ) ) &&
            constraint_matches( constraints.backend_4d, value_or_empty( cache, prefix + "BACKEND_4D" ) ) &&
@@ -240,7 +255,8 @@ inline bool measured_candidate_matches_4d(
 }
 
 inline config_map select_measured_candidate_config_4d(
-    const config_map &cache, const autotune_constraints_4d &constraints
+    const config_map &cache, const autotune_constraints_4d &constraints,
+    const std::vector<fftm_4d_spectral_layout> &accepted_spectral_layouts = {}
 )
 {
     if ( !measured_cache_4d( cache ) )
@@ -256,7 +272,9 @@ inline config_map select_measured_candidate_config_4d(
     double best_ms = std::numeric_limits<double>::infinity();
     for ( std::size_t index = 0; index < count; ++index )
     {
-        if ( !measured_candidate_matches_4d( cache, index, constraints ) )
+        if ( !measured_candidate_matches_4d(
+                 cache, index, constraints, accepted_spectral_layouts
+             ) )
             continue;
         const std::string prefix = measured_candidate_prefix_4d( index );
         const double wall_ms = std::strtod(
@@ -293,8 +311,8 @@ inline void store_measured_candidates_4d(
     std::size_t winner_index, const measured_4d_options &options
 )
 {
-    winner["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-4d-v1";
-    winner["FFTM_AUTOTUNE_4D_CANDIDATE_POLICY_VERSION"] = "1";
+    winner["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-4d-v2";
+    winner["FFTM_AUTOTUNE_4D_CANDIDATE_POLICY_VERSION"] = "2";
     winner["FFTM_AUTOTUNE_MEASURED"] = "1";
     winner["FFTM_AUTOTUNE_MEASURE_WARMUP"] = std::to_string( options.warmup );
     winner["FFTM_AUTOTUNE_MEASURE_ITERATIONS"] = std::to_string( options.iterations );
@@ -350,6 +368,11 @@ inline selected_4d_config load_or_measure_4d_config(
                 {
                     const config_map cached = load_key_value_file( autotune.cache_file );
                     validate_match_4d( cached, comm.num_procs, sizes );
+                    validate_device_aware_mpi_request(
+                        cached, autotune.device_aware_mpi, "measured 4D"
+                    );
+                    if ( measured_cache_4d( cached ) )
+                        validate_spectral_layout_request_4d( cached, autotune, true );
                     if ( autotune.validate_hardware )
                         validate_hardware_match( cached, inventory, autotune );
                     if ( measurement_options.replace_policy_cache && !measured_cache_4d( cached ) )
@@ -374,8 +397,15 @@ inline selected_4d_config load_or_measure_4d_config(
     if ( state == 0 )
     {
         const config_map cached = load_key_value_file( autotune.cache_file );
+        const auto accepted = effective_accepted_spectral_layouts_4d( autotune );
+        validate_device_aware_mpi_request(
+            cached, autotune.device_aware_mpi, "measured 4D"
+        );
+        validate_spectral_layout_request_4d( cached, autotune, measured_cache_4d( cached ) );
         return selected_4d_from_config(
-            select_measured_candidate_config_4d( cached, autotune.constraints_4d ),
+            select_measured_candidate_config_4d(
+                cached, autotune.constraints_4d, accepted
+            ),
             comm.num_procs, sizes, ranks_per_node, "cache"
         );
     }
@@ -468,10 +498,17 @@ inline selected_4d_config load_or_measure_4d_config(
 
     const config_map winner = load_key_value_file( autotune.cache_file );
     validate_match_4d( winner, comm.num_procs, sizes );
+    validate_device_aware_mpi_request(
+        winner, autotune.device_aware_mpi, "measured 4D"
+    );
+    validate_spectral_layout_request_4d( winner, autotune, true );
     if ( autotune.validate_hardware )
         validate_hardware_match( winner, inventory, autotune );
     selected_4d_config selected = selected_4d_from_config(
-        select_measured_candidate_config_4d( winner, autotune.constraints_4d ),
+        select_measured_candidate_config_4d(
+            winner, autotune.constraints_4d,
+            effective_accepted_spectral_layouts_4d( autotune )
+        ),
         comm.num_procs, sizes, ranks_per_node, "measured"
     );
     selected.runtime_workspace = retained_workspace_from_evaluator( evaluator, 0 );
@@ -516,11 +553,29 @@ public:
                 input.size_y[static_cast<std::size_t>( j )],
                 input.size_z[static_cast<std::size_t>( k )], sizes_.Nw
             );
-            const auto spectrum_shape = std::make_tuple(
-                sizes_.Nx, output.size_z[static_cast<std::size_t>( j )],
-                output.size_w[static_cast<std::size_t>( k )],
-                output.size_y[static_cast<std::size_t>( i )]
+            const auto layout = parse_spectral_layout_4d(
+                value_or_empty( candidate, "FFTM_AUTOTUNE_SPECTRAL_LAYOUT_4D" )
             );
+            const bool pencil = value_or_empty(
+                candidate, "FFTM_AUTOTUNE_STRATEGY_4D"
+            ) == "pencil-pencil";
+            const auto spectrum_shape = layout == fftm_4d_spectral_layout::public_yzwx
+                ? std::make_tuple(
+                      output.size_y[static_cast<std::size_t>( i )],
+                      output.size_z[static_cast<std::size_t>( j )],
+                      output.size_w[static_cast<std::size_t>( k )], output.size_x[0]
+                  )
+                : pencil
+                      ? std::make_tuple(
+                            output.size_x[0], output.size_z[static_cast<std::size_t>( j )],
+                            output.size_w[static_cast<std::size_t>( k )],
+                            output.size_y[static_cast<std::size_t>( i )]
+                        )
+                      : std::make_tuple(
+                            t2.size_x[static_cast<std::size_t>( i )],
+                            t2.size_z[static_cast<std::size_t>( j )],
+                            t2.size_w[static_cast<std::size_t>( k )], t2.size_y[0]
+                        );
             max_input_bytes = std::max(
                 max_input_bytes,
                 checked_local_4d_bytes( input_shape, sizeof( typename BaseFFT::real ), "input pool" )

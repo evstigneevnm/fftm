@@ -99,11 +99,12 @@ inline std::vector<std::pair<std::size_t, std::size_t>> measured_pencil_grids_3d
 
 inline config_map make_measured_3d_candidate(
     int num_procs, const global_sizes &sizes, const std::string &strategy, const std::string &mode,
-    std::size_t p1, std::size_t p2, const std::string &layout
+    std::size_t p1, std::size_t p2, const std::string &layout,
+    bool device_aware_mpi = true
 )
 {
-    config_map config = make_default_3d_policy_config( num_procs, sizes );
-    set_common_native_pencil_options( config );
+    config_map config = make_default_3d_policy_config( num_procs, sizes, 0, device_aware_mpi );
+    set_common_native_pencil_options( config, device_aware_mpi );
     config["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-candidate";
     config["FFTM_AUTOTUNE_STRATEGY_3D"] = strategy;
     config["FFTM_AUTOTUNE_MODE"] = mode;
@@ -112,7 +113,8 @@ inline config_map make_measured_3d_candidate(
 
     if ( strategy == "pencil-pencil" )
     {
-        config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] = "reference-parity";
+        config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] =
+            device_aware_mpi ? "reference-parity" : "reference";
         if ( layout == "opt0" )
             set_native_opt0_hot_y_options( config );
     }
@@ -166,7 +168,7 @@ inline int measured_workspace_priority_3d( const config_map &candidate )
 
 inline std::vector<config_map> make_measured_3d_candidates(
     int num_procs, const global_sizes &sizes, const measured_3d_options &options,
-    std::size_t ranks_per_node = 0
+    std::size_t ranks_per_node = 0, bool device_aware_mpi = true
 )
 {
     if ( num_procs <= 0 )
@@ -191,22 +193,24 @@ inline std::vector<config_map> make_measured_3d_candidates(
             {
                 append_unique_measured_3d_candidate( result, make_measured_3d_candidate(
                     num_procs, sizes, "slab-pencil", mode,
-                    static_cast<std::size_t>( num_procs ), 1, "auto"
+                    static_cast<std::size_t>( num_procs ), 1, "auto", device_aware_mpi
                 ) );
             }
             if ( num_procs > 1 && options.include_pencil_slab )
             {
                 append_unique_measured_3d_candidate( result, make_measured_3d_candidate(
                     num_procs, sizes, "pencil-slab", mode, 1,
-                    static_cast<std::size_t>( num_procs ), "auto"
+                    static_cast<std::size_t>( num_procs ), "auto", device_aware_mpi
                 ) );
             }
             if ( num_procs > 1 && options.include_pencil_pencil )
             {
                 config_map pencil = make_default_3d_policy_config(
-                    num_procs, sizes, ranks_per_node
+                    num_procs, sizes, ranks_per_node, device_aware_mpi
                 );
-                set_default_pencil_pencil_3d_policy( pencil, num_procs, ranks_per_node );
+                set_default_pencil_pencil_3d_policy(
+                    pencil, num_procs, ranks_per_node, device_aware_mpi
+                );
                 pencil["FFTM_AUTOTUNE_SOURCE"] = "cpp-measured-candidate";
                 pencil["FFTM_AUTOTUNE_MODE"] = mode;
                 pencil["FFTM_AUTOTUNE_CANDIDATE_ID"] = candidate_id_3d( pencil );
@@ -218,13 +222,15 @@ inline std::vector<config_map> make_measured_3d_candidates(
         if ( options.include_slab_pencil )
         {
             result.push_back( make_measured_3d_candidate(
-                num_procs, sizes, "slab-pencil", mode, static_cast<std::size_t>( num_procs ), 1, "auto"
+                num_procs, sizes, "slab-pencil", mode,
+                static_cast<std::size_t>( num_procs ), 1, "auto", device_aware_mpi
             ) );
         }
         if ( num_procs > 1 && options.include_pencil_slab )
         {
             result.push_back( make_measured_3d_candidate(
-                num_procs, sizes, "pencil-slab", mode, 1, static_cast<std::size_t>( num_procs ), "auto"
+                num_procs, sizes, "pencil-slab", mode, 1,
+                static_cast<std::size_t>( num_procs ), "auto", device_aware_mpi
             ) );
         }
         if ( num_procs > 1 && options.include_pencil_pencil )
@@ -238,14 +244,17 @@ inline std::vector<config_map> make_measured_3d_candidates(
                 if ( options.include_opt1 && ( grid.second != 1 || grid.first == 1 ) )
                 {
                     result.push_back( make_measured_3d_candidate(
-                        num_procs, sizes, "pencil-pencil", mode, grid.first, grid.second, "opt1"
+                        num_procs, sizes, "pencil-pencil", mode, grid.first, grid.second, "opt1",
+                        device_aware_mpi
                     ) );
                 }
                 const bool high_memory_count = num_procs >= 2 && num_procs <= 6;
-                if ( options.include_opt0 && ( !high_memory_count || options.include_high_memory_opt0 ) )
+                if ( device_aware_mpi && options.include_opt0 &&
+                     ( !high_memory_count || options.include_high_memory_opt0 ) )
                 {
                     result.push_back( make_measured_3d_candidate(
-                        num_procs, sizes, "pencil-pencil", mode, grid.first, grid.second, "opt0"
+                        num_procs, sizes, "pencil-pencil", mode, grid.first, grid.second, "opt0",
+                        device_aware_mpi
                     ) );
                 }
             }
@@ -444,6 +453,9 @@ inline selected_3d_config load_or_measure_3d_config(
                 {
                     const auto cached = load_key_value_file( autotune.cache_file );
                     validate_match( cached, comm.num_procs, sizes );
+                    validate_device_aware_mpi_request(
+                        cached, autotune.device_aware_mpi, "measured"
+                    );
                     if ( autotune.validate_hardware )
                         validate_hardware_match( cached, inventory, autotune );
                     if ( measurement_options.replace_policy_cache && !measured_cache_3d( cached ) )
@@ -470,6 +482,9 @@ inline selected_3d_config load_or_measure_3d_config(
     {
         const auto cached = load_key_value_file( autotune.cache_file );
         validate_match( cached, comm.num_procs, sizes );
+        validate_device_aware_mpi_request(
+            cached, autotune.device_aware_mpi, "measured"
+        );
         if ( autotune.validate_hardware )
             validate_hardware_match( cached, inventory, autotune );
         throw std::logic_error( "FFTM autotune cache is not a valid measured cache" );
@@ -477,6 +492,9 @@ inline selected_3d_config load_or_measure_3d_config(
     if ( state == 0 )
     {
         const auto cached = load_key_value_file( autotune.cache_file );
+        validate_device_aware_mpi_request(
+            cached, autotune.device_aware_mpi, "measured"
+        );
         return selected_3d_from_config(
             select_measured_candidate_config( cached, autotune.constraints_3d ),
             comm.num_procs, sizes, "cache"
@@ -484,7 +502,8 @@ inline selected_3d_config load_or_measure_3d_config(
     }
 
     const auto candidate_configs = make_measured_3d_candidates(
-        comm.num_procs, sizes, measurement_options, homogeneous_ranks_per_node( inventory )
+        comm.num_procs, sizes, measurement_options, homogeneous_ranks_per_node( inventory ),
+        autotune.device_aware_mpi
     );
     prepare_evaluator_candidates( evaluator, candidate_configs, 0 );
     std::vector<measured_3d_candidate> candidates;
@@ -578,6 +597,9 @@ inline selected_3d_config load_or_measure_3d_config(
 
     const auto winner = load_key_value_file( autotune.cache_file );
     validate_match( winner, comm.num_procs, sizes );
+    validate_device_aware_mpi_request(
+        winner, autotune.device_aware_mpi, "measured"
+    );
     if ( autotune.validate_hardware )
         validate_hardware_match( winner, inventory, autotune );
     selected_3d_config selected = selected_3d_from_config(

@@ -133,6 +133,10 @@ ALL_BINS = \
 
 BIN_TARGETS = $(ALL_BINS) test_cudaMemcpy3DAsync.bin
 HIP_BINS = \
+	test_fftm_autotune_4d_hip.bin \
+	test_fftm_autotune_4d_hip_nca.bin \
+	test_fftm_autotune_4d_runtime_hip.bin \
+	test_fftm_autotune_4d_runtime_hip_nca.bin \
 	test_fftm_3D_compare_hip.bin \
 	test_fftm_3D_compare_hip_nca.bin \
 	test_fftm_4D_compare_hip.bin \
@@ -226,6 +230,10 @@ $(eval $(call BUILD_MPI_TEST,test_fftm_4D_compare_nca.bin,test_fftm_4D_compare.c
 
 $(eval $(call BUILD_HIP_MPI_TEST,test_fftm_3D_compare_hip.bin,test_fftm_3D_compare.cu,$(HIP_DEVICE_AWARE)))
 $(eval $(call BUILD_HIP_MPI_TEST,test_fftm_3D_compare_hip_nca.bin,test_fftm_3D_compare.cu,))
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_autotune_4d_hip.bin,test_fftm_autotune_4d.cu,$(HIP_DEVICE_AWARE)))
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_autotune_4d_hip_nca.bin,test_fftm_autotune_4d.cu,))
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_autotune_4d_runtime_hip.bin,test_fftm_autotune_4d_runtime.cu,$(HIP_DEVICE_AWARE)))
+$(eval $(call BUILD_HIP_MPI_TEST,test_fftm_autotune_4d_runtime_hip_nca.bin,test_fftm_autotune_4d_runtime.cu,))
 $(eval $(call BUILD_HIP_MPI_TEST,test_fftm_4D_compare_hip.bin,test_fftm_4D_compare.cu,$(HIP_DEVICE_AWARE)))
 $(eval $(call BUILD_HIP_MPI_TEST,test_fftm_4D_compare_hip_nca.bin,test_fftm_4D_compare.cu,))
 $(eval $(call BUILD_HIP_MPI_TEST,test_benchmark_fftm_3D_hip.bin,test_benchmark_fftm_3D.cu,$(HIP_DEVICE_AWARE)))

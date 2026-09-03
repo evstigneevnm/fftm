@@ -134,8 +134,8 @@ def render_scale(dpi: int) -> float:
 def scalar_bar_style(dpi: int):
     scale = max(1.0, float(dpi) / 100.0)
     return {
-        "title_font_size": int(round(11 * scale)),
-        "label_font_size": int(round(9 * scale)),
+        "title_font_size": int(round(16 * scale)),
+        "label_font_size": int(round(14 * scale)),
         "position_x": 0.25,
         "position_y": 0.04,
         "width": 0.5,

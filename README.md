@@ -230,7 +230,7 @@ Python:
   time.
 
 Schema-v2 caches validate the GPU model and architecture, device memory,
-CUDA runtime and driver, MPI implementation, node/rank topology, distinct
+CUDA or HIP runtime and driver, MPI implementation, node/rank topology, distinct
 devices per node, and transport environment. Exact device UUIDs, PCI IDs, and
 node names are recorded but only enforced when
 `autotune_options::strict_device_identity` is enabled. This lets an ordinary
@@ -257,13 +257,17 @@ auto selected = fftm::autotune::load_or_measure_3d_config<runtime_api_t>(
     comm, sizes, cache, measurements, evaluator);
 ```
 
-The 4D interface follows the same protocol while making the application-visible
-spectral layout an explicit constraint:
+The 4D interface follows the same protocol. Applications that can consume both
+implemented physical contracts allow the layout to participate in measurement:
 
 ```cpp
 fftm::autotune::autotune_options_4d cache4d;
 cache4d.cache_file = "fftm_4d.env";
 cache4d.requested_spectral_layout = fftm::fftm_4d_spectral_layout::native_xzwy;
+cache4d.accepted_spectral_layouts = {
+    fftm::fftm_4d_spectral_layout::public_yzwx,
+    fftm::fftm_4d_spectral_layout::native_xzwy
+};
 
 fftm::autotune::measured_4d_options measurements4d;
 using evaluator_4d_t = fftm::autotune::fftm_4d_candidate_evaluator<
@@ -277,8 +281,12 @@ auto selected4d = fftm::autotune::load_or_measure_4d_config<runtime_api_t>(
 The measured 4D matrix covers slab-slab and pencil-pencil production paths,
 eligible `p2p-waitany` and `alltoallv` modes, the node-aligned pencil grid on
 multiple nodes, and the validated slab backward-credit fallback where it is
-applicable. Combinations that conflict with a required native direct layout
-are removed during candidate preflight instead of being launched. Use
+applicable. It measures each accepted spectral layout end to end and records
+the accepted-layout set in the cache. Changing that set requires a new
+measurement. Leave `accepted_spectral_layouts` empty to retain the exact
+`requested_spectral_layout` contract. Combinations that conflict with a
+required native direct layout are removed during candidate preflight instead
+of being launched. Use
 `init_autotuned_4d_plan` and `init_autotuned_4d_data_arrays` to transfer the
 retained SCFD workspace and data pools to the selected application plan.
 

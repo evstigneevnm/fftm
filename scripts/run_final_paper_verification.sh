@@ -319,7 +319,7 @@ verify_image()
         test_fftm_4D_compare.bin
         test_fftm_4D_compare_nca.bin
         poisson_periodic_3d_autotuned.bin
-        poisson_periodic_4d.bin
+        poisson_periodic_4d_autotuned.bin
     )
     if [[ "${TARGET}" != "api" ]]; then
         required+=( test_benchmark_fftm_3D.bin test_benchmark_fftm_4D.bin )
@@ -496,11 +496,12 @@ run_api()
             --container-workdir /opt/fftm/bin
             --container-entrypoint /usr/bin/env
             FFTM_WRAP_PROCS_GPUS=0
-            /opt/fftm/bin/poisson_periodic_4d.bin 16 1
+            /opt/fftm/bin/poisson_periodic_4d_autotuned.bin
+            16 16 16 16 /data/autotune.env 1 0
         )
         run_logged "reader-4d-r${ranks}" "${log}" "${reader_4d_cmd[@]}" || return 1
         if ! is_true "${DRY_RUN}"; then
-            grep -q 'layout=native_xzwy' "${log}" || return 1
+            grep -q 'layout=native-xzwy' "${log}" || return 1
             grep -q 'rel_l2=' "${log}" || return 1
         fi
     done

@@ -2,6 +2,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <scfd/communication/mpi_wrap.h>
 #include <scfd/utils/log_mpi.h>
@@ -27,8 +28,12 @@ struct runtime_options
     int iterations = 1;
     std::string cache_file = "/tmp/fftm_autotune_4d_runtime.env";
     std::string expected_source;
-    bool device_aware_mpi = true;
+    bool device_aware_mpi = fftm::device_backend::device_aware_mpi_enabled();
     bool expect_mismatch = false;
+    std::vector<fftm::fftm_4d_spectral_layout> accepted_spectral_layouts{
+        fftm::fftm_4d_spectral_layout::public_yzwx,
+        fftm::fftm_4d_spectral_layout::native_xzwy
+    };
 };
 
 bool parse_bool( const std::string &value, const char *name )
@@ -63,6 +68,19 @@ runtime_options parse_options( int argc, char **argv )
             result.expected_source = value( "--expect-source" );
         else if ( option == "--device-aware-mpi" )
             result.device_aware_mpi = parse_bool( value( "--device-aware-mpi" ), "--device-aware-mpi" );
+        else if ( option == "--accepted-layouts" )
+        {
+            result.accepted_spectral_layouts.clear();
+            for ( const auto &token : fftm::autotune::split( value( "--accepted-layouts" ), ',' ) )
+            {
+                if ( !token.empty() )
+                {
+                    result.accepted_spectral_layouts.push_back(
+                        fftm::autotune::parse_spectral_layout_4d( token )
+                    );
+                }
+            }
+        }
         else if ( option == "--expect-mismatch" )
             result.expect_mismatch = true;
         else if ( option == "--help" )
@@ -75,6 +93,7 @@ runtime_options parse_options( int argc, char **argv )
                 << "  --times N\n"
                 << "  --expect-source measured|cache\n"
                 << "  --device-aware-mpi 0|1\n"
+                << "  --accepted-layouts public-yzwx,native-xzwy\n"
                 << "  --expect-mismatch\n";
             std::exit( 0 );
         }
@@ -87,6 +106,8 @@ runtime_options parse_options( int argc, char **argv )
         throw std::logic_error( "--warmup must be nonnegative and --times must be positive" );
     if ( result.cache_file.empty() )
         throw std::logic_error( "--cache must not be empty" );
+    if ( result.accepted_spectral_layouts.empty() )
+        throw std::logic_error( "--accepted-layouts must contain at least one layout" );
     return result;
 }
 
@@ -108,6 +129,7 @@ int run( const runtime_options &options, const comm_t &comm, log_t &log )
     autotune.validate_hardware = true;
     autotune.strict_device_identity = true;
     autotune.requested_spectral_layout = fftm::fftm_4d_spectral_layout::native_xzwy;
+    autotune.accepted_spectral_layouts = options.accepted_spectral_layouts;
     autotune.device_aware_mpi = options.device_aware_mpi;
 
     fftm::autotune::measured_4d_options measured;

@@ -51,6 +51,7 @@ struct autotune_options
     bool                  validate_hardware = true;
     bool                  strict_device_identity = false;
     bool                  allow_legacy_hardware_signature = false;
+    bool                  device_aware_mpi = true;
     autotune_constraints_3d constraints_3d;
 };
 
@@ -276,6 +277,19 @@ inline bool bool_value( const config_map &config, const std::string &key, bool f
     if ( falsey( value ) )
         return false;
     throw std::logic_error( "FFTM autotune boolean key " + key + " has invalid value '" + value + "'" );
+}
+
+inline void validate_device_aware_mpi_request(
+    const config_map &config, bool requested, const std::string &cache_kind
+)
+{
+    const bool cached = bool_value( config, "FFTM_DIRECT_P2P_CUDA_AWARE", true );
+    if ( cached != requested )
+    {
+        throw std::logic_error(
+            "FFTM " + cache_kind + " cache device-aware MPI setting does not match this build"
+        );
+    }
 }
 
 inline std::size_t size_value( const config_map &config, const std::string &key, std::size_t fallback )
@@ -511,17 +525,18 @@ inline std::size_t homogeneous_ranks_per_node( const hardware_inventory &invento
     return static_cast<std::size_t>( expected );
 }
 
-inline void set_common_native_pencil_options( config_map &config )
+inline void set_common_native_pencil_options( config_map &config, bool device_aware_mpi = true )
 {
     config["FFTM_AUTOTUNE_BACKEND_3D"]     = "native";
     config["FFTM_AUTOTUNE_MODE"]           = "p2p-waitany";
-    config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] = "reference-parity";
+    config["FFTM_AUTOTUNE_PENCIL_PIPELINE"] =
+        device_aware_mpi ? "reference-parity" : "reference";
     config["FFTM_LARGE_COUNT_P2P_TRANSPORTS"] = "hindexed";
-    config["FFTM_DIRECT_P2P_CUDA_AWARE"] = "1";
+    config["FFTM_DIRECT_P2P_CUDA_AWARE"] = device_aware_mpi ? "1" : "0";
     config["FFTM_USE_DIRECT_BACKWARD_RECEIVE"] = "0";
     config["FFTM_USE_DIRECT_FORWARD_BYTE_RECEIVE"] = "0";
     config["FFTM_USE_P2P_SEND_THREAD"] = "0";
-    config["FFTM_USE_P2P_BYTE_TRANSFER"] = "1";
+    config["FFTM_USE_P2P_BYTE_TRANSFER"] = device_aware_mpi ? "1" : "0";
     config["FFTM_USE_PERSISTENT_P2P"] = "0";
     config["FFTM_USE_READY_P2P_SEND"] = "0";
     config["FFTM_USE_STABLE_FORWARD_BYTE_SEND_BUFFER"] = "0";
@@ -578,10 +593,11 @@ inline bool is_power_of_two_cube( const global_sizes &sizes )
 }
 
 inline void set_staged_3d_policy(
-    config_map &config, const std::string &strategy, std::size_t p1, std::size_t p2
+    config_map &config, const std::string &strategy, std::size_t p1, std::size_t p2,
+    bool device_aware_mpi = true
 )
 {
-    set_common_native_pencil_options( config );
+    set_common_native_pencil_options( config, device_aware_mpi );
     config["FFTM_AUTOTUNE_STRATEGY_3D"] = strategy;
     config["FFTM_AUTOTUNE_GRID_3D"] = std::to_string( p1 ) + "x" + std::to_string( p2 );
     config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "auto";
@@ -589,19 +605,20 @@ inline void set_staged_3d_policy(
 }
 
 inline void set_default_pencil_pencil_3d_policy(
-    config_map &config, int num_procs, std::size_t ranks_per_node = 0
+    config_map &config, int num_procs, std::size_t ranks_per_node = 0,
+    bool device_aware_mpi = true
 )
 {
-    set_common_native_pencil_options( config );
+    set_common_native_pencil_options( config, device_aware_mpi );
     config["FFTM_AUTOTUNE_STRATEGY_3D"] = "pencil-pencil";
 
-    if ( num_procs == 8 )
+    if ( device_aware_mpi && num_procs == 8 )
     {
         config["FFTM_AUTOTUNE_GRID_3D"] = "4x2";
         config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt0";
         set_native_opt0_hot_y_options( config );
     }
-    else if ( num_procs == 7 )
+    else if ( device_aware_mpi && num_procs == 7 )
     {
         config["FFTM_AUTOTUNE_GRID_3D"] = "7x1";
         config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt0";
@@ -617,7 +634,8 @@ inline void set_default_pencil_pencil_3d_policy(
         config["FFTM_AUTOTUNE_GRID_3D"] = "5x1";
         config["FFTM_AUTOTUNE_PENCIL_LAYOUT"] = "opt1";
     }
-    else if ( select_production_pencil_layout_3d( num_procs, true ) == fftm_3d_pencil_layout::opt0 )
+    else if ( select_production_pencil_layout_3d( num_procs, device_aware_mpi ) ==
+              fftm_3d_pencil_layout::opt0 )
     {
         auto grid = default_pencil_grid_3d( num_procs );
         if ( ranks_per_node > 1 && static_cast<std::size_t>( num_procs ) % ranks_per_node == 0 )
@@ -640,7 +658,8 @@ inline void set_default_pencil_pencil_3d_policy(
 }
 
 inline config_map make_default_3d_policy_config(
-    int num_procs, const global_sizes &sizes, std::size_t ranks_per_node = 0
+    int num_procs, const global_sizes &sizes, std::size_t ranks_per_node = 0,
+    bool device_aware_mpi = true
 )
 {
     if ( num_procs <= 0 )
@@ -657,7 +676,7 @@ inline config_map make_default_3d_policy_config(
 
     if ( num_procs <= 1 )
     {
-        set_staged_3d_policy( config, "slab-pencil", 1, 1 );
+        set_staged_3d_policy( config, "slab-pencil", 1, 1, device_aware_mpi );
         return config;
     }
 
@@ -669,23 +688,32 @@ inline config_map make_default_3d_policy_config(
     // authoritative whenever it is enabled.
     if ( num_procs <= 32 && ( is_power_of_two_cube( sizes ) || num_procs > 8 ) )
     {
-        set_staged_3d_policy( config, "slab-pencil", static_cast<std::size_t>( num_procs ), 1 );
+        set_staged_3d_policy(
+            config, "slab-pencil", static_cast<std::size_t>( num_procs ), 1,
+            device_aware_mpi
+        );
         if ( num_procs == 32 )
             config["FFTM_AUTOTUNE_MODE"] = "alltoallv";
     }
     else if ( num_procs <= 8 )
-        set_staged_3d_policy( config, "pencil-slab", 1, static_cast<std::size_t>( num_procs ) );
+        set_staged_3d_policy(
+            config, "pencil-slab", 1, static_cast<std::size_t>( num_procs ),
+            device_aware_mpi
+        );
     else
-        set_default_pencil_pencil_3d_policy( config, num_procs, ranks_per_node );
+        set_default_pencil_pencil_3d_policy(
+            config, num_procs, ranks_per_node, device_aware_mpi
+        );
     return config;
 }
 
 inline config_map make_default_3d_config(
-    int num_procs, const global_sizes &sizes, const hardware_inventory &inventory
+    int num_procs, const global_sizes &sizes, const hardware_inventory &inventory,
+    bool device_aware_mpi = true
 )
 {
     config_map config = make_default_3d_policy_config(
-        num_procs, sizes, homogeneous_ranks_per_node( inventory )
+        num_procs, sizes, homogeneous_ranks_per_node( inventory ), device_aware_mpi
     );
     const auto signature = make_hardware_signature_record(
         inventory, hardware_transport_policy( config, num_procs )
@@ -695,10 +723,13 @@ inline config_map make_default_3d_config(
 }
 
 template <class RuntimeApi>
-inline config_map make_default_3d_config( int num_procs, const global_sizes &sizes )
+inline config_map make_default_3d_config(
+    int num_procs, const global_sizes &sizes, bool device_aware_mpi = true
+)
 {
     return make_default_3d_config(
-        num_procs, sizes, query_local_hardware_inventory<RuntimeApi>( num_procs )
+        num_procs, sizes, query_local_hardware_inventory<RuntimeApi>( num_procs ),
+        device_aware_mpi
     );
 }
 
@@ -724,6 +755,7 @@ inline selected_3d_config load_or_create_3d_config(
         try
         {
             validate_match( config, num_procs, sizes );
+            validate_device_aware_mpi_request( config, autotune.device_aware_mpi, "policy" );
             if ( autotune.validate_hardware )
                 validate_hardware_match( config, inventory, autotune );
         }
@@ -731,7 +763,9 @@ inline selected_3d_config load_or_create_3d_config(
         {
             if ( autotune.mismatch_policy != cache_mismatch_policy::overwrite )
                 throw;
-            config = make_default_3d_config( num_procs, sizes, inventory );
+            config = make_default_3d_config(
+                num_procs, sizes, inventory, autotune.device_aware_mpi
+            );
             save_key_value_file( autotune.cache_file, config );
             source = "created";
         }
@@ -742,7 +776,9 @@ inline selected_3d_config load_or_create_3d_config(
     {
         if ( !autotune.create_if_missing )
             throw std::logic_error( "FFTM autotune cache file does not exist: " + autotune.cache_file );
-        config = make_default_3d_config( num_procs, sizes, inventory );
+        config = make_default_3d_config(
+            num_procs, sizes, inventory, autotune.device_aware_mpi
+        );
         save_key_value_file( autotune.cache_file, config );
         source = "created";
     }
@@ -791,6 +827,9 @@ inline selected_3d_config load_or_create_3d_config(
                 {
                     const config_map config = load_key_value_file( autotune.cache_file );
                     validate_match( config, comm.num_procs, sizes );
+                    validate_device_aware_mpi_request(
+                        config, autotune.device_aware_mpi, "policy"
+                    );
                     if ( autotune.validate_hardware )
                         validate_hardware_match( config, inventory, autotune );
                 }
@@ -801,7 +840,10 @@ inline selected_3d_config load_or_create_3d_config(
                 if ( !cache_valid && autotune.mismatch_policy == cache_mismatch_policy::overwrite )
                 {
                     save_key_value_file(
-                        autotune.cache_file, make_default_3d_config( comm.num_procs, sizes, inventory )
+                        autotune.cache_file,
+                        make_default_3d_config(
+                            comm.num_procs, sizes, inventory, autotune.device_aware_mpi
+                        )
                     );
                     cache_state = 1;
                 }
@@ -809,7 +851,10 @@ inline selected_3d_config load_or_create_3d_config(
             else if ( autotune.create_if_missing )
             {
                 save_key_value_file(
-                    autotune.cache_file, make_default_3d_config( comm.num_procs, sizes, inventory )
+                    autotune.cache_file,
+                    make_default_3d_config(
+                        comm.num_procs, sizes, inventory, autotune.device_aware_mpi
+                    )
                 );
                 cache_state = 1;
             }
@@ -834,6 +879,7 @@ inline selected_3d_config load_or_create_3d_config(
 
     config_map config = load_key_value_file( autotune.cache_file );
     validate_match( config, comm.num_procs, sizes );
+    validate_device_aware_mpi_request( config, autotune.device_aware_mpi, "policy" );
     if ( autotune.validate_hardware )
         validate_hardware_match( config, inventory, autotune );
     validate_config_constraints_3d( config, autotune.constraints_3d, "policy" );

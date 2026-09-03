@@ -1,12 +1,14 @@
 #ifndef __FFTM_AUTOTUNE_4D_HPP__
 #define __FFTM_AUTOTUNE_4D_HPP__
 
+#include <algorithm>
 #include <cstdlib>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include "fftm_autotune.hpp"
 
@@ -29,7 +31,7 @@ struct autotune_options_4d : autotune_options
 {
     autotune_constraints_4d constraints_4d;
     fftm_4d_spectral_layout requested_spectral_layout = fftm_4d_spectral_layout::public_yzwx;
-    bool                    device_aware_mpi = true;
+    std::vector<fftm_4d_spectral_layout> accepted_spectral_layouts;
 };
 
 struct selected_4d_config
@@ -46,12 +48,12 @@ struct selected_4d_config
 
 inline const char *current_4d_policy_version()
 {
-    return "1";
+    return "2";
 }
 
 inline const char *current_4d_policy_source()
 {
-    return "cpp-4d-policy-cache-v1";
+    return "cpp-4d-policy-cache-v2";
 }
 
 inline std::string sizes_to_string_4d( const global_sizes &sizes )
@@ -95,6 +97,98 @@ inline fftm_4d_spectral_layout parse_spectral_layout_4d( const std::string &valu
     if ( value == "native-xzwy" )
         return fftm_4d_spectral_layout::native_xzwy;
     throw std::logic_error( "Invalid FFTM 4D spectral layout '" + value + "'" );
+}
+
+inline bool valid_spectral_layout_4d( fftm_4d_spectral_layout layout )
+{
+    return layout == fftm_4d_spectral_layout::public_yzwx ||
+           layout == fftm_4d_spectral_layout::native_xzwy;
+}
+
+inline std::vector<fftm_4d_spectral_layout> effective_accepted_spectral_layouts_4d(
+    const autotune_options_4d &autotune
+)
+{
+    const std::vector<fftm_4d_spectral_layout> requested =
+        autotune.accepted_spectral_layouts.empty()
+            ? std::vector<fftm_4d_spectral_layout>{ autotune.requested_spectral_layout }
+            : autotune.accepted_spectral_layouts;
+    std::vector<fftm_4d_spectral_layout> result;
+    const fftm_4d_spectral_layout canonical[] = {
+        fftm_4d_spectral_layout::public_yzwx,
+        fftm_4d_spectral_layout::native_xzwy
+    };
+    for ( const auto layout : requested )
+    {
+        if ( !valid_spectral_layout_4d( layout ) )
+            throw std::logic_error( "FFTM 4D autotune received an invalid spectral layout" );
+    }
+    for ( const auto layout : canonical )
+    {
+        if ( std::find( requested.begin(), requested.end(), layout ) != requested.end() )
+            result.push_back( layout );
+    }
+    if ( result.empty() )
+        throw std::logic_error( "FFTM 4D autotune requires at least one accepted spectral layout" );
+    return result;
+}
+
+inline bool accepts_spectral_layout_4d(
+    const std::vector<fftm_4d_spectral_layout> &accepted, fftm_4d_spectral_layout layout
+)
+{
+    return std::find( accepted.begin(), accepted.end(), layout ) != accepted.end();
+}
+
+inline std::string spectral_layout_list_4d(
+    const std::vector<fftm_4d_spectral_layout> &layouts
+)
+{
+    std::string result;
+    for ( const auto layout : layouts )
+    {
+        if ( !result.empty() )
+            result += ',';
+        result += fftm_4d_spectral_layout_name( layout );
+    }
+    return result;
+}
+
+inline std::string accepted_spectral_layouts_string_4d(
+    const autotune_options_4d &autotune
+)
+{
+    return spectral_layout_list_4d( effective_accepted_spectral_layouts_4d( autotune ) );
+}
+
+inline void validate_spectral_layout_request_4d(
+    const config_map &config, const autotune_options_4d &autotune, bool measured_cache
+)
+{
+    const fftm_4d_spectral_layout selected = parse_spectral_layout_4d(
+        value_or_empty( config, "FFTM_AUTOTUNE_SPECTRAL_LAYOUT_4D" )
+    );
+    const auto accepted = effective_accepted_spectral_layouts_4d( autotune );
+    if ( !accepts_spectral_layout_4d( accepted, selected ) )
+        throw std::logic_error( "FFTM 4D cache selected a spectral layout not accepted by the application" );
+
+    if ( measured_cache )
+    {
+        const std::string cached = value_or_empty(
+            config, "FFTM_AUTOTUNE_ACCEPTED_SPECTRAL_LAYOUTS_4D"
+        );
+        const std::string requested = spectral_layout_list_4d( accepted );
+        if ( cached != requested )
+        {
+            throw std::logic_error(
+                "FFTM measured 4D cache spectral-layout candidate set does not match this request"
+            );
+        }
+        return;
+    }
+
+    if ( selected != autotune.requested_spectral_layout )
+        throw std::logic_error( "FFTM 4D policy cache does not match the requested spectral layout" );
 }
 
 inline fftm_4d_pencil_pipeline parse_pencil_pipeline_4d( const std::string &value )
@@ -256,6 +350,10 @@ inline config_map make_default_4d_policy_config(
     config["FFTM_AUTOTUNE_GRID_4D"] = "1x" + std::to_string( num_procs ) + "x1";
     config["FFTM_AUTOTUNE_SPECTRAL_LAYOUT_4D"] =
         fftm_4d_spectral_layout_name( autotune.requested_spectral_layout );
+    config["FFTM_AUTOTUNE_REQUESTED_SPECTRAL_LAYOUT_4D"] =
+        fftm_4d_spectral_layout_name( autotune.requested_spectral_layout );
+    config["FFTM_AUTOTUNE_ACCEPTED_SPECTRAL_LAYOUTS_4D"] =
+        accepted_spectral_layouts_string_4d( autotune );
     config["FFTM_AUTOTUNE_PENCIL_PIPELINE_4D"] = "auto";
     config["FFTM_AUTOTUNE_4D_SLAB_BACKWARD_CREDIT_POLICY"] = "auto";
     config["FFTM_DIRECT_P2P_CUDA_AWARE"] = autotune.device_aware_mpi ? "1" : "0";
@@ -332,6 +430,10 @@ inline selected_4d_config load_or_create_4d_config(
                 {
                     const config_map cached = load_key_value_file( autotune.cache_file );
                     validate_match_4d( cached, comm.num_procs, sizes );
+                    validate_device_aware_mpi_request(
+                        cached, autotune.device_aware_mpi, "4D policy"
+                    );
+                    validate_spectral_layout_request_4d( cached, autotune, false );
                     if ( autotune.validate_hardware )
                         validate_hardware_match( cached, inventory, autotune );
                 }
@@ -364,6 +466,10 @@ inline selected_4d_config load_or_create_4d_config(
 
     const config_map config = load_key_value_file( autotune.cache_file );
     validate_match_4d( config, comm.num_procs, sizes );
+    validate_device_aware_mpi_request(
+        config, autotune.device_aware_mpi, "4D policy"
+    );
+    validate_spectral_layout_request_4d( config, autotune, false );
     if ( autotune.validate_hardware )
         validate_hardware_match( config, inventory, autotune );
     validate_config_constraints_4d( config, autotune.constraints_4d, "policy" );

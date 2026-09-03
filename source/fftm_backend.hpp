@@ -1,6 +1,8 @@
 #ifndef FFTM_BACKEND_HPP
 #define FFTM_BACKEND_HPP
 
+#include "detail/device_aware_mpi_config.h"
+
 #if defined( FFTM_PLATFORM_HIP ) || defined( PLATFORM_HIP )
 #include <external_wrap/hipfft_wrap_many.h>
 #include <scfd/backend/hip.h>
@@ -18,6 +20,15 @@ namespace device_backend
 
 // This is FFTM's sole public compile-time backend-selection boundary. Client
 // code uses the neutral aliases below and never names vendor runtime/FFT types.
+
+inline constexpr bool device_aware_mpi_enabled()
+{
+#if defined( FFTM_ENABLE_DEVICE_AWARE_MPI )
+    return true;
+#else
+    return false;
+#endif
+}
 
 #if defined( FFTM_PLATFORM_HIP ) || defined( PLATFORM_HIP )
 template <class T>

@@ -67,7 +67,7 @@ RUN make -C source/tests check-abstraction-boundaries && \
     test -x /opt/fftm/bin/test_4D_poisson_mpi.bin && \
     test -x /opt/fftm/bin/test_4D_poisson_mpi_tutorial.bin && \
     test -x /opt/fftm/bin/poisson_periodic_3d_autotuned.bin && \
-    test -x /opt/fftm/bin/poisson_periodic_4d.bin && \
+    test -x /opt/fftm/bin/poisson_periodic_4d_autotuned.bin && \
     test -x /opt/fftm/bin/taylor_green_3d_autotuned.bin && \
     test -x /opt/fftm/bin/taylor_green_spacetime_4d.bin && \
     printf 'git_commit=%s\ngit_dirty=%s\nbackend_abstraction_boundaries=passed\n' \
@@ -147,7 +147,7 @@ RUN test -x /opt/fftm/bin/test_scfd_mpi_transport.bin && \
     test -x /opt/fftm/bin/test_fftm_4D_compare.bin && \
     test -x /opt/fftm/bin/test_fftm_4D_compare_nca.bin && \
     test -x /opt/fftm/bin/poisson_periodic_3d_autotuned.bin && \
-    test -x /opt/fftm/bin/poisson_periodic_4d.bin && \
+    test -x /opt/fftm/bin/poisson_periodic_4d_autotuned.bin && \
     test -s /opt/fftm/bin/fftm_build_info.txt && \
     grep -Fxq 'backend_abstraction_boundaries=passed' /opt/fftm/bin/fftm_build_info.txt && \
     test -x /opt/fftm/scripts/run_scfd_mpi_transport_diagnostic.sh && \

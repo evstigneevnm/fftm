@@ -53,6 +53,12 @@ struct fake_candidate_evaluator
         {
             wall_ms += 1.0;
         }
+        if ( fftm::autotune::value_or_empty(
+                 selected.config, "FFTM_AUTOTUNE_SPECTRAL_LAYOUT_4D"
+             ) == "public-yzwx" )
+        {
+            wall_ms += 2.0;
+        }
 
         fftm::autotune::candidate_measurement result;
         result.valid = true;
@@ -121,6 +127,30 @@ void test_policy_and_candidate_generation()
             candidate, "FFTM_AUTOTUNE_MODE"
         ) == "p2p-waitany" );
     }
+
+    fftm::autotune::autotune_options_4d two_layouts = autotune;
+    two_layouts.accepted_spectral_layouts = {
+        fftm::fftm_4d_spectral_layout::public_yzwx,
+        fftm::fftm_4d_spectral_layout::native_xzwy
+    };
+    const auto two_layout_candidates = fftm::autotune::make_measured_4d_candidates(
+        16, sizes, 8, two_layouts, measured
+    );
+    assert( two_layout_candidates.size() == 7 );
+    bool found_public = false;
+    bool found_native = false;
+    for ( const auto &candidate : two_layout_candidates )
+    {
+        const std::string layout = fftm::autotune::value_or_empty(
+            candidate, "FFTM_AUTOTUNE_SPECTRAL_LAYOUT_4D"
+        );
+        found_public = found_public || layout == "public-yzwx";
+        found_native = found_native || layout == "native-xzwy";
+        assert( fftm::autotune::value_or_empty(
+            candidate, "FFTM_AUTOTUNE_ACCEPTED_SPECTRAL_LAYOUTS_4D"
+        ) == "public-yzwx,native-xzwy" );
+    }
+    assert( found_public && found_native );
 }
 
 void test_measured_candidate_filtering()
@@ -129,6 +159,10 @@ void test_measured_candidate_filtering()
     sizes.init( 320, 320, 320, 320 );
     fftm::autotune::autotune_options_4d autotune;
     autotune.requested_spectral_layout = fftm::fftm_4d_spectral_layout::native_xzwy;
+    autotune.accepted_spectral_layouts = {
+        fftm::fftm_4d_spectral_layout::public_yzwx,
+        fftm::fftm_4d_spectral_layout::native_xzwy
+    };
     fftm::autotune::measured_4d_options measured;
     const auto configs = fftm::autotune::make_measured_4d_candidates(
         2, sizes, 2, autotune, measured
@@ -185,6 +219,10 @@ void test_collective_measured_cache(
     autotune.cache_file = cache_file;
     autotune.strict_device_identity = false;
     autotune.requested_spectral_layout = fftm::fftm_4d_spectral_layout::native_xzwy;
+    autotune.accepted_spectral_layouts = {
+        fftm::fftm_4d_spectral_layout::public_yzwx,
+        fftm::fftm_4d_spectral_layout::native_xzwy
+    };
 
     fftm::autotune::measured_4d_options measured;
     measured.warmup = 0;
@@ -207,7 +245,27 @@ void test_collective_measured_cache(
     assert( evaluator.calls == calls_after_measurement );
     assert( fftm::autotune::value_or_empty(
         cached.config, "FFTM_AUTOTUNE_SOURCE"
-    ) == "cpp-measured-4d-v1" );
+    ) == "cpp-measured-4d-v2" );
+    assert( fftm::autotune::value_or_empty(
+        cached.config, "FFTM_AUTOTUNE_SPECTRAL_LAYOUT_4D"
+    ) == "native-xzwy" );
+
+    fftm::autotune::autotune_options_4d restricted = autotune;
+    restricted.accepted_spectral_layouts = {
+        fftm::fftm_4d_spectral_layout::native_xzwy
+    };
+    bool layout_domain_rejected = false;
+    try
+    {
+        (void)fftm::autotune::load_or_measure_4d_config<fake_runtime_api>(
+            comm, sizes, restricted, measured, evaluator
+        );
+    }
+    catch ( const std::logic_error & )
+    {
+        layout_domain_rejected = true;
+    }
+    assert( layout_domain_rejected );
 
     fftm::global_sizes mismatch;
     mismatch.init( 65, 64, 64, 64 );

@@ -166,6 +166,16 @@ void test_signature_semantics()
         multinode120_config, "FFTM_AUTOTUNE_PENCIL_LAYOUT"
     ) == "opt0" );
 
+    const auto host_staged_config = fftm::autotune::make_default_3d_policy_config(
+        8, sizes, 0, false
+    );
+    assert( fftm::autotune::value_or_empty(
+        host_staged_config, "FFTM_DIRECT_P2P_CUDA_AWARE"
+    ) == "0" );
+    assert( fftm::autotune::value_or_empty(
+        host_staged_config, "FFTM_USE_P2P_BYTE_TRANSFER"
+    ) == "0" );
+
     auto stale_policy = large_multinode_config;
     stale_policy["FFTM_AUTOTUNE_SOURCE"] = "cpp-policy-cache-v3";
     stale_policy["FFTM_AUTOTUNE_POLICY_VERSION"] = "3";
@@ -238,10 +248,28 @@ void test_measured_candidate_policy()
     const auto candidates7 = fftm::autotune::make_measured_3d_candidates( 7, sizes, options );
     const auto candidates8 = fftm::autotune::make_measured_3d_candidates( 8, sizes, options );
     const auto candidates64 = fftm::autotune::make_measured_3d_candidates( 64, sizes, options, 8 );
+    const auto host_staged = fftm::autotune::make_measured_3d_candidates(
+        8, sizes, options, 0, false
+    );
     assert( candidates6.size() == 6 );
     assert( candidates7.size() == 6 );
     assert( candidates8.size() == 6 );
     assert( candidates64.size() == 6 );
+    assert( host_staged.size() == 6 );
+    for ( const auto &candidate : host_staged )
+    {
+        assert( fftm::autotune::value_or_empty(
+            candidate, "FFTM_DIRECT_P2P_CUDA_AWARE"
+        ) == "0" );
+        if ( fftm::autotune::value_or_empty(
+                 candidate, "FFTM_AUTOTUNE_STRATEGY_3D"
+             ) == "pencil-pencil" )
+        {
+            assert( fftm::autotune::value_or_empty(
+                candidate, "FFTM_AUTOTUNE_PENCIL_LAYOUT"
+            ) != "opt0" );
+        }
+    }
     for ( const auto *candidates : { &candidates6, &candidates7, &candidates8 } )
     {
         for ( const char *mode : { "p2p-waitany", "alltoallv" } )

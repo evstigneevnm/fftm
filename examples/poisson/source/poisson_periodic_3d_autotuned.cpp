@@ -395,11 +395,13 @@ int run_poisson(
     {
         log.info_f(
             "poisson_periodic_3d_autotuned: size=%zux%zux%zu mpi=%d strategy=%s mode=%s grid=%zux%zu "
-            "layout=%s pipeline=%s cache=%s source=%s avg_ms=%.6e rel_l2=%.6e",
+            "layout=%s pipeline=%s backend=%s device_aware_mpi=%d cache=%s source=%s "
+            "avg_ms=%.6e rel_l2=%.6e",
             app_options.nx, app_options.ny, app_options.nz, comm_info.num_procs, selected.strategy_3d.c_str(),
             selected.mode.c_str(), selected.grid.p1, selected.grid.p2,
             fftm::autotune::value_or_empty( selected.config, "FFTM_AUTOTUNE_PENCIL_LAYOUT" ).c_str(),
             fftm::autotune::value_or_empty( selected.config, "FFTM_AUTOTUNE_PENCIL_PIPELINE" ).c_str(),
+            fftm::device_backend::name(), fftm::device_backend::device_aware_mpi_enabled() ? 1 : 0,
             app_options.cache_file.c_str(), selected.source.c_str(), avg_ms, rel_l2
         );
     }
@@ -476,6 +478,7 @@ int main( int argc, char **argv )
         autotune_options.create_if_missing = true;
         autotune_options.mismatch_policy   = fftm::autotune::cache_mismatch_policy::error;
         autotune_options.validate_hardware = true;
+        autotune_options.device_aware_mpi  = fftm::device_backend::device_aware_mpi_enabled();
         apply_autotune_environment( autotune_options );
 
         fftm::autotune::selected_3d_config selected;
