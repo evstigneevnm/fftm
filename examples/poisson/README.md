@@ -75,7 +75,7 @@ mpiexec -n 4 ./examples/build/poisson_periodic_3d_autotuned.bin \
 The first run measures the C++ 3D candidate matrix and writes a schema-v2
 hardware-validated cache. A second identical run loads the measured winner.
 The candidate measurement defaults are two warmups and five timed transform
-pairs. They can be changed without Python:
+pairs. They can be changed through environment variables:
 
 ```bash
 FFTM_CPP_AUTOTUNE_WARMUP=3 \
@@ -219,7 +219,7 @@ mpiexec -n 2 ./examples/build/poisson_periodic_4d_autotuned.bin \
 
 ## Reader smoke suite
 
-The source checkout provides a compact, no-Python correctness suite for both
+The source checkout provides a compact correctness suite for both
 applications. It builds the public examples and runs each on one and two MPI
 ranks wrapped over the locally visible GPU. Each 3D case runs twice and
 requires cache creation followed by exact cache reuse:

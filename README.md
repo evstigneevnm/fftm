@@ -219,8 +219,9 @@ option sets:
 Use `fftm::profiling_reporting_options()` when a benchmark intentionally needs
 the complete timing and memory summaries.
 
-The C++ autotune API has two layers for both 3D and 4D and does not require
-Python:
+### C++ measured autotuning
+
+The C++ autotune API has two layers for both 3D and 4D:
 
 - `fftm_autotune.hpp` and `fftm_autotune_4d.hpp` create or load known
   production-policy caches.
@@ -296,6 +297,32 @@ An expert can constrain a cached selection without rerunning measurements:
 cache.constraints_3d.strategy_3d = "pencil-pencil";
 cache.constraints_3d.pencil_layout = "opt0";
 ```
+
+The 3D Poisson example maps the same C++ fields to environment variables for
+command-line experiments. These variables belong to the example adapter; the
+FFTM library API itself uses `autotune_options` and `measured_3d_options`.
+Unset string variables leave that dimension unconstrained. Constraint values
+are matched exactly against valid measured candidates in the cache.
+
+| 3D Poisson environment variable | Accepted values and effect |
+| --- | --- |
+| `FFTM_CPP_AUTOTUNE_STRATEGY_3D` | `slab-pencil`, `pencil-slab`, or `pencil-pencil`. Restricts selection to the named decomposition and local-FFT pipeline. |
+| `FFTM_CPP_AUTOTUNE_MODE` | The measured tuner currently generates `p2p-waitany` and `alltoallv`. The former uses nonblocking peer transfers and processes receives as they complete; the latter uses the variable-count MPI collective. The runtime can dispatch `p2p-waitall` and `alltoallw`, but they are not current measured candidates. |
+| `FFTM_CPP_AUTOTUNE_BACKEND_3D` | Currently `native`. This constrains the FFTM implementation recorded in the cache; it does not select CUDA versus HIP, which is fixed by the build. |
+| `FFTM_CPP_AUTOTUNE_GRID_3D` | Exact `P1xP2` process grid, for example `4x2`; `P1*P2` must equal the MPI rank count. It selects the two communicator dimensions for `pencil-pencil`; current slab candidates use `P x 1` or `1 x P`. |
+| `FFTM_CPP_AUTOTUNE_PENCIL_LAYOUT` | `opt0` or `opt1` for measured `pencil-pencil` candidates. These are historical names for two physical transpose/FFT layout implementations, not optimization levels or a quality ordering. Leave this unset to compare/select the eligible production layout. The runtime parser also retains `auto` and `legacy`, but the measured pencil matrix does not normally generate them. |
+| `FFTM_CPP_AUTOTUNE_STRICT_DEVICE_IDENTITY` | Boolean, default `false`. When enabled, cache validation additionally requires the exact device UUIDs, PCI bus IDs, and node names. The default compatibility signature permits equivalent devices on different scheduler nodes. |
+| `FFTM_CPP_AUTOTUNE_ALLOW_LEGACY_SIGNATURE` | Boolean, default `false`. Permits loading a cache with a missing or pre-v2 hardware signature. This weakens hardware validation and is intended only for explicit migration of old caches; regenerating the cache is preferred. |
+
+Boolean variables accept `1/0`, `true/false`, `yes/no`, or `on/off` (with the
+documented lower- or upper-case spellings). The first five variables constrain
+winner selection; the final two control cache validation. On creation of a new
+measured cache, candidate generation is controlled by `measured_3d_options`,
+all enabled candidates are measured, and the constraints are then applied when
+selecting a valid winner. Consequently, a constraint does not by itself shorten
+the initial sweep. On cache reuse, it selects the fastest matching stored
+candidate without repeating measurements. An unsatisfied constraint fails
+instead of silently selecting a different configuration.
 
 The measured cache retains the global winner and the timings/configuration of
 all tested candidates, so removing the constraints restores global-fastest
