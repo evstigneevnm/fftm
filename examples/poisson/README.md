@@ -1,5 +1,10 @@
 # Periodic Poisson examples
 
+For precompiled CUDA/HIP containers and a retained-log correctness matrix, see
+the [Poisson capsule instructions](../../Docker_config/poisson/README.md).
+The direct Poisson Makefile also provides `cuda-nca` for host-staged CUDA MPI;
+its binaries have the `_nca.bin` suffix, matching the existing HIP convention.
+
 This directory contains two SCFD/FFTM manufactured-solution applications:
 
 - `poisson_periodic_3d_autotuned.bin` demonstrates measured C++ autotuning and

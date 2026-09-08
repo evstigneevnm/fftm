@@ -1,0 +1,10 @@
+FFTM_BUILD_BACKEND = cuda
+cuda_dir = /usr/local/cuda
+mpi_dir = /opt/mpi
+CUDA_ARCH_LIST = 70 75 80 86
+TARGET_NVCC = -O3
+CPPFLAGS =
+CXXFLAGS =
+LDFLAGS =
+LDLIBS =
+BUILD_FOLDER = /opt/fftm/bin

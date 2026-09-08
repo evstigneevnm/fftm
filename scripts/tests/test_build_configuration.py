@@ -194,6 +194,16 @@ class BuildConfigurationTest(unittest.TestCase):
     def test_cuda_only_target_rejected_in_hip_profile(self):
         self.make("examples", "FFTM_BUILD_BACKEND=hip", "taylor_green_spacetime_4d.bin", success=False)
 
+    def test_cuda_poisson_host_staged_default(self):
+        self.make("examples/poisson", "CONFIG_FILE=build_configs/test.inc",
+                  "FFTM_DEVICE_AWARE_MPI=0")
+        log = self.log.read_text()
+        self.assertIn("poisson_periodic_3d_autotuned_nca.bin", log)
+        self.assertIn("poisson_periodic_4d_autotuned_nca.bin", log)
+        self.assertNotIn("SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI", log)
+        self.make("examples/poisson", "CONFIG_FILE=build_configs/test.inc", "cuda")
+        self.assertIn("SCFD_COMMUNICATION_ENABLE_CUDA_AWARE_MPI", self.log.read_text())
+
     def test_single_quotes_in_flags(self):
         output = self.make("examples", "print-config", "CPPFLAGS=-DNAME='example'")
         self.assertIn("CPPFLAGS=-DNAME='example'", output)

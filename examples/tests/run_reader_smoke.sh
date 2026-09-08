@@ -39,13 +39,15 @@ export LD_LIBRARY_PATH="${lib_mpi}:${lib_cuda}:${ROCM_LIB_DIR}:${LD_LIBRARY_PATH
 
 case "${BACKEND}" in
 cuda)
-    if [[ "${DEVICE_AWARE_MPI}" != 1 ]]; then
-        echo 'CUDA Poisson examples currently require a device-aware MPI build; use CUDA _nca test targets for host-staged verification.' >&2
-        exit 2
+    CUDA_TARGET=cuda
+    CUDA_SUFFIX=
+    if [[ "${DEVICE_AWARE_MPI}" == 0 ]]; then
+        CUDA_TARGET=cuda-nca
+        CUDA_SUFFIX=_nca
     fi
-    make "${make_args[@]}" cuda
-    BIN_3D="${BUILD_DIR}/poisson_periodic_3d_autotuned.bin"
-    BIN_4D="${BUILD_DIR}/poisson_periodic_4d_autotuned.bin"
+    make "${make_args[@]}" "${CUDA_TARGET}"
+    BIN_3D="${BUILD_DIR}/poisson_periodic_3d_autotuned${CUDA_SUFFIX}.bin"
+    BIN_4D="${BUILD_DIR}/poisson_periodic_4d_autotuned${CUDA_SUFFIX}.bin"
     ;;
 hip)
     if [[ "${DEVICE_AWARE_MPI}" == 1 ]]; then

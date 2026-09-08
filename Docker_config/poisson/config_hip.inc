@@ -1,0 +1,10 @@
+FFTM_BUILD_BACKEND = hip
+ROCM_DIR = /opt/rocm
+mpi_dir = /opt/mpi
+HIP_ARCH_LIST = gfx1102
+TARGET_HIP = -O3
+CPPFLAGS =
+CXXFLAGS =
+LDFLAGS =
+LDLIBS =
+BUILD_FOLDER = /opt/fftm/bin
