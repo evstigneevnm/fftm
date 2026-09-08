@@ -23,6 +23,7 @@ WORKDIR /opt/fftm_src
 COPY source /opt/fftm_src/source
 COPY examples /opt/fftm_src/examples
 COPY scripts /opt/fftm_src/scripts
+COPY build_configs /opt/fftm_src/build_configs
 # Reference-only inputs. Uncomment these together with the reference build block
 # below when rebuilding an image for Egger/fftm3d comparison runs.
 # COPY fft_Egger/include /opt/fftm_src/fft_Egger/include
@@ -42,10 +43,12 @@ RUN make -C source/tests check-abstraction-boundaries && \
     test_scfd_mpi_transport.bin \
     test_4D_poisson_mpi.bin test_4D_poisson_mpi_tutorial.bin \
     BUILD_FOLDER=/opt/fftm/bin \
+    CONFIG_FILE=build_configs/config_container_cuda.inc \
     CUDA_ARCH="${CUDA_ARCH}" \
     -j"${BUILD_JOBS}" && \
     make -C examples all \
     BUILD_FOLDER=/opt/fftm/bin \
+    CONFIG_FILE=build_configs/config_container_cuda.inc \
     CUDA_ARCH="${CUDA_ARCH}" \
     -j"${BUILD_JOBS}" && \
     test -x /opt/fftm/bin/test_benchmark_fftm_3D.bin && \

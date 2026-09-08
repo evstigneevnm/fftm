@@ -20,6 +20,21 @@ Build it directly:
 make -C examples/poisson
 ```
 
+For a reusable machine configuration, copy the CUDA or HIP template from
+[`build_configs/`](../../build_configs/README.md) to
+`build_configs/config_local.inc` and edit it once. Both this Makefile and the
+parent examples/test Makefiles load that profile automatically. Alternatively:
+
+```bash
+make -C examples/poisson CONFIG_FILE=build_configs/my_machine.inc print-config check-config
+make -C examples/poisson CONFIG_FILE=build_configs/my_machine.inc -j2
+```
+
+`CONFIG_FILE` paths are relative to the repository root or absolute. The
+profile selects CUDA/HIP, compiler/MPI paths, architectures, and output paths;
+explicit Make command-line settings take precedence. With a HIP profile,
+`all` selects the device-aware or host-staged binaries specified by the profile.
+
 CUDA and MPI installations default to `/usr/local/cuda` and `/usr/local/mpi`.
 They and the target GPU architecture are normal Make variables, so a remote
 machine can override them without editing project files:
@@ -226,6 +241,13 @@ requires cache creation followed by exact cache reuse:
 
 ```bash
 make -C examples reader-smoke
+```
+
+The smoke suite inherits `CONFIG_FILE` (or the automatic local profile), its
+build directory, MPI launcher, and MPI flags:
+
+```bash
+make -C examples CONFIG_FILE=build_configs/my_machine.inc reader-smoke
 ```
 
 Set `FFTM_READER_BUILD_DIR`, `CUDA_ARCH`, or `MPIEXEC` to override the local

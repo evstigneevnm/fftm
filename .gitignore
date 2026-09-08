@@ -21,6 +21,12 @@ Testing/
 *.dll
 *.exe
 *.bin
+*.bin.d
+*.o.d
+
+# Personal machine profiles; shared templates remain tracked.
+!/build_configs/
+/build_configs/config_local*.inc
 
 # Benchmark and analysis outputs
 resutls/

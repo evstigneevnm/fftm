@@ -12,6 +12,7 @@ data_*
 enroot_workdir
 **/__pycache__
 *.pyc
+build_configs/config_local*.inc
 fft_Egger/results
 fftm3d/results
 examples/turbulence/reference_data/hiocfd_spectral_512.gdiag

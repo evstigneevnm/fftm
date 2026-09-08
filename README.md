@@ -31,6 +31,7 @@ do not cross those boundaries. Verify this rule with
 | `examples/poisson/` | Minimal periodic 3D autotuning and 4D native-spectral Poisson applications. |
 | `examples/turbulence/` | SCFD-based 3D Taylor-Green simulation, vorticity/Q visualization, and 4D spatio-temporal filtering. |
 | `scripts/` | Local, Docker, Slurm/Pyxis, and analysis scripts for collecting benchmark data and generating figures/tables. |
+| `build_configs/` | Shared CUDA/HIP Make configuration, machine-profile templates, and build-variable reference. |
 | `Docker_config/Dockerfile` | Docker image used for local and cluster benchmark runs. |
 | `fft_Egger/` | Reference implementation used for comparison experiments. |
 
@@ -47,8 +48,37 @@ The default CUDA build assumes:
 | Python | `python3` for benchmark orchestration and analysis |
 
 The Makefile uses `nvcc` for CUDA compilation and `mpicxx` for final MPI-linked
-executables. The default CUDA architectures in `source/tests/Makefile` are
+executables. The shared default CUDA architectures are
 `sm_70` and `sm_75`; override `CUDA_ARCH` when building for another GPU family.
+
+### Configure a machine once
+
+The test and example Makefiles share a GNU Make configuration file. Copy
+`build_configs/config_cuda_release.inc` or `config_hip_release.inc` to
+`build_configs/config_local.inc`, then edit its compiler/toolkit/MPI paths,
+GPU architecture list, and optional `BUILD_FOLDER`. The local file is ignored
+by Git and excluded from Docker builds.
+
+```bash
+cp build_configs/config_cuda_release.inc build_configs/config_local.inc
+# Edit build_configs/config_local.inc for this machine, then:
+make -C examples/poisson print-config check-config
+make -C examples/poisson -j2
+make -C examples reader-smoke
+```
+
+Use `CONFIG_FILE=build_configs/my_machine.inc` to select another profile;
+relative paths are resolved from the repository root. Missing or empty
+explicit profiles fail immediately. Without a profile, historical defaults
+remain available. Command-line overrides still work. Header dependencies
+(including C++ `.inc` files) and changes to effective build settings trigger
+recompilation automatically.
+
+See [Build configuration](build_configs/README.md) for the complete variable
+reference, CUDA/HIP target selection, precedence, and verification commands.
+These build settings are separate from the runtime autotune options below.
+
+### Direct command-line builds
 
 Example for A100:
 
@@ -189,6 +219,10 @@ auto options_4d = fftm::production_options_4d(
     true // device-aware MPI
 );
 
+// The native direct-layout preset requires this communication mode.
+using slab_strategy_4d = fftm::strategy_4d_slab_slab_mpi<
+    fftm::mpi_transpose_3d_mode::p2p_waitany>;
+
 // For an explicitly selected 4D pencil strategy, provide the rank topology.
 // A nodes x ranks-per-node x 1 grid selects the node-aligned WZ pipeline.
 fftm::fftm_4d_production_topology topology(
@@ -216,8 +250,127 @@ option sets:
 | `execution` | Internal policy selected by production presets or the autotune cache. Direct use is intended for benchmark construction. |
 | `diagnostics` | Unsafe, failed, or measurement-only variants. These are disabled by default and are not production API choices. |
 
-Use `fftm::profiling_reporting_options()` when a benchmark intentionally needs
-the complete timing and memory summaries.
+The tables below document the public controls declared in
+[`source/fftm_options.hpp`](source/fftm_options.hpp). The
+[execution and diagnostic reference](docs/fftm_options_reference.md) lists
+every internal field, its default, prerequisites, and compatibility aliases.
+An option being listed does not mean it is a measured-autotune candidate.
+The [measured autotuning section](#c-measured-autotuning) describes that
+separate API and its candidate space.
+
+#### Initialization fields
+
+These are the defaults of `fftm::fftm_init_options{}`, **before** production
+presets, measured selection, and initialization-time normalization. Set options
+before initializing the plan; editing the original options object afterward
+does not reconfigure an initialized transform.
+
+| Field | Default | Meaning and restrictions |
+| --- | --- | --- |
+| `use_optimized` | `true` | Enables optimized 3D execution where the compile-time strategy supports it. It cannot change a strategy's SCFD array types. An optimized pencil-pencil strategy rejects `false`; use `strategy_3d_pencil_pencil<Mode, false>` for the legacy path. |
+| `pencil_layout_3d` | `fftm_3d_pencil_layout::auto_select` | Selects the 3D pencil plan/layout variant; see the enum table below. Relevant to pencil-pencil, not a general tensor-permutation control. |
+| `pencil_pipeline_3d` | `fftm_3d_pencil_pipeline::staged` | Selects how the 3D pencil FFT and redistribution stages are executed. `reference_parity` additionally normalizes several transport switches. |
+| `spectral_layout_4d` | `fftm_4d_spectral_layout::public_yzwx` | Selects the physical 4D spectral contract. Applications must use the corresponding array view and forward/backward interface; this is not merely a performance hint. |
+| `reporting` | `fftm_reporting_options{}` | Timing, memory reporting, and verbosity; all output is off by default. |
+| `execution` | `detail::fftm_execution_options{}` | Internal transport, plan, and workspace policy. Let a preset or measured selection populate it; see the [full inventory](docs/fftm_options_reference.md#execution-options). |
+| `diagnostics` | `detail::fftm_diagnostic_options{}` | Experimental and measurement controls, not ordinary production settings; see the [full inventory](docs/fftm_options_reference.md#diagnostic-options). |
+
+#### Strategies, layouts, and policies
+
+The values below are C++ enum members, using underscores. CLI/cache spellings
+can use hyphens and are defined by their adapters, not by automatic environment
+variable parsing in the library. `P` denotes the total MPI rank count.
+
+| Enum | All values | Meaning |
+| --- | --- | --- |
+| `transform_strategy_3d` | `slab_pencil`, `pencil_slab`, `pencil_pencil` | 3D strategy families, with process grids `P x 1`, `1 x P`, or `P1 x P2`, respectively; `P1*P2=P`. See [3D strategies](#3d-strategies). |
+| `transform_strategy_4d_mpi` | `slab_slab`, `pencil_pencil` | 4D strategy families, with `1 x P x 1` for slab-slab or `P1 x P2 x P3` for pencil-pencil; `P1*P2*P3=P`. See [4D strategies](#4d-strategies). |
+| `mpi_transpose_3d_mode` | `p2p_waitall`, `p2p_waitany`, `alltoallv`, `alltoallw` | Shared by 3D **and 4D**, despite the historical type name. Selects peer-to-peer completion or variable-count collective exchange. Not every pipeline supports every mode; see [MPI modes](#mpi-communication-modes). |
+| `fftm_3d_pencil_layout` | `auto_select`, `opt0`, `opt1`, `legacy` | `opt0` and `opt1` are historical identifiers for two physical FFT/transpose implementations, not compiler optimization levels or a ranking. The optimized native layout resolver uses `opt0` for `P1>P2`, otherwise `opt1`, when left at `auto_select`; this is a heuristic, not a measured sweep. `legacy` requires a non-optimized compile-time pencil strategy. |
+| `fftm_3d_pencil_pipeline` | `staged`, `fused`, `reference`, `reference_parity`; aliases `egger`, `egger_parity` | `staged` runs separate stage operations; `fused` uses the combined FFT/transpose executor, without implying all work is one GPU kernel. `reference` uses FFTM's owned reference-style executor; `reference_parity` adds the constrained device-aware byte schedule. Neither requires the external reference project. Deprecated aliases map to `reference` and `reference_parity`. |
+| `fftm_4d_spectral_layout` | `public_yzwx`, `native_xzwy` | Public spectral order `(y,z,w,x)` versus native order `(x,z,w,y)`. For native output, use `get_local_spectral_sizes_4d`, `forward_native_spectral_4d`, and `backward_native_spectral_4d` with the matching SCFD view. Raw indexing must follow that view's arranger. |
+| `fftm_4d_pencil_pipeline` | `auto_select`, `standard`, `node_aligned_wz` | Topology policy for pencil-pencil. `auto_select` chooses node-aligned WZ only when its grid, native layout, and device-aware prerequisites hold; otherwise standard. `standard` disables that node-aligned choice, but does not disable eligible degenerate local optimizations. Explicit `node_aligned_wz` rejects incompatible inputs. |
+| `fftm_4d_slab_backward_credit_policy` | `auto_select`, `disabled` | Selects the production backward-plane credit budget or the unbounded fallback. `disabled` does not disable communication or synchronization. |
+
+Advanced enums `fftm_3d_large_count_p2p_transport` and
+`fftm_3d_contiguous_forward_send_mode` are documented with their owning
+[internal controls](docs/fftm_options_reference.md#advanced-enums).
+
+Compile-time strategy tags are `strategy_3d_slab_pencil<Mode, UseOptimized>`,
+`strategy_3d_pencil_slab<Mode, UseOptimized>`,
+`strategy_3d_pencil_pencil<Mode, UseOptimized>`,
+`strategy_4d_slab_slab_mpi<Mode>`, and `strategy_4d_pencil_pencil_mpi<Mode>`.
+All default to `Mode=mpi_transpose_3d_mode::alltoallv`; the 3D tags also
+default to `UseOptimized=true`. The tags fix the strategy/mode used by a
+templated plan. A production-options function does **not** replace its strategy
+tag or select a different MPI mode. In particular, the fast native direct-layout
+4D presets require a `p2p_waitany` tag and a device-aware MPI build/runtime.
+
+#### Reporting fields
+
+All fields below belong to `options.reporting` (`fftm_reporting_options`).
+Enabling a destruction-time print flag alone does not enable its profiler.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `profiling_key` | Empty string | Nonempty key enables the temporal profiler under this name; empty disables it. |
+| `memory_profiling_key` | Empty string | Nonempty key enables the memory profiler under this name; empty disables it. |
+| `verbose` | `false` | Enables optional setup/status messages; independent of the profiler keys. |
+| `print_profile_summary_on_destroy` | `false` | Prints the enabled temporal profiler's detailed summary when the plan is destroyed. |
+| `print_profile_totals_on_destroy` | `false` | Prints the enabled temporal profiler's totals on destruction. |
+| `print_memory_profile_on_destroy` | `false` | Prints the enabled memory profiler's detailed summary on destruction. |
+| `print_memory_totals_on_destroy` | `false` | Prints the enabled memory profiler's totals on destruction. |
+
+`fftm::profiling_reporting_options()` returns keys `"fftm_prof"` and
+`"fftm_mem"` with all four destruction-time print flags enabled. It leaves
+`verbose=false`. Use `options.reporting = fftm::profiling_reporting_options()`
+when these reports are wanted. Fine-grained stage timers are separate
+diagnostics and can perturb the measured execution time.
+
+#### Topology and preset behavior
+
+`fftm_4d_production_topology` supplies policy metadata; it neither discovers
+nodes nor creates the process grid nor binds ranks to devices. Supply the actual
+allocation and the same grid used to initialize the plan. Node-aligned operation
+assumes rank placement consistent with that grid.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `num_procs` | `1` | Positive total MPI rank count. |
+| `procs_per_node` | `1` | Positive ranks per node, for a uniform node allocation. |
+| `p1` | `1` | First positive process-grid extent. |
+| `p2` | `1` | Second positive process-grid extent. |
+| `p3` | `1` | Third positive process-grid extent; the grid product must equal `num_procs`. |
+| `pencil_pipeline` | `fftm_4d_pencil_pipeline::auto_select` | Node-aligned versus standard pencil policy. |
+| `slab_backward_credit_policy` | `fftm_4d_slab_backward_credit_policy::auto_select` | Automatic backward-plane budget versus disabled fallback. |
+
+| Preset/helper | Selection and defaults |
+| --- | --- |
+| `production_options_3d(strategy, num_procs, device_aware_mpi=true)` | Requires a positive rank count. For more than one rank and pencil-pencil, selects `reference_parity` with device-aware MPI or `reference` otherwise. Selects `opt0` for device-aware counts 7, 8, or at least 64, and `opt1` otherwise. Enables the native opt0 execution bundle for `opt0`. Other strategies and one-rank calls retain the initialization defaults, apart from the device-aware capability field. |
+| `select_production_pencil_layout_3d(num_procs, device_aware_mpi=true)` | Returns the same rank-count-based `opt0`/`opt1` policy above without constructing options; distinct from the grid-based `auto_select` resolver. |
+| `production_options_4d(strategy, spectral_layout=public_yzwx, device_aware_mpi=true)` | Convenience overload using default topology `(1,1,1,1,1)`. It does not discover multi-node topology. Use the four-argument overload for actual grid-dependent decisions. |
+| `production_options_4d(strategy, spectral_layout, device_aware_mpi, topology)` | For native/device-aware slab-slab: direct XW, chunking with window 1, compact staging, work-area aliasing, communication-native WZ, concurrency 4, ready pipeline, and the applicable backward-credit policy. For native pencil-pencil: node-aligned WZ where eligible; otherwise local-transpose/sliced-Z specialization on `1 x P2 x 1`, or the standard path. Public-layout/host-staged calls do not enable the slab native direct-layout bundle. |
+| `is_4d_node_aligned_pencil_topology(topology)` | Validates positive extents and grid product. Returns true for a multi-node uniform allocation with grid `nodes x procs_per_node x 1`. |
+| `select_production_pencil_pipeline_4d(topology, spectral_layout, device_aware_mpi)` | Applies `pencil_pipeline` and the native/device-aware/node-aligned prerequisites. Explicit incompatible requests throw; `auto_select` falls back to `standard`. |
+| `select_production_slab_backward_credit_4d(topology, spectral_layout, device_aware_mpi)` | With `auto_select`, native layout, device-aware MPI, and eight ranks per node: selects `(window, cyclic_peer_order)` as `(8,false)` at 16 ranks, `(6,true)` at 24, and `(4,true)` at 32. Other configurations and `disabled` return `(0,false)`. |
+
+The last helper returns `fftm_4d_slab_backward_credit_selection`, whose two
+fields are `window` (default `0`, unbounded fallback) and `cyclic_peer_order`
+(default `false`, current peer order). A positive window bounds backward planes
+in flight independently of FFT-plan concurrency; it is not a GPU count.
+
+Presets are deterministic policies, not performance guarantees or measured
+autotuning. They do not inspect problem-size memory feasibility themselves;
+plan initialization and the measured evaluator apply the relevant checks. For
+the complete preset-to-execution mapping and initialization overrides, see
+[preset expansion and normalization](docs/fftm_options_reference.md#preset-expansion-and-normalization).
+
+String helpers in this header are `mpi_transpose_3d_mode_name`,
+`fftm_4d_spectral_layout_name`, `fftm_4d_pencil_pipeline_name`,
+`fftm_3d_large_count_p2p_transport_name`, and
+`fftm_3d_contiguous_forward_send_mode_name`. They return printable names (for
+example `p2p-waitany`, `native-xzwy`, `node-aligned-wz`, or `mpi-count`);
+they do not parse strings or change settings.
 
 ### C++ measured autotuning
 
@@ -471,8 +624,8 @@ Usage:
 | `--grid ...` | Manually selects the MPI process grid. If omitted, tests choose a grid based on strategy and number of ranks. |
 | `--use-direct-backward-receive` | Enables optional CUDA-aware direct backward receive paths where implemented. |
 | `--direct-p2p-cuda-aware` | Allows CUDA-aware peer paths to receive directly into device-side targets where supported. |
-| `--use-p2p-send-thread` | Enables an MPI sender thread for optimized 3D p2p paths when `MPI_THREAD_MULTIPLE` is available. |
-| `--use-p2p-byte-transfer` | Uses chunked `MPI_BYTE` p2p transfers for selected CUDA-aware p2p paths. This is MPI-stack-sensitive. |
+| `--use-p2p-send-thread` | Diagnostic sender-thread experiment for eligible optimized 3D p2p paths; requires `MPI_THREAD_MULTIPLE` when active and is normalized off by `reference_parity`. |
+| `--use-p2p-byte-transfer` | Enables eligible device-aware byte-transfer paths; the large-count transport controls datatype/count/chunk representation. This is MPI-stack-sensitive. |
 
 ## Examples and Tests
 
@@ -700,8 +853,8 @@ are:
 | `FFTM_VERSIONED_FULL_MATRIX` | Set to `1` to run versioned FFTM tests for all selected modes. |
 | `FFTM_USE_DIRECT_BACKWARD_RECEIVE` | Enables or disables direct backward receive optimization. |
 | `FFTM_DIRECT_P2P_CUDA_AWARE` | Legacy compatibility name for direct device-aware p2p receive targets on CUDA or HIP. |
-| `FFTM_USE_P2P_SEND_THREAD` | Enables or disables sender-thread p2p posting. |
-| `FFTM_USE_P2P_BYTE_TRANSFER` | Enables or disables chunked `MPI_BYTE` p2p transfer variants. |
+| `FFTM_USE_P2P_SEND_THREAD` | Requests the diagnostic sender-thread p2p experiment; not a production preset. |
+| `FFTM_USE_P2P_BYTE_TRANSFER` | Enables or disables eligible device-aware byte-transfer variants; representation depends on the large-count transport. |
 | `FFTM_P2P_VARIANTS` | `configured`, `all`, or a comma-separated subset of `value-packed,datatype-direct,byte-packed,byte-direct`. |
 | `FFTM_TIMEOUT_SECONDS` | Per-command timeout used by the Python runner. |
 | `FFTM_CUDA_ARCH` | CUDA architecture flags used when the local Docker helper builds an image. |
@@ -823,7 +976,10 @@ costs can otherwise distort effective GFLOP/s.
 Prefer FFT-friendly problem sizes: powers of two or products of small primes
 `2`, `3`, `5`, and `7`.
 
-For CUDA-aware MPI on the tested A100 cluster, the stable baseline has been:
+The following is a historical configured-transport control from the tested
+A100 cluster, **not** the current universal production preset. In particular,
+`reference_parity` normalizes byte transfer to `true`, so this list must not be
+used to override a preset or a measured winner:
 
 ```bash
 FFTM_USE_DIRECT_BACKWARD_RECEIVE=0

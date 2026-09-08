@@ -2,30 +2,52 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-BUILD_DIR=${FFTM_READER_BUILD_DIR:-/tmp/fftm_reader_smoke_build}
 WORK_DIR=$(mktemp -d /tmp/fftm_reader_smoke.XXXXXX)
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-BACKEND=${FFTM_READER_BACKEND:-cuda}
-DEVICE_AWARE_MPI=${FFTM_READER_DEVICE_AWARE_MPI:-1}
-MPIEXEC=${MPIEXEC:-/usr/local/mpi/bin/mpiexec}
+make_args=(-C "${ROOT}/examples/poisson")
+if [[ ${CONFIG_FILE+x} ]]; then
+    make_args+=("CONFIG_FILE=${CONFIG_FILE}")
+fi
+if [[ ${FFTM_READER_BUILD_DIR+x} ]]; then
+    make_args+=("BUILD_DIR=${FFTM_READER_BUILD_DIR}")
+elif [[ ! ${CONFIG_FILE+x} && ! -f ${ROOT}/build_configs/config_local.inc && ! ${BUILD_DIR+x} ]]; then
+    make_args+=("BUILD_DIR=/tmp/fftm_reader_smoke_build")
+fi
+if [[ ${FFTM_READER_BACKEND+x} ]]; then
+    make_args+=("FFTM_BUILD_BACKEND=${FFTM_READER_BACKEND}")
+fi
+if [[ ${FFTM_READER_DEVICE_AWARE_MPI+x} ]]; then
+    make_args+=("FFTM_DEVICE_AWARE_MPI=${FFTM_READER_DEVICE_AWARE_MPI}")
+fi
+
+# Read Make's resolved settings as key/value data, never as executable shell code.
+resolved=$(make --no-print-directory -s "${make_args[@]}" print-config)
+while IFS='=' read -r key value; do
+    case "${key}" in
+        BUILD_DIR|FFTM_BUILD_BACKEND|FFTM_DEVICE_AWARE_MPI|MPIEXEC|MPIEXEC_FLAGS|lib_mpi|lib_cuda|ROCM_LIB_DIR)
+            printf -v "${key}" '%s' "${value}"
+            ;;
+    esac
+done <<< "${resolved}"
+BACKEND=${FFTM_BUILD_BACKEND}
+DEVICE_AWARE_MPI=${FFTM_DEVICE_AWARE_MPI}
 read -r -a MPIEXEC_COMMAND <<< "${MPIEXEC}"
+read -r -a MPIEXEC_EXTRA <<< "${MPIEXEC_FLAGS}"
+MPIEXEC_COMMAND+=("${MPIEXEC_EXTRA[@]}")
+export LD_LIBRARY_PATH="${lib_mpi}:${lib_cuda}:${ROCM_LIB_DIR}:${LD_LIBRARY_PATH:-}"
 
 case "${BACKEND}" in
 cuda)
-    CUDA_ARCH=${CUDA_ARCH:-"-gencode arch=compute_75,code=sm_75"}
-    make -C "${ROOT}/examples" \
-        poisson_periodic_3d_autotuned.bin \
-        poisson_periodic_4d_autotuned.bin \
-        BUILD_FOLDER="${BUILD_DIR}" \
-        CUDA_ARCH="${CUDA_ARCH}"
+    if [[ "${DEVICE_AWARE_MPI}" != 1 ]]; then
+        echo 'CUDA Poisson examples currently require a device-aware MPI build; use CUDA _nca test targets for host-staged verification.' >&2
+        exit 2
+    fi
+    make "${make_args[@]}" cuda
     BIN_3D="${BUILD_DIR}/poisson_periodic_3d_autotuned.bin"
     BIN_4D="${BUILD_DIR}/poisson_periodic_4d_autotuned.bin"
-    DEVICE_AWARE_MPI=1
     ;;
 hip)
-    ROCM_DIR=${ROCM_DIR:-/opt/rocm}
-    HIP_ARCH=${HIP_ARCH:-}
     if [[ "${DEVICE_AWARE_MPI}" == 1 ]]; then
         HIP_TARGET=hip
         HIP_SUFFIX=hip
@@ -36,11 +58,7 @@ hip)
         echo "FFTM_READER_DEVICE_AWARE_MPI must be 0 or 1" >&2
         exit 2
     fi
-    make -C "${ROOT}/examples/poisson" "${HIP_TARGET}" \
-        BUILD_FOLDER="${BUILD_DIR}" \
-        ROCM_DIR="${ROCM_DIR}" \
-        HIP_ARCH="${HIP_ARCH}" \
-        mpi_dir="${mpi_dir:-/usr/local/mpi}"
+    make "${make_args[@]}" "${HIP_TARGET}"
     BIN_3D="${BUILD_DIR}/poisson_periodic_3d_autotuned_${HIP_SUFFIX}.bin"
     BIN_4D="${BUILD_DIR}/poisson_periodic_4d_autotuned_${HIP_SUFFIX}.bin"
     ;;
