@@ -13,6 +13,40 @@ import sys
 import time
 
 PREFIX = Path('/opt/fftm')
+DEFAULT_SHAPES = {3: [32, 40, 48], 4: [16, 20, 24, 32]}
+
+
+def positive_count(value):
+    if not re.fullmatch(r'[1-9][0-9]{0,9}', value) or int(value) > 2147483647:
+        raise ValueError('GPU/rank counts must be positive decimal integers within the MPI count range')
+    return int(value)
+
+
+def requested_ranks(value, ngpu=None, individual=False):
+    count = positive_count(ngpu) if ngpu is not None else None
+    if value is None:
+        return [count or 1] if individual else range(1, (count or 1) + 1)
+    ranks = [positive_count(part) for part in value.split(',')]
+    if len(set(ranks)) != len(ranks):
+        raise ValueError('--ranks must contain distinct counts')
+    if count is not None and max(ranks) > count:
+        raise ValueError('--ranks exceeds the requested NGPU')
+    return ranks
+
+
+def validate_shape(sizes, dimension, ranks, max_input_mib):
+    if len(sizes) != dimension or min(sizes) < 8:
+        raise ValueError(f'{dimension}D requires {dimension} axis sizes, each at least 8')
+    # A sufficient bound for every candidate grid, without reproducing the C++ grid policy.
+    stored = [*sizes[:-1], sizes[-1] // 2 + 1]
+    if min(stored) < ranks:
+        raise ValueError(f'{dimension}D shape {sizes} is too small for {ranks} ranks in this capsule: '
+                         'every full axis and the stored half-spectrum must span at least that '
+                         f'many entries; supply larger --sizes-{dimension}d (verify) or --sizes (solve)')
+    input_bytes = 8 * math.prod(sizes)
+    if input_bytes > max_input_mib * 1024 * 1024:
+        raise ValueError(f'{dimension}D real input exceeds the {max_input_mib} MiB capsule safety cap; '
+                         'reduce the shape or explicitly raise --max-input-mib after checking memory')
 
 
 def result_fields(text, dimension):
@@ -50,7 +84,7 @@ def mpi_environment(transport):
 
 
 class Runner:
-    def __init__(self, output, backend, timeout):
+    def __init__(self, output, backend, timeout, request=None):
         self.output = output
         output.mkdir(parents=True, exist_ok=True)
         if (output / 'status.jsonl').exists():
@@ -59,6 +93,8 @@ class Runner:
         metadata = {p.name: p.read_text() for p in (PREFIX / 'metadata').glob('*.json')}
         metadata.update(backend=backend, hostname=os.uname().nodename, started=time.time(),
                         timeout_seconds=timeout, purpose='correctness, not performance')
+        if request is not None:
+            metadata['request'] = request
         (output / 'run.json').write_text(json.dumps(metadata, indent=2) + '\n')
 
     def execute(self, label, command, env, validate):
@@ -66,7 +102,8 @@ class Runner:
         log = self.output / (label + '.log')
         (self.output / (label + '.command.json')).write_text(json.dumps(
             dict(argv=command, environment={k: v for k, v in env.items()
-                                          if k.startswith(('FFTM_', 'OMPI_', 'UCX_', 'OMP_'))}), indent=2) + '\n')
+                                          if k.startswith(('FFTM_', 'OMPI_', 'UCX_', 'OMP_')) or
+                                          k in ('NGPU', 'ROCR_VISIBLE_DEVICES', 'CUDA_VISIBLE_DEVICES')}), indent=2) + '\n')
         print('RUN ' + label + ': ' + shlex.join(command), flush=True)
         try:
             with log.open('w') as stream:
@@ -160,11 +197,15 @@ class Runner:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('info', 'preflight', 'verify', 'poisson3d', 'poisson4d'))
-    parser.add_argument('--ranks', default='1,2', help='verify list, or a single count for an individual solve')
+    parser.add_argument('--ranks', help='distinct counts; default 1..NGPU for a matrix, NGPU for a solve')
     parser.add_argument('--transport', choices=('both', 'device-aware', 'host-staged'), default='both')
     parser.add_argument('--output', type=Path, default=Path('/data/run'))
     parser.add_argument('--timeout', type=int, default=300, help='seconds per MPI invocation')
     parser.add_argument('--sizes', type=int, nargs='+')
+    parser.add_argument('--sizes-3d', type=int, nargs=3, help='verification shape, default 32 40 48')
+    parser.add_argument('--sizes-4d', type=int, nargs=4, help='verification shape, default 16 20 24 32')
+    parser.add_argument('--max-input-mib', type=int, default=64,
+                        help='safety cap on global real input per problem, not a total workspace estimate')
     parser.add_argument('--cache', type=Path, help='individual solve only; missing files are created')
     parser.add_argument('--layouts', default='public-yzwx,native-xzwy',
                         choices=('public-yzwx', 'native-xzwy', 'public-yzwx,native-xzwy'))
@@ -174,16 +215,36 @@ def main():
         for name in ('backend', 'provenance.json', 'build-config.txt', 'compiler.txt', 'ucx-version.txt'):
             print(f'=== {name} ===\n' + (PREFIX / 'metadata' / name).read_text())
         return 0
-    ranks = list(dict.fromkeys(int(r) for r in args.ranks.split(',')))
-    if not ranks or min(ranks) < 1 or max(ranks) > 2 or args.timeout < 1:
-        parser.error('this small single-node capsule supports one or two ranks and a positive timeout')
     transports = ['device-aware', 'host-staged'] if args.transport == 'both' else [args.transport]
     individual = args.command.startswith('poisson')
     dimension = 3 if args.command == 'poisson3d' else 4
+    try:
+        ranks = requested_ranks(args.ranks, os.environ.get('NGPU'), individual)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.timeout < 1 or args.max_input_mib < 1:
+        parser.error('--timeout and --max-input-mib must be positive')
     if individual and (len(ranks) != 1 or len(transports) != 1 or args.cache is None
                        or args.sizes is None or len(args.sizes) != dimension or min(args.sizes) < 8):
         parser.error('individual solves require one rank count, one transport, --cache, and all axis sizes >=8')
-    runner = Runner(args.output, backend, args.timeout)
+    if not individual and (args.sizes is not None or args.cache is not None):
+        parser.error('--sizes and --cache are for individual solves; use --sizes-3d/--sizes-4d for verify')
+    if args.command != 'verify' and (args.sizes_3d is not None or args.sizes_4d is not None):
+        parser.error('--sizes-3d and --sizes-4d require verify')
+    shapes = {3: args.sizes_3d or DEFAULT_SHAPES[3], 4: args.sizes_4d or DEFAULT_SHAPES[4]}
+    try:
+        if individual:
+            validate_shape(args.sizes, dimension, max(ranks), args.max_input_mib)
+        elif args.command == 'verify':
+            for dim, shape in shapes.items():
+                validate_shape(shape, dim, max(ranks), args.max_input_mib)
+                validate_shape([shape[0] + 8, *shape[1:]], dim, max(ranks), args.max_input_mib)
+    except ValueError as error:
+        parser.error(str(error))
+    runner = Runner(args.output, backend, args.timeout, request=dict(
+        command=args.command, ngpu=os.environ.get('NGPU'), ranks=list(ranks),
+        transports=transports, shapes={dimension: args.sizes} if individual else shapes,
+        max_input_mib=args.max_input_mib))
     for rank in ranks:
         for transport in transports:
             if not runner.preflight(rank, transport):
@@ -194,7 +255,7 @@ def main():
                 args.cache.parent.mkdir(parents=True, exist_ok=True)
                 runner.solve('solve', dimension, args.sizes, rank, transport, args.cache, layouts=args.layouts)
                 continue
-            for dim, shape in ((3, [32, 40, 48]), (4, [16, 20, 24, 32])):
+            for dim, shape in shapes.items():
                 label = f'd{dim}-r{rank}-{transport}'
                 cache = args.output / (label + '.env')
                 if cache.exists():
@@ -210,7 +271,7 @@ def main():
             # Exercise both physical 4D contracts even if tuning always picks one.
             for layout in ('public-yzwx', 'native-xzwy'):
                 label = f'd4-r{rank}-{transport}-{layout}'
-                runner.solve(label, 4, [16, 20, 24, 32], rank, transport,
+                runner.solve(label, 4, shapes[4], rank, transport,
                              args.output / (label + '.env'), 'measured', layouts=layout)
     return runner.summary()
 

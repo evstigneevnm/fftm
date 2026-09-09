@@ -891,8 +891,10 @@ python3 scripts/analyze_paper_results.py \
 For reader-facing reproduction of the 3D and 4D Poisson examples, see the
 [CUDA/HIP Poisson capsule](Docker_config/poisson/README.md). It includes separate
 Dockerfiles, rootless launch instructions, cache/correctness checks, retained
-logs, and checksummed split image archives. It is independent of the cluster
-benchmark image below.
+logs, and checksummed split image archives. Set `NGPU=N` to verify rank counts
+1 through N on N local GPUs (`NGPU=1` by default); an explicit `--ranks` list
+selects a subset. GPU validation currently covers one and two GPUs. It is independent of
+the cluster benchmark image below.
 
 The Dockerfile is `Docker_config/Dockerfile`. It builds all test binaries into
 `/opt/fftm/bin` and copies the benchmark scripts into `/opt/fftm/scripts`.

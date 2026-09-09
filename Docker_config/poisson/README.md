@@ -21,15 +21,16 @@ or tested archive manifest, not just a mutable tag.
 
 The [2026-09-08 validation report](VALIDATION.md) records the tested image IDs,
 archive checksums, remote results, and transport limitations.
+The generalized `NGPU=N` images have a separate [validation report](VALIDATION_NGPU.md).
 
 ## Requirements and safety
 
-- Linux x86-64 and Docker. Host Python 3.8+ is needed for build/archive helpers;
-  Git, curl and network access are needed for building. Execution uses the image's
-  Python; no host scientific Python packages are required.
-- One or two compatible GPUs with at least 2 GiB free per selected GPU. Check
+- Linux x86-64 and Docker. Host Python 3.8+ is needed for build/archive helpers
+  and GPU discovery; Git, curl and network access are
+  needed for building. No host scientific Python packages are required.
+- One or more compatible GPUs with at least 2 GiB free per selected GPU. Check
   current utilization and postpone testing when GPUs are busy.
-- CUDA: a working NVIDIA driver and NVIDIA Container Toolkit with readable CDI
+- CUDA: a working NVIDIA driver, `nvidia-smi`, and NVIDIA Container Toolkit with readable CDI
   specifications. The intended V100 validation host uses driver 580.126.20.
   A container cannot install or replace the host driver. Verify driver/toolkit
   compatibility when using a different machine.
@@ -68,8 +69,8 @@ match the driver. See [NVIDIA's CDI documentation](https://docs.nvidia.com/datac
 HIP readiness:
 
 ```bash
-ls -l /dev/kfd /dev/dri/renderD128 /dev/dri/renderD129
-getfacl /dev/kfd /dev/dri/renderD128 /dev/dri/renderD129
+ls -l /dev/kfd /dev/dri/renderD*
+getfacl /dev/kfd /dev/dri/renderD*
 ```
 
 Host supplementary groups alone may not grant access inside a rootless user
@@ -130,36 +131,64 @@ docker --context rootless run --rm fftm/poisson:cuda-local info
 docker --context rootless run --rm fftm/poisson:hip-local info
 ```
 
-Complete verification, each command on its corresponding GPU machine:
+Set `NGPU` to the number of local GPUs you intend to use, not necessarily all
+GPUs installed in the machine. The default is **one GPU**; a one-GPU run never
+requests a second compute GPU from Docker.
+
+| Setting | Default MPI rank counts | Full verification invocations |
+| --- | --- | ---: |
+| `NGPU=1` (default) | 1 | 18 |
+| `NGPU=2` | 1 and 2 | 36 |
+| `NGPU=4` | 1, 2, 3, 4 | 72 |
+| `NGPU=8` | 1 through 8 | 144 |
+
+`NGPU=N` selects N local GPUs and tests rank counts 1 through N by default:
+**18N invocations**, with one MPI rank per GPU. An explicit list such as
+`--ranks 1,4` with `NGPU=4` checks only the endpoints (36 invocations). Counts
+must be positive, distinct, and no larger than `NGPU`. Individual
+`poisson3d`/`poisson4d` solves default to `NGPU` ranks. This launcher is
+single-node; it does not implement multinode Docker deployment.
+
+CUDA inventory is checked with `nvidia-smi`, and HIP render-node availability
+is checked before Docker starts. The in-container SCFD/MPI preflight additionally
+checks visible GPU count, distinct physical devices, free memory, and transport
+correctness before each group's solves. Actual GPU validation currently covers
+one and two GPUs; larger counts have host-side tests, not hardware validation.
+
+Complete two-GPU verification, each command on its corresponding GPU machine:
 
 ```bash
-bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/capsule_cuda_run"
-bash Docker_config/poisson/run.sh hip fftm/poisson:hip-local "$PWD/build/capsule_hip_run"
+NGPU=2 bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/capsule_cuda_run"
+NGPU=2 bash Docker_config/poisson/run.sh hip fftm/poisson:hip-local "$PWD/build/capsule_hip_run"
 ```
 
 One-GPU verification:
 
 ```bash
-CAPSULE_CUDA_DEVICES=0 bash Docker_config/poisson/run.sh \
-    cuda fftm/poisson:cuda-local "$PWD/build/cuda_one" verify --ranks 1
-CAPSULE_HIP_VISIBLE_DEVICES=0 bash Docker_config/poisson/run.sh \
-    hip fftm/poisson:hip-local "$PWD/build/hip_one" verify --ranks 1
+NGPU=1 bash Docker_config/poisson/run.sh \
+    cuda fftm/poisson:cuda-local "$PWD/build/cuda_one"
+NGPU=1 bash Docker_config/poisson/run.sh \
+    hip fftm/poisson:hip-local "$PWD/build/hip_one"
 ```
 
-Two-device defaults are `CAPSULE_CUDA_DEVICES=0,1` and
-`CAPSULE_HIP_DEVICES=/dev/dri/renderD128,/dev/dri/renderD129`. Use the host's actual
-device identifiers. `/dev/kfd` is always passed for HIP. `CAPSULE_DOCKER` and
+CUDA selects the first `NGPU` device indices reported by `nvidia-smi`.
+Override `CAPSULE_CUDA_DEVICES` with exactly `NGPU` distinct ordinals or CDI GPU
+identifiers to select different devices. HIP discovers the existing AMD render
+nodes from `/dev/dri` and `/sys/class/drm`; it does not assume that a second
+render node exists. `CAPSULE_HIP_DEVICES` can override this comma-separated list.
+`/dev/kfd` is always passed for HIP. `CAPSULE_DOCKER` and
 `CAPSULE_DOCKER_CONTEXT` select a client/context without changing global defaults.
 
 On ROCm 6.4.1, hiding one render node on a two-GPU host can cause runtime
-initialization to fail even on the remaining GPU. Pass the required render nodes
-and use `CAPSULE_HIP_VISIBLE_DEVICES=0` to select only GPU 0 for computation. This
-sets `ROCR_VISIBLE_DEVICES` inside the container; it does not modify the host or
-select the other GPU for work. `CAPSULE_HIP_DEVICES` controls device passthrough,
+initialization to fail even on the remaining GPU. The launcher therefore passes
+all discovered AMD render nodes but sets `ROCR_VISIBLE_DEVICES` to `0` through
+`NGPU-1`. Override `CAPSULE_HIP_VISIBLE_DEVICES` with exactly `NGPU`
+distinct identifiers to choose different compute GPUs. This changes only the
+container's compute visibility; `CAPSULE_HIP_DEVICES` controls device passthrough,
 not the rank-to-compute-device mask.
 
-Default verification: **36 MPI invocations per image**. For each rank count
-(1,2) and transport (device-aware,host-staged), it runs:
+For each selected rank count and transport (device-aware,host-staged),
+verification runs these nine checks:
 
 | Check | Invocations |
 | --- | ---: |
@@ -167,6 +196,26 @@ Default verification: **36 MPI invocations per image**. For each rank count
 | 3D `32 x 40 x 48`: measured creation, reuse, rejected wrong size | 3 |
 | 4D `16 x 20 x 24 x 32`: both-layout tuning, reuse, rejected wrong size | 3 |
 | 4D explicit `public-yzwx` and explicit `native-xzwy` | 2 |
+
+The default shapes are unchanged and accommodate at most 16 ranks under the
+capsule's conservative grid guard: every full axis and the stored R2C
+half-spectrum must have at least as many entries as the largest tested rank
+count. This sufficient condition avoids empty partitions across autotune
+candidates without duplicating the library's grid-selection policy; it is not
+FFTM's minimum-size requirement. A rejected shape fails before any MPI launch.
+On larger machines, provide explicit verification shapes, for example:
+
+```bash
+NGPU=32 bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local \
+    "$PWD/build/cuda_32" verify --ranks 1,32 \
+    --sizes-3d 32 40 64 --sizes-4d 32 40 48 64
+```
+
+The capsule caps each problem's global real input at 64 MiB by default, including
+the deliberately wrong-size cache request. `--max-input-mib M` explicitly raises
+that cap. It is not an estimate of total device memory: spectra, FFT workspaces,
+and MPI buffers need additional storage. Check GPU memory before increasing it.
+These small shapes test correctness, not scaling or performance.
 
 Device-aware binaries use UCX. Host-staged binaries are compiled without
 device-aware MPI and use Open MPI's `ob1` PML with `self,sm,tcp`. This checks
@@ -185,7 +234,7 @@ To explicitly test automatic ROCm transport selection on a host with working
 GPU peer access, use a new output directory and cache:
 
 ```bash
-CAPSULE_UCX_TLS=all bash Docker_config/poisson/run.sh \\
+NGPU=2 CAPSULE_UCX_TLS=all bash Docker_config/poisson/run.sh \
     hip fftm/poisson:hip-local "$PWD/build/hip_ipc_probe" preflight --ranks 2 --transport device-aware
 ```
 
@@ -212,13 +261,13 @@ Use a common host directory for caches and a new `--output` subdirectory for eac
 invocation. Substitute `hip` and its image for AMD:
 
 ```bash
-bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/individual" \
+NGPU=2 bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/individual" \
     poisson3d --ranks 2 --transport host-staged --sizes 64 80 96 \
     --cache /data/cache3.env --output /data/create3
-bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/individual" \
+NGPU=2 bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/individual" \
     poisson3d --ranks 2 --transport host-staged --sizes 64 80 96 \
     --cache /data/cache3.env --output /data/reuse3
-bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/individual" \
+NGPU=2 bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-local "$PWD/build/individual" \
     poisson4d --ranks 2 --transport device-aware --sizes 16 20 24 32 \
     --layouts public-yzwx,native-xzwy --cache /data/cache4.env --output /data/create4
 ```
@@ -232,7 +281,7 @@ transports, ranks or accepted layouts rather than disabling cache validation.
 ## Evidence and failures
 
 The host output root contains `image-inspect.json`. `OUTPUT_DIR/run/` (or the
-explicit `--output`) contains `run.json` provenance, per-case `status.jsonl`,
+explicit `--output`) contains `run.json` provenance and requested ranks/shapes, per-case `status.jsonl`,
 `summary.json`, exact `*.command.json` arguments/environment, `*.log` output,
 and `*.env` caches. Keep the entire directory, including failed cases. Git SHA
 alone is insufficient provenance: retain the image ID and source manifest too.
@@ -265,6 +314,25 @@ This retains `poisson-cuda.tar.gz` and creates ordered parts no larger than
 archive. Use `--name poisson-hip` for HIP to avoid asset-name collisions.
 Publication is not performed automatically. Checksums establish
 integrity, not authenticity: obtain them from the trusted release.
+
+### One-line release verification
+
+Download the selected backend's parts and both manifest files, together with
+`poisson-capsule-tools.tar.gz`, `poisson-capsule-evidence.tar.gz`, and
+`auxiliary-assets.sha256`, into one directory. The auxiliary checksum checks both
+tools and evidence. For the refreshed `portable-ngpu-20260909` images, run there:
+
+```bash
+BACKEND=cuda NGPU=1 bash -c 'sha256sum -c auxiliary-assets.sha256 "poisson-$BACKEND.manifest.sha256" && tar -xzf poisson-capsule-tools.tar.gz && python3 Docker_config/poisson/archive.py load "poisson-$BACKEND.manifest.json" && bash Docker_config/poisson/run.sh "$BACKEND" "fftm/poisson:$BACKEND-portable-ngpu-20260909" "$PWD/results-$BACKEND-$(date +%Y%m%d_%H%M%S)"'
+```
+
+Use `BACKEND=hip` for AMD and `NGPU=N` for the desired local GPU count. Prerequisites
+above still apply. Both scripts use the `rootless` Docker context; add the
+user-local Docker client directory to `PATH` first if necessary. Use the updated
+tools archive containing the `NGPU` launcher and `host_devices.py`, together with
+the refreshed images. The original 2026-09-08 image runner rejects more than two
+ranks even if the external launcher is updated. Do not mix old image manifests
+and new image parts or tools.
 
 After downloading all files for one backend:
 

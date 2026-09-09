@@ -127,9 +127,9 @@ access, and detailed commands. After loading, run the relevant command on its
 GPU host with a new output directory:
 
 ```bash
-bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-portable-20260908 \
+NGPU=2 bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-portable-20260908 \
     "$PWD/build/capsule_cuda_verify" verify --ranks 1,2 --timeout 180
-bash Docker_config/poisson/run.sh hip fftm/poisson:hip-portable-20260908 \
+NGPU=2 bash Docker_config/poisson/run.sh hip fftm/poisson:hip-portable-20260908 \
     "$PWD/build/capsule_hip_verify" verify --ranks 1,2 --timeout 180
 ```
 
@@ -147,3 +147,55 @@ only existing build-path changes add explicitly named CUDA host-staged Poisson
 targets and support them in the reader smoke launcher. These tests do not
 establish performance, multi-node operation, or support for untested GPU
 architectures. Review vendor redistribution terms before publishing the images.
+
+## NGPU launcher follow-up, 2026-09-09
+
+The host launcher now defaults to `NGPU=1`; `NGPU=2` retains the complete
+one-/two-rank matrix. The two image IDs and all binaries listed above are
+unchanged. These checks used fresh output directories on the same idle machines:
+
+| Backend | NGPU | Passed invocations | Maximum relative L2 error |
+| --- | ---: | ---: | --- |
+| CUDA, threadripper | 1 | 18/18 | `7.675053e-16` |
+| CUDA, threadripper | 2 | 36/36 | `7.675053e-16` |
+| HIP, amdcluster | 1 | 18/18 | `7.502343e-16` |
+| HIP, amdcluster | 2 | 36/36 | `7.502343e-16` |
+
+For each row the command was:
+
+```bash
+NGPU=1 CAPSULE_DOCKER="$HOME/.local/share/docker-rootless/bin/docker" \
+    bash Docker_config/poisson/run.sh cuda fftm/poisson:cuda-portable-20260908 \
+    "$PWD/results-cuda-one" verify --timeout 180
+```
+
+The other rows changed `NGPU`, backend/image, and output directory. No explicit
+`--ranks` or device override was passed: the host launcher supplied those.
+Both transports, 3D/4D solves, cache creation/reuse, expected cache rejections,
+and both 4D spectral layouts passed. CUDA one-GPU preflight reported one visible
+device. HIP automatically discovered both AMD render nodes while selecting
+only compute GPU 0 for `NGPU=1`; two-rank preflights confirmed distinct devices.
+
+Both physical test machines have two GPUs. A physically single-GPU HIP host was
+not available: discovery of exactly one render node and omission of a nonexistent
+second node were separately checked with host unit-test fixtures.
+All 17 capsule tests, 16 build-configuration tests, abstraction-boundary checks,
+launcher shell syntax, 15 README shell-block syntax checks, and
+`git diff --check` passed. No driver, device permissions, services or global
+Docker contexts changed; all validation containers exited.
+
+Validated host-file SHA-256 values:
+
+```text
+5b2479a577aa31488805d39c4985e688f45bb0565677950eda4aaf3d4b41c186  run.sh
+8e69e0a42e23a8183559d99be55cb8f9f9690ffc61eeb992a62bc0877307af58  host_devices.py
+```
+
+The local follow-up directory is `build/poisson_capsule_ngpu_20260909/`.
+Its `validation/{cuda_one,cuda_two,hip_one,hip_two}/` directories retain all new
+logs, summaries, commands and caches. Updated `poisson-capsule-tools.tar.gz`
+and `auxiliary-assets.sha256` must replace the corresponding draft release
+assets before advertising `NGPU`. The evidence archive remains the original
+2026-09-08 record; image parts and manifests also remain unchanged. The updated
+tools contain this follow-up report. No GitHub assets or tags were changed by
+the verification process.
