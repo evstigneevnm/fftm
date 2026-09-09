@@ -6,8 +6,14 @@ Neither the solvers nor FFTM's execution path are replaced by container code.
 
 | Image | Local FFT implementation | Compiled targets | MPI |
 | --- | --- | --- | --- |
-| CUDA | CUDA/cuFFT 12.9.1 | sm70, sm75, sm80, sm86 | Open MPI 5.0.7, UCX 1.18.1 with CUDA |
-| HIP | ROCm 6.4.1, hipFFT 1.0.18, rocFFT 1.0.32 | gfx1102 | Open MPI 5.0.7, UCX 1.18.1 with ROCm |
+| CUDA | CUDA/cuFFT 12.9.1 | sm60, sm61, sm70, sm75, sm80, sm86, sm89, sm90, sm100, sm103, sm120; compute_60 PTX fallback | Open MPI 5.0.7, UCX 1.18.1 with CUDA |
+| HIP | ROCm 6.4.1, hipFFT 1.0.18, rocFFT 1.0.32 | gfx906, gfx908, gfx90a, gfx942, gfx1030, gfx1031, gfx1032, gfx1100, gfx1101, gfx1102, gfx1200, gfx1201 | Open MPI 5.0.7, UCX 1.18.1 with ROCm |
+
+These are executable build targets, not a claim of hardware validation or vendor
+support for every listed GPU. The available capsule validation machines are V100
+(`sm70`) and RX 7600 XT (`gfx1102`). All other targets require testing on matching
+hardware with a compatible host driver and runtime libraries. GPU targets do not
+change the image's x86-64 CPU architecture; ARM64 machines need a separate build.
 
 Both images contain 3D/4D executables for device-aware and host-staged MPI, a
 SCFD-backed GPU/MPI buffer probe, source snapshots, dependency source archives
@@ -22,6 +28,10 @@ or tested archive manifest, not just a mutable tag.
 The [2026-09-08 validation report](VALIDATION.md) records the tested image IDs,
 archive checksums, remote results, and transport limitations.
 The generalized `NGPU=N` images have a separate [validation report](VALIDATION_NGPU.md).
+The expanded architecture images are documented in
+[multi-architecture validation](VALIDATION_MULTIARCH.md).
+For those images, CUDA was verified on one and two V100 GPUs, and HIP on one
+gfx1102 GPU. The two-GPU HIP rerun was deferred because the second GPU was busy.
 
 ## Requirements and safety
 
@@ -35,9 +45,9 @@ The generalized `NGPU=N` images have a separate [validation report](VALIDATION_N
   A container cannot install or replace the host driver. Verify driver/toolkit
   compatibility when using a different machine.
 - HIP: a working ROCm-compatible AMD kernel driver, `/dev/kfd`, and the selected
-  `/dev/dri/renderD*` devices. The default build targets RX 7600 XT (`gfx1102`).
-  Other architectures require changing `config_hip.inc` and the matching probe
-  compilation in `build_examples.sh`, then rebuilding and validating.
+  `/dev/dri/renderD*` devices. The host driver and all bundled dependencies must
+  support the selected GPU; a compiler accepting its target is insufficient.
+  We do not set `HSA_OVERRIDE_GFX_VERSION` to impersonate another architecture.
 - Reserve about 30 GiB for a runtime load plus archives, and at least 60 GiB for
   building both backends with layer caches. Build one backend at a time on a small
   disk; exports record actual sizes.
@@ -80,6 +90,25 @@ not modify ACLs or udev rules. See [ROCm's container documentation](https://rocm
 
 ## Build from a release checkout
 
+The capsule profiles `config_cuda.inc` and `config_hip.inc` are the single source
+of GPU architecture flags for both Poisson solvers and `Makefile.probe`.
+`check_architectures.py` fails the build if any Poisson executable lacks a
+requested target (or CUDA's compute_60 PTX fallback). CUDA's probe is checked too;
+HIP's runtime-only probe contains no GPU kernels and is recorded as such.
+The check retains binary inspection
+listings and `metadata/architectures.json`. This checks executable code objects,
+not whether the GPU driver or every vendor-library code path supports that GPU.
+The HIP image retains the full shipped rocFFT cache and runtime compiler so cache
+misses can be compiled for supported devices; first-use planning can take longer.
+Its rocFFT 1.0.32 library is rebuilt from pinned ROCm 6.4.1 sources for the same
+twelve targets: the stock library omits code objects for gfx906/gfx1031/gfx1032.
+The architecture check also verifies the rebuilt library's configured targets and
+runtime-compilation setting. Any embedded GPU bundles must cover those targets;
+a runtime-only rocFFT build is explicitly recorded in the metadata. Kernel
+generation uses runtime compilation by default and retains the vendor cache; this is a capsule
+dependency build, not a change to FFTM or the host ROCm installation. The source
+archives, CMake settings, and upstream license are included in the image.
+
 Use the publisher's release tag/full commit, not a moving branch, and initialize
 SCFD. A release checkout should have an empty `git status --short`.
 
@@ -107,8 +136,9 @@ credentials, local build profiles and unrelated untracked experiments. Included
 source modifications are recorded, so a dirty build cannot masquerade as an
 unchanged release. `source.sha256` identifies each included file.
 
-The Dockerfiles pin base-image digests. `dependencies.json` pins verified UCX and
-Open MPI source SHA-256 values. Ubuntu packages come from package repositories;
+The Dockerfiles pin base-image digests. `dependencies.json` pins verified UCX,
+Open MPI, rocFFT, and SQLite source SHA-256 values; rocFFT and SQLite are HIP-only
+build dependencies. Ubuntu packages come from package repositories;
 installed versions are recorded, but a future independent rebuild is **not
 guaranteed bit-for-bit identical**. Archive the tested image for exact delivery.
 
@@ -320,10 +350,10 @@ integrity, not authenticity: obtain them from the trusted release.
 Download the selected backend's parts and both manifest files, together with
 `poisson-capsule-tools.tar.gz`, `poisson-capsule-evidence.tar.gz`, and
 `auxiliary-assets.sha256`, into one directory. The auxiliary checksum checks both
-tools and evidence. For the refreshed `portable-ngpu-20260909` images, run there:
+tools and evidence. For the `portable-multiarch-20260909` images, run there:
 
 ```bash
-BACKEND=cuda NGPU=1 bash -c 'sha256sum -c auxiliary-assets.sha256 "poisson-$BACKEND.manifest.sha256" && tar -xzf poisson-capsule-tools.tar.gz && python3 Docker_config/poisson/archive.py load "poisson-$BACKEND.manifest.json" && bash Docker_config/poisson/run.sh "$BACKEND" "fftm/poisson:$BACKEND-portable-ngpu-20260909" "$PWD/results-$BACKEND-$(date +%Y%m%d_%H%M%S)"'
+BACKEND=cuda NGPU=1 bash -c 'sha256sum -c auxiliary-assets.sha256 "poisson-$BACKEND.manifest.sha256" && tar -xzf poisson-capsule-tools.tar.gz && python3 Docker_config/poisson/archive.py load "poisson-$BACKEND.manifest.json" && bash Docker_config/poisson/run.sh "$BACKEND" "fftm/poisson:$BACKEND-portable-multiarch-20260909" "$PWD/results-$BACKEND-$(date +%Y%m%d_%H%M%S)"'
 ```
 
 Use `BACKEND=hip` for AMD and `NGPU=N` for the desired local GPU count. Prerequisites

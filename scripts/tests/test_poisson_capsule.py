@@ -21,9 +21,107 @@ def module(name):
 capsule = module('capsule')
 archive = module('archive')
 host_devices = module('host_devices')
+architectures = module('check_architectures')
+builder = module('build')
 
 
 class CapsuleTests(unittest.TestCase):
+    def test_build_context_filters_backend_dependencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / 'repo'
+            here = repo / 'Docker_config/poisson'
+            here.mkdir(parents=True)
+            (repo / 'README.md').write_text('source fixture')
+            cache = root / 'cache'
+            cache.mkdir()
+            specs = {}
+            for name, backends in (('common.tar.gz', ['cuda', 'hip']), ('rocfft.tar.gz', ['hip'])):
+                path = cache / name
+                path.write_bytes(name.encode())
+                specs[name] = dict(url='https://invalid.example/' + name,
+                                   sha256=builder.sha256(path), backends=backends)
+            (here / 'dependencies.json').write_text(json.dumps(specs))
+            def fake_git(*args, **kwargs):
+                if args[0] == 'rev-parse':
+                    return b'a' * 40
+                if args[0] == 'ls-files' and 'cwd' not in kwargs and '--others' not in args:
+                    return b'README.md\0'
+                return b''
+            with mock.patch.object(builder, 'ROOT', repo), mock.patch.object(builder, 'HERE', here), \
+                    mock.patch.object(builder, 'git', side_effect=fake_git):
+                for backend in ('cuda', 'hip'):
+                    context = builder.prepare(root / backend, cache, backend)
+                    self.assertTrue((context / 'deps/common.tar.gz').exists())
+                    self.assertEqual((context / 'deps/rocfft.tar.gz').exists(), backend == 'hip')
+
+    def test_architecture_listings_reject_missing_targets(self):
+        self.assertEqual(architectures.embedded_targets(
+            'ELF file 1: example.1.sm_60.cubin\nELF file 2: example.2.sm_120.cubin', 'cuda'),
+            ['120', '60'])
+        self.assertEqual(architectures.embedded_targets(
+            'amdgcn-amd-amdhsa--gfx90a:xnack-\namdgcn-amd-amdhsa--gfx1102', 'hip'),
+            ['gfx1102', 'gfx90a'])
+        architectures.check_targets(['gfx90a'], ['gfx90a', 'gfx1102'], 'probe')
+        with self.assertRaisesRegex(ValueError, 'missing.*gfx906'):
+            architectures.check_targets(['gfx906', 'gfx1102'], ['gfx1102'], 'probe')
+
+    def test_hip_runtime_only_exception_is_limited_to_probe(self):
+        listing = json.dumps([dict(Sections=[dict(Section=dict(Name=dict(Name='.text')))])])
+        with mock.patch.object(architectures.subprocess, 'check_output', return_value=listing):
+            self.assertIsNone(architectures.hip_listing(Path('/bin/capsule_probe.bin')))
+            for name in ('poisson_periodic_4d_autotuned_hip.bin', 'librocfft.so'):
+                with self.assertRaisesRegex(ValueError, 'missing HIP code bundle'):
+                    architectures.hip_listing(Path('/bin') / name)
+
+    def test_hip_bundle_is_inspected_when_present(self):
+        sections = json.dumps([dict(Sections=[dict(Section=dict(Name=dict(Name='.hip_fatbin')))])])
+        bundle = 'hip-amdgcn-amd-amdhsa--gfx1102\n'
+        with mock.patch.object(architectures.subprocess, 'check_output', side_effect=[sections, bundle]), \
+                mock.patch.object(architectures.subprocess, 'run') as objcopy:
+            self.assertEqual(architectures.hip_listing(Path('/bin/capsule_probe.bin')), bundle)
+            self.assertIn('--dump-section', objcopy.call_args.args[0])
+
+    def test_rocfft_runtime_configuration_requires_all_targets(self):
+        config = 'ROCFFT_RUNTIME_COMPILE_DEFAULT:BOOL=ON\nGPU_TARGETS:STRING=gfx906;gfx1102\n'
+        self.assertEqual(architectures.rocfft_rtc_config(config, ['gfx906', 'gfx1102']),
+                         ['gfx906', 'gfx1102'])
+        with self.assertRaisesRegex(ValueError, 'runtime compilation'):
+            architectures.rocfft_rtc_config(config.replace('=ON', '=OFF'), ['gfx906'])
+        with self.assertRaisesRegex(ValueError, 'missing.*gfx1200'):
+            architectures.rocfft_rtc_config(config, ['gfx1200'])
+
+    def test_capsule_profiles_cover_requested_architectures(self):
+        expected = {'cuda': '60 61 70 75 80 86 89 90 100 103 120',
+                    'hip': 'gfx906 gfx908 gfx90a gfx942 gfx1030 gfx1031 gfx1032 '
+                           'gfx1100 gfx1101 gfx1102 gfx1200 gfx1201'}
+        for backend, values in expected.items():
+            profile = f'Docker_config/poisson/config_{backend}.inc'
+            output = subprocess.check_output(['make', '-s', '-C', str(ROOT / 'examples/poisson'),
+                                              f'CONFIG_FILE={profile}', 'print-config'], text=True)
+            config = dict(line.split('=', 1) for line in output.splitlines() if '=' in line)
+            self.assertEqual(config[backend.upper() + '_ARCH_LIST'], values)
+            if backend == 'cuda':
+                self.assertIn('arch=compute_60,code=compute_60', config['NVCCFLAGS'])
+
+    def test_probe_and_solvers_share_overridable_architecture_flags(self):
+        for backend, targets in (('cuda', ['70', '90']), ('hip', ['gfx90a', 'gfx1102'])):
+            arguments = [f'CONFIG_FILE=Docker_config/poisson/config_{backend}.inc',
+                         backend.upper() + '_ARCH_LIST=' + ' '.join(targets), 'all']
+            probe = subprocess.check_output(['make', '-n', '-f',
+                                             str(ROOT / 'Docker_config/poisson/Makefile.probe'),
+                                             *arguments], cwd=ROOT, text=True)
+            solvers = subprocess.check_output(['make', '-n', '-C', str(ROOT / 'examples/poisson'),
+                                               *arguments], text=True)
+            for target in targets:
+                flag = (f'arch=compute_{target},code=sm_{target}' if backend == 'cuda'
+                        else f'--offload-arch={target}')
+                self.assertIn(flag, probe)
+                self.assertIn(flag, solvers)
+            self.assertNotIn('code=sm_86', probe)
+            if backend == 'hip':
+                self.assertNotIn('--offload-arch=gfx906', probe)
+
     def test_general_rank_selection(self):
         self.assertEqual(list(capsule.requested_ranks(None, '4')), [1, 2, 3, 4])
         self.assertEqual(capsule.requested_ranks('1,8', '8'), [1, 8])

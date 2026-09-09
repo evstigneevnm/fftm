@@ -9,24 +9,16 @@ make -C examples/poisson CONFIG_FILE="$profile" print-config check-config \
     | tee /opt/fftm/metadata/build-config.txt
 if [[ $backend == cuda ]]; then
     make -C examples/poisson CONFIG_FILE="$profile" -j"${BUILD_JOBS:-2}" cuda cuda-nca
-    /usr/local/cuda/bin/nvcc -std=c++14 -O2 --expt-relaxed-constexpr \
-        -Wno-deprecated-gpu-targets -gencode arch=compute_70,code=sm_70 \
-        -gencode arch=compute_75,code=sm_75 -gencode arch=compute_80,code=sm_80 \
-        -gencode arch=compute_86,code=sm_86 -x cu \
-        -I source -I source/contrib/scfd/include -I/opt/mpi/include \
-        -DSCFD_ARRAYS_ORDINAL_TYPE=ptrdiff_t Docker_config/poisson/probe.cpp \
-        -L/opt/mpi/lib -lmpi -lcufft -Xcompiler=-fopenmp \
-        -o /opt/fftm/bin/capsule_probe.bin
     /usr/local/cuda/bin/nvcc --version > /opt/fftm/metadata/compiler.txt
 else
+    test -s /opt/fftm/metadata/rocfft-rebuild.txt
     make -C examples/poisson CONFIG_FILE="$profile" -j"${BUILD_JOBS:-2}" hip hip-nca
-    /opt/rocm/bin/hipcc -std=c++14 -O2 --offload-arch=gfx1102 -x hip \
-        -DFFTM_PLATFORM_HIP -DPLATFORM_HIP -DSCFD_BACKEND_ENABLE_MPI \
-        -I source -I source/contrib/scfd/include -I/opt/mpi/include \
-        -DSCFD_ARRAYS_ORDINAL_TYPE=ptrdiff_t Docker_config/poisson/probe.cpp \
-        -L/opt/mpi/lib -lmpi -lhipfft -o /opt/fftm/bin/capsule_probe.bin
     /opt/rocm/bin/hipcc --version > /opt/fftm/metadata/compiler.txt
 fi
+make -f Docker_config/poisson/Makefile.probe CONFIG_FILE="$profile" all
+python3 Docker_config/poisson/check_architectures.py "$backend" \
+    --config /opt/fftm/metadata/build-config.txt --bin-dir /opt/fftm/bin \
+    --output /opt/fftm/metadata/architectures.json
 printf '%s\n' "$backend" > /opt/fftm/metadata/backend
 /opt/mpi/bin/ompi_info --all > /opt/fftm/metadata/ompi-info.txt
 /opt/ucx/bin/ucx_info -v > /opt/fftm/metadata/ucx-version.txt

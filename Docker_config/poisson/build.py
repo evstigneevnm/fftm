@@ -24,7 +24,7 @@ def git(*args, cwd=ROOT):
     return subprocess.check_output(['git', '-C', str(cwd), *args])
 
 
-def prepare(output, cache):
+def prepare(output, cache, backend=None):
     context = output / 'context'
     context.mkdir(parents=True)
     scopes = ['source', 'build_configs', 'examples/poisson', 'examples/tests',
@@ -60,6 +60,8 @@ def prepare(output, cache):
     (context / 'deps').mkdir()
     checksums = []
     for name, spec in deps.items():
+        if backend is not None and backend not in spec.get('backends', ['cuda', 'hip']):
+            continue
         path = cache / name
         if not path.exists():
             partial = path.with_suffix(path.suffix + '.partial')
@@ -90,7 +92,7 @@ def main():
     if args.output.exists() or args.jobs < 1:
         parser.error('--output must be new and --jobs positive')
     output = args.output.resolve()
-    context = prepare(output, args.cache.resolve())
+    context = prepare(output, args.cache.resolve(), args.backend)
     docker = [args.docker, '--context', args.context]
     command = [*docker, 'build', '--progress=plain', '--build-arg', f'BUILD_JOBS={args.jobs}',
                '--label', 'org.opencontainers.image.title=FFTM Poisson reproducibility capsule',

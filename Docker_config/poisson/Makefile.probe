@@ -1,0 +1,26 @@
+MAKEFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
+CAPSULE_DIR := $(patsubst %/,%,$(dir $(MAKEFILE_PATH)))
+PROJECT_ROOT := $(abspath $(CAPSULE_DIR)/../..)
+DEFAULT_BUILD_DIR := $(CAPSULE_DIR)/build
+include $(PROJECT_ROOT)/build_configs/common.mk
+
+.PHONY: all
+all: $(BUILD_DIR)/capsule_probe.bin
+
+.PHONY: rocfft
+rocfft:
+	bash $(CAPSULE_DIR)/build_rocfft.sh
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+$(BUILD_DIR)/capsule_probe.bin: $(CAPSULE_DIR)/probe.cpp $(CONFIG_FILE) | $(BUILD_DIR)
+ifeq ($(FFTM_BUILD_BACKEND),cuda)
+	$(NVCC) $(NVCCFLAGS) $(CUDA_HOST_FLAGS) $(CPPFLAGS) -x cu \
+		-I$(source) -I$(contrib) $(MPI_CPPFLAGS) $(SCFD_FLAGS) $< \
+		$(MPI_LDFLAGS) $(LDFLAGS) $(MPI_LIBS) -lcufft -Xcompiler=-fopenmp $(LDLIBS) -o $@
+else
+	$(HIPCC) $(HIPFLAGS) $(CPPFLAGS) -x hip $(HIP_PLATFORM_FLAGS) \
+		-I$(source) -I$(contrib) $(MPI_CPPFLAGS) $(SCFD_FLAGS) $< \
+		$(MPI_LDFLAGS) -L$(ROCM_LIB_DIR) $(LDFLAGS) $(MPI_LIBS) -lhipfft $(LDLIBS) -o $@
+endif

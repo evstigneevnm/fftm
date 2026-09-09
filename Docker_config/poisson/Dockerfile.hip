@@ -9,8 +9,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY deps/ /deps/
 COPY src/Docker_config/poisson/build_mpi.sh /build_mpi.sh
 RUN bash /build_mpi.sh hip
+# Required only for the multi-architecture rocFFT rebuild.
+RUN apt-get update && apt-get install -y --no-install-recommends cmake && \
+    rm -rf /var/lib/apt/lists/*
 ENV PATH=/opt/mpi/bin:/opt/ucx/bin:/opt/rocm/bin:${PATH}
 ENV LD_LIBRARY_PATH=/opt/mpi/lib:/opt/ucx/lib:/opt/rocm/lib:/opt/amdgpu/lib/x86_64-linux-gnu
+COPY src/build_configs/common.mk /opt/fftm/src/build_configs/common.mk
+COPY src/Docker_config/poisson/Makefile.probe src/Docker_config/poisson/config_hip.inc \
+    src/Docker_config/poisson/build_rocfft.sh /opt/fftm/src/Docker_config/poisson/
+RUN make -f /opt/fftm/src/Docker_config/poisson/Makefile.probe \
+    CONFIG_FILE=Docker_config/poisson/config_hip.inc rocfft
 COPY src/ /opt/fftm/src/
 RUN bash /opt/fftm/src/Docker_config/poisson/build_examples.sh hip && \
     bash /opt/fftm/src/Docker_config/poisson/collect_hip_runtime.sh

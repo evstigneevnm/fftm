@@ -1,7 +1,7 @@
 FFTM_BUILD_BACKEND = hip
 ROCM_DIR = /opt/rocm
 mpi_dir = /opt/mpi
-HIP_ARCH_LIST = gfx1102
+HIP_ARCH_LIST = gfx906 gfx908 gfx90a gfx942 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201
 TARGET_HIP = -O3
 CPPFLAGS =
 CXXFLAGS =
